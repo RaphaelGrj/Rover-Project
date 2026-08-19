@@ -11,17 +11,28 @@ Il ne s'agit pas d'un simple jouet télécommandé, mais d'une machine à émoti
 
 🎯 Cahier des Charges & Fonctionnalités
 
-  🧠 Machine à Émotions & IAPersonnalité Dynamique : Humeurs variables selon le contexte (météo, niveau de batterie, interactions récentes).
+  🧠 Machine à Émotions & IA
+Personnalité Dynamique : Humeurs variables selon le contexte (météo, niveau de batterie, interactions récentes).
 Expressivité Physique : Affichage d'animations sur écran IPS (yeux type Vector) combiné à des mouvements de tête fluides (Pitch/Yaw) gérés par servomoteurs.
 Cerveau IA : Intégration d'une IA conversationnelle pour répondre aux requêtes de manière naturelle (évolution du système embarqué sur LUMI).
 
-  🛞 Mobilité & NavigationDéplacement Autonome : Exploration libre du logement avec évitement d'obstacles.Pilotage Manuel : Prise de contrôle à distance via smartphone ou télécommande (avec retour vidéo direct).[À l'étude] Cartographie & Patrouille : Algorithme SLAM pour générer une carte de la maison, avec des rondes de sécurité programmables.
+  🛞 Mobilité & NavigationDéplacement Autonome : 
+  Exploration libre du logement avec évitement d'obstacles.
+  Pilotage Manuel : Prise de contrôle à distance via smartphone ou télécommande (avec retour vidéo direct).
   
-  👁️ Perception & VisionReconnaissance Visuelle : Capacité à identifier son humain (reconnaissance faciale), à détecter des objets, des présences inconnues, ou même des animaux (idéal pour surveiller si Clémence fait des bêtises en votre absence).Surveillance Distante : Flux caméra accessible hors du domicile pour lever le doute lors d'une alerte.
+  -[À l'étude] Cartographie & Patrouille : Algorithme SLAM pour générer une carte de la maison, avec des rondes de sécurité programmables.-
   
-  🏠 Hub Domotique & Capteurs (Home Assistant)Lien Home Assistant : Intégration native via MQTT/API. Rover peut déclencher des scènes ou annoncer des notifications de la maison.Bilan Météo Local : Station météo sur chenilles. Analyse en temps réel de la température, de l'humidité et de la pression.[À l'étude] Sécurité Environnementale : Détection de COV (Composés Organiques Volatils), de fumée et de qualité de l'air. Rover alerte en cas de risque d'incendie ou de dégradation de l'air intérieur.
+  👁️ Perception & VisionReconnaissance Visuelle : 
+  Capacité à identifier son humain (reconnaissance faciale), à détecter des objets, des présences inconnues, ou même des animaux (idéal pour surveiller si votre compagnon fait des bêtises en votre absence).
+  Surveillance Distante : Flux caméra accessible hors du domicile pour lever le doute lors d'une alerte.
   
-  🎨 Direction Artistique (DA)Design R-Bot "Glitch" : Esthétique asymétrique, textures corrompues ou détails cyberpunk. Modélisation complète sous SolidWorks, optimisée pour un assemblage mêlant l'endurance du FDM (châssis) et la précision de la résine (coque/visage).
+  🏠 Hub Domotique & Capteurs (Home Assistant)
+  Lien Home Assistant : Intégration native via MQTT/API. Rover peut déclencher des scènes ou annoncer des notifications de la maison.Bilan Météo Local : Station météo sur chenilles. 
+  Analyse en temps réel de la température, de l'humidité et de la pression.
+  -[À l'étude] Sécurité Environnementale : Détection de COV (Composés Organiques Volatils), de fumée et de qualité de l'air. Rover alerte en cas de risque d'incendie ou de dégradation de l'air intérieur.-
+  
+  🎨 Direction Artistique (DA)Design R-Bot "Glitch" : 
+  Esthétique asymétrique, textures corrompues ou détails cyberpunk. Modélisation complète sous SolidWorks, optimisée pour un assemblage mêlant l'endurance du FDM (châssis) et la précision de la résine (coque/visage).
   
   ⚙️ Architecture Matérielle (BOM - Bill of Materials)
 L'architecture est divisée en deux couches pour garantir fluidité et puissance de calcul.
