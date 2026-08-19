@@ -37,7 +37,44 @@ Cerveau IA : Intégration d'une IA conversationnelle pour répondre aux requête
   ⚙️ Architecture Matérielle (BOM - Bill of Materials)
 L'architecture est divisée en deux couches pour garantir fluidité et puissance de calcul.
 
-Cerveaux & LogiqueComposantRôleESP32-S3Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI.Raspberry Pi Zero 2 WOrdinateur de bord : Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant.Locomotion & MouvementComposantRôle2x Moteurs DC N20 (avec encodeurs)Propulsion précise des chenilles ou roues.1x Driver Moteur (TB6612FNG)Contrôle de puissance des moteurs.2x Micro Servomoteurs (SG90 ou MG90S)Mouvement de la tête (Axe X et Y) pour l'expressivité.Perception & CapteursComposantRôleModule Caméra (Pi Camera V2 ou OV2640)Vision, reconnaissance faciale, retour vidéo.MPU6050 (IMU)Accéléromètre & Gyroscope (équilibre, détection de chute ou si on le soulève).Capteur ToF (VL53L0X) x2Mesure de distance laser précise (évitement d'obstacles sans contact).BME688 (Bosch)Capteur 4-en-1 : Température, Humidité, Pression barométrique et Gaz/COV (idéal pour le bilan météo et risque incendie).Interface Humain-Machine (IHM)ComposantRôleÉcran IPS (ex: ST7789 1.54")Affichage des yeux, des animations de glitch et des humeurs.Micro I2S (INMP441)Écoute de l'environnement et des commandes vocales.Ampli Audio (MAX98357A) + Haut-parleurSynthèse vocale et bruitages émotionnels.ÉnergieComposantRôle2x Accus 18650 (Li-ion)Autonomie énergétique.Module BMS / TP4056 + Step-down (LM2596)Charge sécurisée et régulation 5V/3.3V pour alimenter l'ESP et le Pi.
+### Cerveaux & Logique
+
+| Composant | Rôle |
+| :--- | :--- |
+| **ESP32-S3** | Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI. |
+| **Raspberry Pi Zero 2 W** | Ordinateur de bord : Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant. |
+
+### Locomotion & Mouvement
+
+| Composant | Rôle |
+| :--- | :--- |
+| **2x Moteurs DC N20 (avec encodeurs)** | Propulsion précise des chenilles ou roues. |
+| **1x Driver Moteur (TB6612FNG)** | Contrôle de puissance des moteurs. |
+| **2x Micro Servomoteurs (SG90 ou MG90S)** | Mouvement de la tête (Axe X et Y) pour l'expressivité. |
+
+### Perception & Capteurs
+
+| Composant | Rôle |
+| :--- | :--- |
+| **Module Caméra (Pi Camera V2 ou OV2640)** | Vision, reconnaissance faciale, retour vidéo. |
+| **MPU6050 (IMU)** | Accéléromètre & Gyroscope (équilibre, détection de chute ou si on le soulève). |
+| **Capteur ToF (VL53L0X) x2** | Mesure de distance laser précise (évitement d'obstacles sans contact). |
+| **BME688 (Bosch)** | Capteur 4-en-1 : Température, Humidité, Pression barométrique et Gaz/COV (idéal pour le bilan météo et risque incendie). |
+
+### Interface Humain-Machine (IHM)
+
+| Composant | Rôle |
+| :--- | :--- |
+| **Écran IPS (ex: ST7789 1.54")** | Affichage des yeux, des animations de glitch et des humeurs. |
+| **Micro I2S (INMP441)** | Écoute de l'environnement et des commandes vocales. |
+| **Ampli Audio (MAX98357A) + Haut-parleur** | Synthèse vocale et bruitages émotionnels. |
+
+### Énergie
+
+| Composant | Rôle |
+| :--- | :--- |
+| **2x Accus 18650 (Li-ion)** | Autonomie énergétique. |
+| **Module BMS / TP4056 + Step-down (LM2596)** | Charge sécurisée et régulation 5V/3.3V pour alimenter l'ESP et le Pi. |
 
 
 🚀 Roadmap du Développement (Prévisions)
