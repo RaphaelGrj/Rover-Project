@@ -3,9 +3,9 @@ Coming soon
 
 🤖 PROJECT ROVER | by R-BotL'évolution mobile de LUMI. Un compagnon robotique autonome, intelligent, et intégré à l'écosystème domotique, arborant la signature esthétique "Glitch" de R-Bot.
 
-📖 Présentation du ProjetProject 
+📖 Présentation du Projet 
 
-Rover est le successeur spirituel de LUMI. Là où LUMI observait depuis son bureau, Rover explore. Fortement inspiré par la mécanique et l'expressivité du robot Vector (Anki), Rover va plus loin en devenant un véritable assistant domotique mobile.
+Project Rover est le successeur spirituel de LUMI. Là où LUMI observait depuis son bureau, Rover explore. Fortement inspiré par la mécanique et l'expressivité du robot Vector (Anki), Rover va plus loin en devenant un véritable assistant domotique mobile.
 
 Il ne s'agit pas d'un simple jouet télécommandé, mais d'une machine à émotions capable d'interagir naturellement avec son environnement et son humain. Conçu autour d'une architecture hybride (ESP32-S3 + Raspberry Pi), Rover surveille le logement, analyse l'air, interagit via une IA générative, et patrouille tout en gardant une direction artistique unique : un design "Vector Glitché".
 
