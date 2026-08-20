@@ -4,7 +4,7 @@ Coming soon
 🤖 PROJECT ROVER | by R-BotL'évolution mobile de LUMI. 
 Un compagnon robotique autonome, intelligent, et intégré à l'écosystème domotique, arborant la signature esthétique "Glitch" de R-Bot.
 
-![alt tag]((https://github.com/RaphaelGrj/Rover-Project/blob/main/images/project-rover-preproto.png)
+![alt tag](https://github.com/RaphaelGrj/Rover-Project/blob/main/images/project-rover-preproto.png)
 
 📖 Présentation du Projet 
 
