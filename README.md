@@ -1,4 +1,4 @@
-# Rover-Project (Not Available - In developpement)
+# Rover-Project (Not Available - In development)
 Coming soon
 
 🤖 PROJECT ROVER | by R-BotL'évolution mobile de LUMI. 
