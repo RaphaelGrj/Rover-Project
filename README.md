@@ -18,6 +18,7 @@ Il ne s'agit pas d'un simple jouet télécommandé, mais d'une machine à émoti
 Personnalité Dynamique : Humeurs variables selon le contexte (météo, niveau de batterie, interactions récentes).
 Expressivité Physique : Affichage d'animations sur écran IPS (yeux type Vector) combiné à des mouvements de tête fluides (Pitch/Yaw) gérés par servomoteurs.
 Cerveau IA : Intégration d'une IA conversationnelle pour répondre aux requêtes de manière naturelle (évolution du système embarqué sur LUMI).
+Mise en place d’un systeme de mise a jour OTA
 
   🛞 Mobilité & NavigationDéplacement Autonome : 
   Exploration libre du logement avec évitement d'obstacles.
