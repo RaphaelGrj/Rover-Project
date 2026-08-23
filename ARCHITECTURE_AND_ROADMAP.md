@@ -4,7 +4,7 @@
 > de Rover.**
 >
 > Ce document définit l'architecture cible du robot, la séparation des
-> responsabilités entre le Raspberry Pi et l'ESP32-S3, leur protocole de
+> responsabilités entre le Raspberry Pi et l'ESP32, leur protocole de
 > communication, les règles de développement et la roadmap.
 >
 > **Principe fondateur :**
@@ -64,7 +64,7 @@ L'architecture est divisée en deux niveaux :
                       │
           ┌───────────┴───────────┐
           │                       │
-     RASPBERRY PI              ESP32-S3
+     RASPBERRY PI 3B+             ESP32
       "CERVEAU"             "SYSTÈME NERVEUX"
           │                       │
     décision / IA             temps réel
@@ -97,7 +97,7 @@ Exemples :
 -   réagir à une alerte ;
 -   transmettre une information à Home Assistant.
 
-## ESP32-S3
+## ESP32
 
 L'ESP32 décide :
 
@@ -126,7 +126,7 @@ Assistant ou la logique métier principale.
 
 # 4. Architecture matérielle
 
-## 4.1 Raspberry Pi Zero 2 W
+## 4.1 Raspberry Pi 3B+
 
 Le Raspberry Pi est l'ordinateur de bord.
 
@@ -153,9 +153,9 @@ cause l'architecture.
 
 ------------------------------------------------------------------------
 
-## 4.2 ESP32-S3
+## 4.2 ESP32
 
-L'ESP32-S3 est le contrôleur temps réel.
+L'ESP32 est le contrôleur temps réel.
 
 Responsabilités :
 
@@ -230,7 +230,7 @@ Raspberry Pi
      │ UART
      │
      ▼
- ESP32-S3
+ ESP32
 ```
 
 ------------------------------------------------------------------------
@@ -983,13 +983,13 @@ Objectif : figer les règles.
 
 Objectif : faire vivre la plateforme.
 
--   [ ] Initialiser ESP32-S3.
--   [ ] Initialiser Rover Protocol.
--   [ ] Communication UART.
--   [ ] Heartbeat.
--   [ ] Watchdog.
--   [ ] État READY/SAFE.
--   [ ] Diagnostic série.
+-   [x] Initialiser ESP32.
+-   [x] Initialiser Rover Protocol.
+-   [x] Communication UART.
+-   [x] Heartbeat.
+-   [x] Watchdog.
+-   [x] État READY/SAFE.
+-   [x] Diagnostic série.
 
 Résultat attendu :
 
@@ -1103,11 +1103,23 @@ Objectif : voir et piloter Rover.
 -   [ ] Commandes HEAD.
 -   [ ] Retour d'état.
 -   [ ] Contrôle smartphone.
+-   [ ] Support manette / gamepad (entrée alternative au smartphone).
+-   [ ] Accès distant sécurisé (VPN) pour un pilotage hors réseau local.
 -   [ ] Authentification.
 
 Résultat :
 
-Rover peut être piloté à distance avec retour vidéo.
+Rover peut être piloté à distance (smartphone ou manette) avec retour
+vidéo, y compris hors du réseau local via VPN.
+
+Cas d'usage prioritaire : surveillance de la maison à distance
+(déplacement + vidéo en temps réel) en complément du pilotage.
+
+Cette couche reste entièrement portée par le Raspberry Pi (réseau,
+VPN, authentification, flux vidéo) ; l'ESP32 continue de ne recevoir
+que des commandes abstraites (`MOVE`, `HEAD`, ...) via le Rover
+Protocol, quelle que soit l'origine de la commande (app locale,
+smartphone distant ou manette).
 
 ------------------------------------------------------------------------
 
@@ -1515,7 +1527,7 @@ Raspberry Pi
                           │
                           ▼
                 ┌─────────────────────┐
-                │      ESP32-S3       │
+                │      ESP32       │
                 │                     │
                 │ Communication       │
                 │ Safety / Watchdog   │
