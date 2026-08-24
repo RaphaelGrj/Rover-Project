@@ -45,15 +45,15 @@ L'architecture est divisée en deux couches pour garantir fluidité et puissance
 
 | Composant | Rôle |
 | :--- | :--- |
-| **ESP32-S3** | Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI. |
-| **Raspberry Pi Zero 2 W** | Ordinateur de bord : Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant. |
+| **ESP32 WROOM** | Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI. |
+| **Raspberry Pi 3B+** | Ordinateur de bord : Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant. |
 
 ### Locomotion & Mouvement
 
 | Composant | Rôle |
 | :--- | :--- |
 | **2x Moteurs DC N20 (avec encodeurs)** | Propulsion précise des chenilles ou roues. |
-| **1x Driver Moteur (TB6612FNG)** | Contrôle de puissance des moteurs. |
+| **1x Driver Moteur (DRV8833)** | Contrôle de puissance des moteurs. |
 | **2x Micro Servomoteurs (SG90 ou MG90S)** | Mouvement de la tête (Axe X et Y) pour l'expressivité. |
 
 ### Perception & Capteurs
