@@ -185,7 +185,7 @@ Chaque périphérique doit avoir un propriétaire clair.
   Moteur gauche       ESP32          PWM + PID
   Moteur droit        ESP32          PWM + PID
   Encodeurs           ESP32          vitesse / odométrie
-  TB6612FNG           ESP32          puissance moteurs
+  DRV8833             ESP32          puissance moteurs
   Servo Pitch         ESP32          mouvement tête
   Servo Yaw           ESP32          mouvement tête
   ST7789              ESP32          yeux / animations
@@ -1005,7 +1005,7 @@ fonctionne de manière fiable.
 
 Objectif : obtenir une plateforme roulante fiable.
 
--   [ ] TB6612FNG.
+-   [ ] DRV8833.
 -   [ ] Moteur gauche.
 -   [ ] Moteur droit.
 -   [ ] Encodeurs.
