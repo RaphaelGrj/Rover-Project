@@ -1005,16 +1005,22 @@ fonctionne de manière fiable.
 
 Objectif : obtenir une plateforme roulante fiable.
 
--   [ ] DRV8833.
--   [ ] Moteur gauche.
--   [ ] Moteur droit.
--   [ ] Encodeurs.
--   [ ] Lecture vitesse.
--   [ ] PID gauche.
--   [ ] PID droit.
--   [ ] Commande MOVE.
--   [ ] Arrêt immédiat.
--   [ ] Timeout sécurité.
+-   [x] DRV8833 (remplace le TB6612FNG initialement prévu ici --- voir
+      PROGRESS.md 2026-08-25, moteurs N20 6V avec encodeur confirmés).
+-   [x] Moteur gauche.
+-   [x] Moteur droit.
+-   [x] Encodeurs.
+-   [x] Lecture vitesse.
+-   [x] PID gauche.
+-   [x] PID droit.
+-   [x] Commande MOVE.
+-   [x] Arrêt immédiat.
+-   [x] Timeout sécurité.
+
+Complet au niveau code et validé en simulation Wokwi (voir PROGRESS.md) ;
+pas encore testé sur moteurs/encodeurs physiques réels, ni calibré
+(gains PID et géométrie roue dans `motion_config.h` sont des valeurs de
+départ arbitraires).
 
 Résultat :
 

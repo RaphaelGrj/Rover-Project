@@ -2,7 +2,7 @@
   "version": 1,
   "author": "Rover Project",
   "editor": "wokwi",
-  "//": "Phase 1 seulement : le firmware actuel ne parle qu'en Serial (Rover Protocol via USB). Aucun GPIO n'est encore utilise, donc aucun cablage a simuler pour l'instant -- voir WIRING.md pour le pinout de base prevu pour la Phase 2 (moteurs/tete/ecran/capteurs), a ajouter ici une fois ce code ecrit.",
+  "//": "Phase 1+2. UART0 -> moniteur serie (Rover Protocol). 4 LEDs sur les pins moteur DRV8613 (IN1/IN2 gauche+droite, motion_config.h) pour visualiser direction/PWM sans moteur reel -- pas de retour d'encodeur simule ici (aucun chip DC-motor+encodeur cable), donc la boucle PID tourne en boucle ouverte en simulation. Voir WIRING.md.",
   "parts": [
     {
       "type": "wokwi-esp32-devkit-v1",
@@ -10,11 +10,35 @@
       "top": 0,
       "left": 0,
       "attrs": {}
-    }
+    },
+    { "type": "wokwi-led", "id": "led_l_fwd", "top": -20, "left": 200, "attrs": { "color": "green", "label": "L_IN1 (fwd)" } },
+    { "type": "wokwi-led", "id": "led_l_rev", "top": 20, "left": 200, "attrs": { "color": "red", "label": "L_IN2 (rev)" } },
+    { "type": "wokwi-led", "id": "led_r_fwd", "top": -20, "left": 260, "attrs": { "color": "green", "label": "R_IN1 (fwd)" } },
+    { "type": "wokwi-led", "id": "led_r_rev", "top": 20, "left": 260, "attrs": { "color": "red", "label": "R_IN2 (rev)" } },
+    { "type": "wokwi-resistor", "id": "r_l_fwd", "top": -20, "left": 160, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_l_rev", "top": 20, "left": 160, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_r_fwd", "top": -20, "left": 320, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r_r_rev", "top": 20, "left": 320, "attrs": { "value": "220" } }
   ],
   "connections": [
     [ "esp32:TX0", "$serialMonitor:RX", "", [] ],
-    [ "esp32:RX0", "$serialMonitor:TX", "", [] ]
+    [ "esp32:RX0", "$serialMonitor:TX", "", [] ],
+
+    [ "esp32:D27", "r_l_fwd:1", "", [] ],
+    [ "r_l_fwd:2", "led_l_fwd:A", "", [] ],
+    [ "led_l_fwd:C", "esp32:GND.1", "", [] ],
+
+    [ "esp32:D26", "r_l_rev:1", "", [] ],
+    [ "r_l_rev:2", "led_l_rev:A", "", [] ],
+    [ "led_l_rev:C", "esp32:GND.1", "", [] ],
+
+    [ "esp32:D33", "r_r_fwd:1", "", [] ],
+    [ "r_r_fwd:2", "led_r_fwd:A", "", [] ],
+    [ "led_r_fwd:C", "esp32:GND.2", "", [] ],
+
+    [ "esp32:D32", "r_r_rev:1", "", [] ],
+    [ "r_r_rev:2", "led_r_rev:A", "", [] ],
+    [ "led_r_rev:C", "esp32:GND.2", "", [] ]
   ],
   "dependencies": {}
 }

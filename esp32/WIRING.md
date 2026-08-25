@@ -1,11 +1,14 @@
 # Câblage ESP32 --- Base provisoire (Wokwi)
 
-> **Statut : proposition, pas une décision.** Aucun de ces numéros de
-> pin n'est codé en dur dans le firmware. Ce document sert de point de
-> départ pour construire les prochains `diagram.json` Wokwi (Phase 2
-> et suivantes) et pourra changer dès que le câblage réel du robot
-> sera communiqué --- voir la règle correspondante dans
-> `ARCHITECTURE_AND_ROADMAP.md` §27 et le journal `PROGRESS.md`.
+> **Statut : base de travail, pas une validation matérielle finale.**
+> Le driver moteur (DRV8833) et les moteurs (N20 6V avec encodeur) sont
+> confirmés (voir `PROGRESS.md` 2026-08-25), mais l'affectation précise
+> des GPIO ci-dessous n'a **jamais été vérifiée sur un robot physique**.
+> Depuis la Phase 2, ces numéros sont réellement codés en dur dans
+> `esp32/include/motion_config.h` (décision explicite de continuer à
+> avancer via Wokwi en attendant le câblage réel définitif --- voir
+> `ARCHITECTURE_AND_ROADMAP.md` §27 et `PROGRESS.md`). Si le câblage
+> réel diverge, seul `motion_config.h` doit changer.
 >
 > Les numéros ci-dessous ciblent la carte **ESP32 WROOM** (devkit
 > 30 broches), la carte physique actuelle du robot. La cible S3 aura
@@ -31,13 +34,12 @@
 |----------------------------------|-----------|----------|
 | UART2 RX (← Pi TX)               | GPIO16    | Lien Rover Protocol, cf. `ROVER_PROTOCOL.md` §2 |
 | UART2 TX (→ Pi RX)               | GPIO17    | |
-| Moteur gauche AIN1                | GPIO27    | TB6612FNG |
-| Moteur gauche AIN2                | GPIO26    | TB6612FNG |
-| Moteur gauche PWMA                | GPIO25    | sortie LEDC (PWM) |
-| Moteur droit BIN1                 | GPIO33    | TB6612FNG |
-| Moteur droit BIN2                 | GPIO32    | TB6612FNG |
-| Moteur droit PWMB                 | GPIO14    | sortie LEDC (PWM) |
-| TB6612FNG STBY                    | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard |
+| Moteur gauche IN1 (avant)         | GPIO27    | DRV8833, PWM direct (pas de pin PWM séparée comme sur un TB6612FNG) |
+| Moteur gauche IN2 (arrière)       | GPIO26    | DRV8833, idem |
+| Moteur droit IN1 (avant)          | GPIO33    | DRV8833 |
+| Moteur droit IN2 (arrière)        | GPIO32    | DRV8833 |
+| DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard |
+| *(libres)*                        | GPIO14, GPIO25 | anciennement PWMA/PWMB dans le plan TB6612FNG, plus nécessaires avec le DRV8833 |
 | Encodeur gauche A                 | GPIO34    | entrée seule (pas de pull interne, prévoir pull-up externe si besoin) |
 | Encodeur gauche B                 | GPIO35    | entrée seule |
 | Encodeur droit A                  | GPIO36    | entrée seule |
@@ -64,8 +66,13 @@ en Phase 4).
 
 ## Utilisation avec Wokwi
 
-Ce tableau n'est pas encore reflété dans `diagram.json` : le firmware
-actuel (Phase 1) n'utilise aucun GPIO, seulement l'UART console/USB.
-Quand le code Phase 2 (moteurs) sera écrit, ajouter les pièces
-correspondantes (`wokwi-tb6612`, roues/châssis simulé, etc.) dans
-`diagram.json` en réutilisant ces numéros de pin comme point de départ.
+- **Moteurs (Phase 2)** : `esp32/diagram.json` câble 4 LEDs (+
+  résistances 220 Ω) sur les pins IN1/IN2 gauche et droite, pour
+  visualiser direction/PWM sans moteur réel. Aucun encodeur n'est
+  simulé (pas de chip DC-motor+encodeur câblé) : la boucle PID tourne
+  donc en boucle ouverte en simulation (`left_speed`/`right_speed`
+  restent à 0 dans la télémétrie `STATE`), ce n'est pas un bug.
+- **Tête / écran / capteurs (Phases 3--4)** : pas encore reflétés dans
+  `diagram.json`, le code correspondant n'existe pas encore. Ajouter
+  les pièces au fur et à mesure en réutilisant ces numéros de pin comme
+  point de départ.

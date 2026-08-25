@@ -209,25 +209,113 @@ câblage réel.
      (découvert accidentellement en copiant un mauvais checksum) : OK.
    - `SYSTEM action=resume` en état `SAFE` → retour à `ACTIVE` : OK.
 
-### État actuel
+### État actuel (fin de session)
 
 - **Phase 0** : inchangé, règles figées.
-- **Phase 1** : code inchangé fonctionnellement (juste commenté),
-  compile toujours sur `esp32_wroom` et `esp32_s3`. **Entièrement
-  validée en simulation Wokwi** : boot, ping, diag, timeout heartbeat
-  → SAFE, erreur de checksum, resume SAFE → ACTIVE. Reste non testé
-  sur matériel physique réel (toujours aucun ESP32 branché à ce
-  stade).
-- **Phase 2** : toujours bloquée en attente du câblage réel (le
-  pinout de `WIRING.md` est une base de travail, pas une validation).
+- **Phase 1** : **entièrement validée en simulation Wokwi** (boot,
+  ping, diag, timeout heartbeat → SAFE, erreur de checksum, resume
+  SAFE → ACTIVE). Reste non testée sur matériel physique réel.
+- **Phase 2** : voir session suivante --- passée de "bloquée" à "code
+  complet, validée en simulation" dans la même journée, décision
+  explicite de l'utilisateur de continuer à avancer via Wokwi plutôt
+  que d'attendre le câblage réel définitif.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite) --- Phase 2 : Motorisation
+
+### Contexte
+
+Décision de l'utilisateur : ne plus bloquer sur l'absence de câblage
+réel confirmé --- avancer avec le pinout provisoire de `WIRING.md` et
+laisser Wokwi valider le travail au fur et à mesure. Pendant
+l'implémentation, correction matérielle reçue : le driver moteur n'est
+**pas** un TB6612FNG comme initialement esquissé, mais un **DRV8833**,
+avec des moteurs **N20 6V à encodeur intégré**.
+
+Différence importante DRV8833 vs TB6612FNG : pas de pin PWM séparée
+--- chaque moteur utilise directement 2 pins PWM (IN1 = avant, IN2 =
+arrière, les deux à 0 = roue libre). 4 GPIO pour les deux moteurs au
+lieu de 6. `esp32/WIRING.md` et `esp32/include/motion_config.h` mis à
+jour en conséquence (GPIO14/25, anciennement PWMA/PWMB, sont
+maintenant libres).
+
+### Ce qui a été fait
+
+1. **`esp32/include/motion_config.h`** (nouveau) : centralise tout le
+   pinout Phase 2 + les constantes de mouvement (gains PID, géométrie
+   roue, ticks encodeur/tour). Explicitement commenté comme
+   provisoire/non calibré --- seul ce fichier devra changer si le
+   câblage ou le matériel réel diverge.
+
+2. **`esp32/lib/motors/`** (nouveau module) :
+   - `MotorDriver` : pilotage bas niveau d'un canal DRV8833 (2 canaux
+     LEDC par moteur, un par sens).
+   - `Encoder` : comptage de ticks par interruption GPIO (x1 decode),
+     sur les pins input-only (GPIO34/35/36/39) choisies justement pour
+     ça dans `WIRING.md`.
+   - `WheelPID` : PID complet (P/I/D, anti-windup sur l'intégrale) par
+     roue, gains placeholders.
+   - `DriveController` : modèle unicycle (vitesse + rotation → vitesse
+     gauche/droite), boucle PID par roue à période fixe, `stop()`
+     immédiat (bypass PID), télémétrie `STATE left_speed=...
+     right_speed=...`.
+
+3. **`main.cpp`** : dispatch `MOVE velocity=... rotation=...` vers
+   `DriveController::setTarget()`, mais **seulement en état `ACTIVE`**
+   --- une trame `MOVE` reçue en `SAFE` est ignorée, jamais de
+   réarmement moteur hors `SYSTEM action=resume` explicite (règle
+   architecture §27.6). `drive.stop()` appelé au boot (avant toute
+   commande) et sur timeout heartbeat (`SAFE`), en plus de l'`EVENT`
+   déjà existant. Télémétrie `STATE` périodique (200 ms) tant
+   qu'`ACTIVE`.
+
+4. **`esp32/diagram.json`** étendu : 4 LEDs + résistances 220 Ω sur
+   les pins IN1/IN2 gauche/droite, pour visualiser direction/PWM sans
+   moteur réel. Validé avec `wokwi-cli lint` (pins de
+   `wokwi-esp32-devkit-v1` nécessitent le préfixe `D`, ex. `D27`, pas
+   juste `27` --- erreur détectée et corrigée via le lint).
+
+5. **Compilation** vérifiée sur `esp32_wroom` et `esp32_s3` après
+   chaque étape.
+
+6. **Validé en simulation** (headless `wokwi-cli` + RFC2217, même
+   méthode que pour la Phase 1) :
+   - Boot avec le nouveau code (init moteurs/encodeurs/PID) : pas de
+     crash, pas de watchdog intempestif.
+   - `MOVE velocity=0.20 rotation=0.0` : accepté, aucun crash.
+   - `SYSTEM action=diag` après `MOVE` : `state=ACTIVE`, uptime/heap
+     stables.
+   - Télémétrie `STATE left_speed=0.00 right_speed=0.00` reçue
+     périodiquement --- valeurs à 0 normales, **aucun encodeur n'est
+     simulé** dans `diagram.json` (pas de chip DC-motor+encodeur
+     câblé), donc la boucle PID tourne en boucle ouverte en
+     simulation. Ce n'est pas un bug, juste une limite de la
+     simulation actuelle.
+
+### Ce qui n'est PAS validé
+
+- Le retour d'encodeur réel et donc l'asservissement PID en boucle
+  fermée (aucun encodeur simulé pour l'instant --- possible plus tard
+  avec un chip Wokwi tiers de type "DC motor + encoder", pas
+  investigué en détail cette session).
+- Toute valeur physique (`ROVER_ENCODER_TICKS_PER_REV`,
+  `ROVER_WHEEL_DIAMETER_M`, gains PID) --- ce sont des placeholders
+  explicitement marqués comme tels dans `motion_config.h`.
+- Le câblage réel sur le robot physique (toujours aucun matériel
+  branché à ce stade).
+
+### État actuel
+
+- **Phase 2** : **code complet, compile sur les deux cibles, validée
+  en simulation Wokwi** (sans boucle fermée encodeur). Non testée sur
+  matériel physique.
 
 ### Prochaines étapes
 
-- Lancer la simulation Wokwi et valider en pratique : boot
-  (`SYSTEM protocol=... board=WROOM state=BOOT`), réponse à
-  `SYSTEM action=ping`/`diag`, passage en `SAFE` après 500 ms sans
-  `HEARTBEAT`, retour en `ACTIVE` via `SYSTEM action=resume`.
-- Toujours en attente d'infos matérielles réelles pour démarrer la
-  Phase 2 (Motorisation) : câblage effectif du TB6612FNG et des
-  encodeurs (le pinout de `WIRING.md` peut servir de point de départ
-  à confirmer/modifier plutôt que de repartir de zéro).
+- Continuer la Phase 3 (Tête et écran) ou affiner la Phase 2 selon la
+  priorité de l'utilisateur.
+- Dès que le matériel physique (ESP32 + DRV8833 + moteurs N20) est
+  disponible : flasher, mesurer les vraies specs encodeur (ticks/tour
+  réels selon le ratio de réduction), calibrer les gains PID, confirmer
+  ou ajuster le pinout de `WIRING.md`/`motion_config.h`.
