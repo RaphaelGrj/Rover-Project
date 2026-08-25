@@ -1,5 +1,6 @@
 #include "DisplayEngine.h"
 #include <SPI.h>
+#include <math.h>
 #include <string.h>
 #include "EyeRenderer.h"
 
@@ -13,7 +14,7 @@ struct EmotionProfile {
     float lookBiasX;
     float lookBiasY;
     bool wander;      // idle random look-around added on top of the bias
-    bool jitter;      // small per-frame noise added to look position (EXCITED)
+    bool jitter;      // extra per-target noise on top of wander (EXCITED)
     bool asymmetric;  // eyes look in independent directions (CONFUSED)
     float glitchIntensity;
 };
@@ -21,31 +22,45 @@ struct EmotionProfile {
 // One profile per Emotion (ARCHITECTURE_AND_ROADMAP.md section 15).
 // This is a first, parametric pass reusing a single base eye shape --
 // no per-emotion artwork exists yet -- easy to retune once there's real
-// design input, without touching FACE dispatch or the protocol.
+// design input, without touching FACE dispatch or the protocol. The
+// cyan/magenta glitch is a baseline part of the look for every emotion
+// (requested explicitly), not just an ALERT-only effect -- ALERT and
+// the GLITCH animation just push it further.
 EmotionProfile profileFor(Emotion emotion) {
     switch (emotion) {
         case Emotion::HAPPY:
-            return {0.55f, true, 1200, 2500, 0.0f, 0.0f, true, false, false, 0.0f};
+            return {0.55f, true, 1200, 2500, 0.0f, 0.0f, true, false, false, 0.40f};
         case Emotion::CURIOUS:
-            return {1.15f, true, 3000, 6000, 0.3f, -0.3f, false, false, false, 0.0f};
+            return {1.15f, true, 3000, 6000, 0.3f, -0.3f, false, false, false, 0.40f};
         case Emotion::SLEEPY:
-            return {0.30f, true, 2500, 5000, 0.0f, 0.2f, false, false, false, 0.0f};
+            return {0.30f, true, 2500, 5000, 0.0f, 0.2f, false, false, false, 0.25f};
         case Emotion::CONFUSED:
-            return {0.9f, true, 2000, 4000, 0.0f, 0.0f, true, false, true, 0.0f};
+            return {0.9f, true, 2000, 4000, 0.0f, 0.0f, true, false, true, 0.40f};
         case Emotion::ALERT:
-            return {1.15f, false, 0, 0, 0.0f, 0.0f, false, false, false, 0.6f};
+            return {1.15f, false, 0, 0, 0.0f, 0.0f, false, false, false, 0.70f};
         case Emotion::SAD:
-            return {0.5f, true, 2500, 5000, 0.0f, 0.4f, false, false, false, 0.0f};
+            return {0.5f, true, 2500, 5000, 0.0f, 0.4f, false, false, false, 0.30f};
         case Emotion::EXCITED:
-            return {1.0f, true, 900, 1800, 0.0f, 0.0f, false, true, false, 0.0f};
+            return {1.0f, true, 900, 1800, 0.0f, 0.0f, false, true, false, 0.50f};
         case Emotion::IDLE:
         default:
-            return {1.0f, true, 2000, 5000, 0.0f, 0.0f, true, false, false, 0.0f};
+            return {1.0f, true, 2000, 5000, 0.0f, 0.0f, true, false, false, 0.40f};
     }
 }
 
-constexpr unsigned long BLINK_DURATION_MS = 120;
+// A blink is a smooth close-then-open envelope over this duration, not
+// an instant on/off toggle -- an abrupt cut reads as a display glitch,
+// not a living eye. peaks (fully closed) at the midpoint.
+constexpr unsigned long BLINK_DURATION_MS = 180;
+constexpr float BLINK_MIN_OPENNESS = 0.05f;
+
 constexpr unsigned long GLITCH_ANIMATION_DURATION_MS = 900;
+
+// Small continuous sway added on top of the eased look target, so
+// nothing is ever perfectly still even when "wander" is off for that
+// emotion (CURIOUS/SLEEPY/ALERT/SAD) -- two slightly-off sine periods
+// so the motion doesn't look like a mechanical back-and-forth tick.
+constexpr float BREATHE_AMOUNT = 0.05f;
 
 // Roughly uniform in [-1, 1].
 float randomUnit() {
@@ -63,10 +78,15 @@ void DisplayEngine::begin() {
     SPI.begin(ROVER_PIN_DISPLAY_SCLK, -1, ROVER_PIN_DISPLAY_MOSI, ROVER_PIN_DISPLAY_CS);
     _tft.init(ROVER_DISPLAY_WIDTH, ROVER_DISPLAY_HEIGHT);
     _tft.setSPISpeed(ROVER_DISPLAY_SPI_HZ);
+    // One full clear at boot; every frame after this only touches the
+    // two eye cells (EyeRenderer::draw), not the whole panel.
+    _tft.fillScreen(0x0000);
 
-    _lastUpdateMs = millis();
-    _nextBlinkMs = millis() + random(profileFor(_emotion).blinkMinMs, profileFor(_emotion).blinkMaxMs + 1);
-    render();
+    unsigned long now = millis();
+    _lastUpdateMs = now;
+    EmotionProfile profile = profileFor(_emotion);
+    _nextBlinkMs = now + random(profile.blinkMinMs, profile.blinkMaxMs + 1);
+    render(now);
 }
 
 void DisplayEngine::setEmotion(Emotion emotion) {
@@ -91,20 +111,31 @@ void DisplayEngine::playAnimation(const char* name) {
 void DisplayEngine::updateIdleMotion(unsigned long nowMs, float dtSeconds) {
     EmotionProfile profile = profileFor(_emotion);
 
+    // Blink: a smooth envelope (0 -> 1 -> 0 openness reduction) over
+    // BLINK_DURATION_MS, not a binary toggle. ALERT disables it
+    // entirely (wide-eyed, never blinks).
     if (profile.blinkEnabled) {
         if (_blinking) {
-            if (nowMs >= _blinkEndMs) {
+            unsigned long elapsed = nowMs - _blinkStartMs;
+            if (elapsed >= BLINK_DURATION_MS) {
                 _blinking = false;
                 _nextBlinkMs = nowMs + random(profile.blinkMinMs, profile.blinkMaxMs + 1);
+                _openness = profile.baseOpenness;
+            } else {
+                float progress = (float)elapsed / (float)BLINK_DURATION_MS;
+                float envelope = sinf(progress * PI);  // 0 at start/end, 1 at midpoint
+                _openness = profile.baseOpenness - (profile.baseOpenness - BLINK_MIN_OPENNESS) * envelope;
             }
         } else if (nowMs >= _nextBlinkMs) {
             _blinking = true;
-            _blinkEndMs = nowMs + BLINK_DURATION_MS;
+            _blinkStartMs = nowMs;
+        } else {
+            _openness = profile.baseOpenness;
         }
     } else {
-        _blinking = false;  // e.g. ALERT: wide-eyed, never blinks
+        _blinking = false;
+        _openness = profile.baseOpenness;
     }
-    _openness = _blinking ? 0.05f : profile.baseOpenness;
 
     // Idle wander: ease toward a random target within the eye, then
     // pick a new one once its time is up.
@@ -129,8 +160,17 @@ void DisplayEngine::updateIdleMotion(unsigned long nowMs, float dtSeconds) {
     }
 }
 
-void DisplayEngine::render() {
+void DisplayEngine::render(unsigned long nowMs) {
     EmotionProfile profile = profileFor(_emotion);
+
+    // Continuous sway, recomputed fresh from the clock every frame (not
+    // accumulated into _lookX/_lookY -- see the header comment on why):
+    // keeps every emotion visibly alive even when "wander" is off.
+    float breatheX = sinf(nowMs * 0.0011f) * BREATHE_AMOUNT;
+    float breatheY = sinf(nowMs * 0.0017f + 1.7f) * BREATHE_AMOUNT * 0.7f;
+    float renderLookX = constrain(_lookX + breatheX, -1.0f, 1.0f);
+    float renderLookY = constrain(_lookY + breatheY, -1.0f, 1.0f);
+
     EyeState state;
     state.openness = _openness;
     state.glitchIntensity =
@@ -138,13 +178,13 @@ void DisplayEngine::render() {
 
     if (profile.asymmetric) {
         // CONFUSED: eyes drift apart instead of looking the same way.
-        state.leftLookX = constrain(_lookX - 0.4f, -1.0f, 1.0f);
-        state.leftLookY = _lookY;
-        state.rightLookX = constrain(_lookX + 0.4f, -1.0f, 1.0f);
-        state.rightLookY = _lookY;
+        state.leftLookX = constrain(renderLookX - 0.4f, -1.0f, 1.0f);
+        state.leftLookY = renderLookY;
+        state.rightLookX = constrain(renderLookX + 0.4f, -1.0f, 1.0f);
+        state.rightLookY = renderLookY;
     } else {
-        state.leftLookX = state.rightLookX = _lookX;
-        state.leftLookY = state.rightLookY = _lookY;
+        state.leftLookX = state.rightLookX = renderLookX;
+        state.leftLookY = state.rightLookY = renderLookY;
     }
 
     EyeRenderer::draw(_tft, state);
@@ -162,5 +202,5 @@ void DisplayEngine::update() {
     }
 
     updateIdleMotion(now, dtSeconds);
-    render();
+    render(now);
 }

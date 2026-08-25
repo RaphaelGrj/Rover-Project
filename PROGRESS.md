@@ -697,3 +697,90 @@ d'yeux n'était pas commencé.
   le robot physique est disponible.
 - Retour d'état : toujours en attente de validation joystick/manette
   sur un vrai téléphone/manette.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite 6) --- Retouche des yeux (design + fiabilité)
+
+### Contexte
+
+Retour de l'utilisateur sur le rendu des yeux : forme carrée à coins
+arrondis (pas la forme plus rectangulaire du premier jet), effet
+glitch cyan/rose **visible en permanence** (pas réservé à `ALERT`),
+et une exigence explicite de fiabilité/optimisation + impression de
+vie (clignement + mouvement, jamais statique). Dernière étape avant
+fin de journée.
+
+### Ce qui a changé
+
+1. **`EyeRenderer.cpp`** :
+   - Yeux désormais **carrés** (une seule dimension `eyeSize`, ~36% de
+     la largeur d'écran) au lieu du rectangle 35%×45% du premier jet.
+   - Rayon d'arrondi recalculé sur `min(largeur, hauteur)` au lieu de
+     la largeur seule --- sinon le rayon dépassait la moitié de la
+     hauteur pendant un clignement (`h` rétrécit fortement), ce que
+     `fillRoundRect` gère mal.
+   - **Optimisation** : `EyeRenderer::draw()` ne fait plus
+     `fillScreen()` (tout l'écran) à chaque frame (~30 Hz) --- calcule
+     désormais une "cellule" fixe par œil (assez grande pour couvrir
+     l'ouverture max + le décalage glitch max) et ne redessine que ces
+     deux cellules. Le reste de l'écran, jamais dessiné ailleurs, est
+     nettoyé une seule fois au boot. Réduction significative du trafic
+     SPI par frame.
+   - Garde-fous ajoutés : largeur/hauteur jamais négatives, `lookX`/
+     `lookY` re-clampés juste avant utilisation dans le calcul de
+     position de l'iris.
+
+2. **`DisplayEngine.cpp`** :
+   - **Glitch permanent** : `glitchIntensity` de base non nulle pour
+     *toutes* les émotions (0.25 à 0.50 selon l'émotion, 0.70 pour
+     `ALERT`), plus l'effet `GLITCH` de l'animation par-dessus ---
+     avant, seul `ALERT`/l'animation l'activait, le reste était
+     "propre". Couleurs cyan/magenta (rose) inchangées, dosage à
+     ajuster plus tard selon le retour de l'utilisateur.
+   - **Clignement lissé** : remplacé le bascule binaire
+     ouvert/fermé par une enveloppe (`sin`) sur 180 ms --- fermeture
+     puis réouverture progressive, plus naturel qu'un flash.
+   - **Mouvement permanent** : ajout d'un léger balancement continu
+     ("breathing", deux sinusoïdes légèrement déphasées) recalculé à
+     chaque frame et ajouté *après* le lissage regard/wander --- pas
+     accumulé dans l'état, pour ne jamais dériver. Résultat : plus
+     aucune émotion n'est parfaitement statique, y compris
+     `CURIOUS`/`SLEEPY`/`ALERT`/`SAD` qui n'ont pas de "wander" actif.
+   - `profileFor()` appelé une seule fois par cycle `update()` (au lieu
+     de deux, une fois dans le calcul du mouvement et une fois dans le
+     rendu) --- petite simplification, pas de gain mesurable à ce
+     niveau de charge, mais une seule source de vérité par frame.
+
+3. **Compilation** vérifiée sur `esp32_wroom`/`esp32_s3` (RAM 6.1%,
+   Flash 9.5%).
+
+4. **Revalidé en simulation** (même méthode : port RFC2217 isolé 4009,
+   remis à 4000 après coup) : séquence `ping` → `FACE curious` → 1.5 s
+   d'attente (laisser tourner clignement/mouvement) → `ANIMATION
+   GLITCH` → 1.5 s → `FACE alert` → 1.5 s → `diag`. Résultat après
+   ~4.5 s de simulation (~135 frames de rendu) : aucun crash,
+   `uptime_ms`/`free_heap` cohérents, pas de fuite mémoire.
+
+### Ce qui n'est toujours PAS validé
+
+- Toujours pas de vérification visuelle (même limite que la session
+  précédente : le chip `board-st7789` simulé n'expose pas de
+  framebuffer capturable par `wokwi-cli`). Le dosage exact des
+  couleurs/intensité du glitch est une estimation à ajuster une fois
+  visible --- l'utilisateur l'a explicitement anticipé ("on ajustera
+  après").
+- Rien testé sur écran physique.
+
+### État actuel
+
+- Phase 3 inchangée dans son état fonctionnel (toujours complète au
+  niveau code/protocole) --- cette session ne fait qu'affiner le rendu
+  et durcir `EyeRenderer`/`DisplayEngine`.
+
+### Prochaines étapes
+
+- Vérifier visuellement le rendu (VSCode ou matériel réel) et ajuster
+  le dosage du glitch/les proportions selon le retour de l'utilisateur.
+- Reste identique à la session précédente : Phase 4, calibration
+  matérielle Phases 2/3, validation joystick/manette physique.

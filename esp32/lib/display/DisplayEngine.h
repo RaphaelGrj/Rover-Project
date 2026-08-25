@@ -36,13 +36,19 @@ private:
     // Idle blink/look-around motion, always running underneath whatever
     // emotion is active; each EmotionProfile (DisplayEngine.cpp) tunes
     // how it behaves rather than replacing it.
+    // "Core" look direction: eased bias+wander, deliberately WITHOUT the
+    // per-frame breathing sway (render() adds that fresh each frame
+    // instead of folding it in here) -- otherwise a continuous additive
+    // offset would accumulate into the eased state and the eyes would
+    // drift away over time rather than gently sway in place.
     float _lookX = 0.0f, _lookY = 0.0f;
     float _wanderTargetX = 0.0f, _wanderTargetY = 0.0f;
     unsigned long _nextWanderMs = 0;
+
     float _openness = 1.0f;
     bool _blinking = false;
+    unsigned long _blinkStartMs = 0;
     unsigned long _nextBlinkMs = 0;
-    unsigned long _blinkEndMs = 0;
 
     // One-shot animation on top of the current emotion; NONE = not
     // playing, eyes render normally.
@@ -52,5 +58,5 @@ private:
     unsigned long _lastUpdateMs = 0;
 
     void updateIdleMotion(unsigned long nowMs, float dtSeconds);
-    void render();
+    void render(unsigned long nowMs);
 };
