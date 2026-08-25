@@ -311,10 +311,79 @@ maintenant libres).
   en simulation Wokwi** (sans boucle fermée encodeur). Non testée sur
   matériel physique.
 
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite 2) --- Durcissement Phase 2
+
+### Contexte
+
+Demande explicite de l'utilisateur : avant d'enchaîner sur la suite,
+revue critique du code Phase 2 pour éliminer les bugs latents ---
+objectif "aucune erreur de code une fois au câblage", code évolutif.
+Revue faite fichier par fichier (`MotorDriver`, `Encoder`, `WheelPID`,
+`DriveController`), 3 corrections retenues (pas de simple nettoyage
+cosmétique, des bugs réels ou des risques concrets identifiés) :
+
+1. **`Encoder` : `noInterrupts()`/`interrupts()` → `portMUX_TYPE`
+   (spinlock ESP32)**. `noInterrupts()`/`interrupts()` ne suspendent
+   que le cœur courant ; sur un ESP32 (dual-core), si l'ISR de
+   l'encodeur finissait un jour planifiée sur l'autre cœur que celui
+   qui appelle `readAndResetTicks()`, la section critique ne protégeait
+   plus rien (race condition silencieuse sur `_ticks`). `portMUX_TYPE`
+   + `portENTER/EXIT_CRITICAL(_ISR)` est le mécanisme correct pour du
+   partagé ISR/tâche sur ESP32, quel que soit le cœur.
+
+2. **`WheelPID` : dérivée calculée sur l'erreur → sur la mesure**. Avec
+   Kd calculée sur l'erreur, chaque nouvelle commande `MOVE` change la
+   consigne instantanément, ce qui provoque un pic de dérivée
+   ("derivative kick") même si la roue n'a pas encore bougé. Invisible
+   aujourd'hui (`ROVER_PID_KD = 0`), mais serait redécouvert --- et
+   probablement mal diagnostiqué --- au moment de calibrer Kd sur le
+   vrai moteur. Corrigé maintenant pendant que c'est simple, plutôt que
+   plus tard en pleine calibration matérielle.
+
+3. **`DriveController::setTarget` : garde NaN/Inf + clamp rotation**.
+   Un champ `velocity=nan` dans une trame `MOVE` passe la validation
+   checksum sans problème (le checksum ne valide que les octets, pas la
+   sémantique) ; `strtof` renvoie alors `NaN`, que `constrain()` ne
+   filtre pas (toute comparaison avec `NaN` est fausse), et caster un
+   `NaN`/`Inf` en `int16_t` ensuite est un comportement indéfini en
+   C++. Corrigé en filtrant `isnan()`/`isinf()` avant tout calcul en
+   aval. Au passage, la `rotation` n'était pas bornée du tout (seule la
+   `velocity` l'était) --- ajout de `ROVER_MAX_ROTATION_RAD_S` dans
+   `motion_config.h`.
+
+4. **`motion_config.h`** : commentaire ajouté réservant les canaux LEDC
+   0--3 aux moteurs, pour que la Phase 3 (servos tête) ne vienne pas
+   les réutiliser par erreur --- pensé pour rester évolutif.
+
+### Validation
+
+- Recompilé avec succès sur `esp32_wroom` et `esp32_s3` après chaque
+  correction.
+- Testé en simulation Wokwi (RFC2217, instance VSCode de
+  l'utilisateur, redémarrée pour charger le nouveau binaire) :
+  - `MOVE velocity=0.20 rotation=0.0` en état `ACTIVE` → accepté,
+    télémétrie `STATE left_speed=0.00 right_speed=0.00` reçue (0.00
+    normal, toujours pas d'encodeur simulé).
+  - `MOVE` reçu en état `SAFE` (heartbeat expiré entre deux commandes
+    manuelles, comportement attendu en l'absence de flux `HEARTBEAT`
+    continu) → correctement ignoré, confirmé par un `diag` de suivi.
+  - `MOVE velocity=nan rotation=0` → aucun crash, `uptime_ms` et
+    `free_heap` restent stables/cohérents sur les diag suivants (pas de
+    reboot, pas de fuite mémoire).
+
+### État actuel
+
+- **Phase 2** : code complet, durci contre les entrées malformées et
+  les risques multi-cœur, validée en simulation Wokwi. Toujours non
+  testée sur matériel physique ; gains PID et géométrie roue toujours
+  des placeholders.
+
 ### Prochaines étapes
 
-- Continuer la Phase 3 (Tête et écran) ou affiner la Phase 2 selon la
-  priorité de l'utilisateur.
+- Continuer la Phase 3 (Tête et écran) ou affiner encore la Phase 2
+  selon la priorité de l'utilisateur.
 - Dès que le matériel physique (ESP32 + DRV8833 + moteurs N20) est
   disponible : flasher, mesurer les vraies specs encodeur (ticks/tour
   réels selon le ratio de réduction), calibrer les gains PID, confirmer

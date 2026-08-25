@@ -17,13 +17,15 @@ void IRAM_ATTR Encoder::onPinAChange(void* arg) {
     bool a = digitalRead(self->_pinA);
     bool b = digitalRead(self->_pinB);
     // A leads B for one direction of rotation, lags for the other.
+    portENTER_CRITICAL_ISR(&self->_mux);
     self->_ticks += (a == b) ? 1 : -1;
+    portEXIT_CRITICAL_ISR(&self->_mux);
 }
 
 long Encoder::readAndResetTicks() {
-    noInterrupts();
+    portENTER_CRITICAL(&_mux);
     long ticks = _ticks;
     _ticks = 0;
-    interrupts();
+    portEXIT_CRITICAL(&_mux);
     return ticks;
 }

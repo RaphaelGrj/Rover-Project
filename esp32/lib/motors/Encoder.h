@@ -20,4 +20,10 @@ private:
     uint8_t _pinA = 0;
     uint8_t _pinB = 0;
     volatile long _ticks = 0;
+    // ESP32-specific spinlock, not noInterrupts()/interrupts(): those only
+    // suspend the current core, which isn't enough if the GPIO ISR ever
+    // ends up scheduled on the other core than the one calling
+    // readAndResetTicks(). portMUX is the correct primitive for data
+    // shared between an ISR and task code on ESP32.
+    portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;
 };

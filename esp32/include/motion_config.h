@@ -35,7 +35,10 @@ constexpr int ROVER_PIN_ENCODER_R_A = 36;
 constexpr int ROVER_PIN_ENCODER_R_B = 39;
 
 // --- LEDC (ESP32 hardware PWM) setup for the motor driver. One channel
-// per direction pin (4 total) since the DRV8833 PWMs both inputs. ---
+// per direction pin (4 total) since the DRV8833 PWMs both inputs.
+// Channels 0-3 are reserved for the drive motors; a future module (e.g.
+// head servos in Phase 3) needing LEDC should start at channel 4 to
+// avoid silently fighting these for the same PWM timer/channel. ---
 constexpr int ROVER_PWM_CHANNEL_L_FWD = 0;
 constexpr int ROVER_PWM_CHANNEL_L_REV = 1;
 constexpr int ROVER_PWM_CHANNEL_R_FWD = 2;
@@ -53,6 +56,11 @@ constexpr float ROVER_WHEEL_DIAMETER_M = 0.065f;
 constexpr float ROVER_WHEEL_BASE_M = 0.15f;
 constexpr float ROVER_ENCODER_TICKS_PER_REV = 700.0f;
 constexpr float ROVER_MAX_WHEEL_SPEED_MPS = 0.3f;
+// Sanity cap on MOVE's rotation field, independent of velocity -- keeps a
+// malformed/unexpectedly large command from commanding an unbounded spin
+// (the per-wheel PID output is clamped anyway, but this keeps the target
+// itself meaningful). Not a measured limit, just a plausible ceiling.
+constexpr float ROVER_MAX_ROTATION_RAD_S = 4.0f;
 
 // --- Per-wheel PID gains ---
 // TODO(hardware): retune once real motors/encoders are available; these

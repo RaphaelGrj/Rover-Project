@@ -25,8 +25,17 @@ void DriveController::begin() {
 }
 
 void DriveController::setTarget(float velocityMps, float rotationRadPerSec) {
+    // A malformed MOVE frame (eg. "velocity=nan", passes the checksum
+    // check just fine since that only validates bytes, not semantics)
+    // could hand strtof()'s NaN/Inf straight through. constrain() does
+    // NOT clamp NaN (every comparison against NaN is false), and casting
+    // a NaN/Inf float to int16_t later is undefined behavior -- so this
+    // has to be caught here, before anything downstream sees it.
+    if (isnan(velocityMps) || isinf(velocityMps)) velocityMps = 0.0f;
+    if (isnan(rotationRadPerSec) || isinf(rotationRadPerSec)) rotationRadPerSec = 0.0f;
+
     _targetVelocity = constrain(velocityMps, -ROVER_MAX_WHEEL_SPEED_MPS, ROVER_MAX_WHEEL_SPEED_MPS);
-    _targetRotation = rotationRadPerSec;
+    _targetRotation = constrain(rotationRadPerSec, -ROVER_MAX_ROTATION_RAD_S, ROVER_MAX_ROTATION_RAD_S);
 }
 
 void DriveController::stop() {

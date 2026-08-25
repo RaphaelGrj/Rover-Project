@@ -18,5 +18,6 @@ public:
 
 private:
     float _integral = 0.0f;
-    float _lastError = 0.0f;
+    float _lastMeasuredMps = 0.0f;
+    bool _hasLastMeasured = false;
 };
