@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover + no zoom: this is meant to be opened full-screen
+     on a phone, pinch-zoom or accidental scroll would fight the joystick -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Rover Control</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; height: 100%; background: #0b0f14; color: #e6edf3;
+    font-family: system-ui, -apple-system, sans-serif;
+    /* Prevent the browser's own touch gestures (scroll/zoom) from
+       stealing pointer events meant for the joystick. */
+    touch-action: none; overscroll-behavior: none; user-select: none;
+  }
+  #status {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 0.6em 1em; font-size: 0.9em; text-align: center;
+    background: #161b22; border-bottom: 1px solid #30363d;
+  }
+  #status.connected { color: #3fb950; }
+  #status.disconnected { color: #f85149; }
+  #stage {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%;
+  }
+  /* Joystick base: fixed circle the stick moves inside of. */
+  #joystick-base {
+    position: relative;
+    width: min(70vw, 70vh); height: min(70vw, 70vh);
+    border-radius: 50%;
+    background: #161b22;
+    border: 2px solid #30363d;
+  }
+  #joystick-stick {
+    position: absolute; left: 50%; top: 50%;
+    width: 34%; height: 34%;
+    border-radius: 50%;
+    background: #58a6ff;
+    transform: translate(-50%, -50%);
+    /* Only animate the snap-back on release, not live dragging -- a
+       transition during drag would make the stick visibly lag behind
+       the finger. */
+    transition: none;
+  }
+  #joystick-stick.releasing { transition: transform 120ms ease-out; }
+  #hint {
+    position: fixed; bottom: 0.8em; left: 0; right: 0;
+    text-align: center; font-size: 0.8em; color: #7d8590;
+  }
+</style>
+</head>
+<body>
+<div id="status" class="disconnected">Connexion...</div>
+<div id="stage">
+  <div id="joystick-base">
+    <div id="joystick-stick"></div>
+  </div>
+</div>
+<div id="hint">Manette (Gamepad API) prioritaire si branchée, sinon joystick tactile.</div>
+
+<script>
+"use strict";
+
+// Must stay <= the ESP32's own clamps (motion_config.h:
+// ROVER_MAX_WHEEL_SPEED_MPS / ROVER_MAX_ROTATION_RAD_S) -- these are
+// just the UI's own ceiling, the firmware clamps again regardless.
+const MAX_VELOCITY_MPS = 0.3;
+const MAX_ROTATION_RAD_S = 1.5;
+const SEND_PERIOD_MS = 100;
+const GAMEPAD_DEADZONE = 0.08;
+
+const statusEl = document.getElementById("status");
+const baseEl = document.getElementById("joystick-base");
+const stickEl = document.getElementById("joystick-stick");
+
+// --- WebSocket, with auto-reconnect -----------------------------------
+
+let ws = null;
+
+function connect() {
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  ws = new WebSocket(url);
+  ws.onopen = () => { statusEl.textContent = "Connecte"; statusEl.className = "connected"; };
+  ws.onclose = () => {
+    statusEl.textContent = "Deconnecte -- nouvelle tentative...";
+    statusEl.className = "disconnected";
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+}
+connect();
+
+function sendCommand(velocity, rotation) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ velocity, rotation }));
+}
+
+// --- Touch/mouse joystick (Pointer Events: one API for both) ----------
+
+let touchAxes = { x: 0, y: 0 }; // both in [-1, 1], y: -1 = up/forward
+let dragging = false;
+let activePointerId = null;
+
+function updateStickVisual(x, y, releasing) {
+  stickEl.classList.toggle("releasing", releasing);
+  const radiusPx = baseEl.clientWidth / 2 - stickEl.clientWidth / 2;
+  stickEl.style.transform =
+    `translate(calc(-50% + ${x * radiusPx}px), calc(-50% + ${y * radiusPx}px))`;
+}
+
+function setTouchAxesFromEvent(evt) {
+  const rect = baseEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const radius = rect.width / 2;
+  let x = (evt.clientX - cx) / radius;
+  let y = (evt.clientY - cy) / radius;
+  const mag = Math.hypot(x, y);
+  if (mag > 1) { x /= mag; y /= mag; } // clamp to the base circle
+  touchAxes = { x, y };
+  updateStickVisual(x, y, false);
+}
+
+baseEl.addEventListener("pointerdown", (evt) => {
+  dragging = true;
+  activePointerId = evt.pointerId;
+  baseEl.setPointerCapture(evt.pointerId);
+  setTouchAxesFromEvent(evt);
+});
+baseEl.addEventListener("pointermove", (evt) => {
+  if (dragging && evt.pointerId === activePointerId) setTouchAxesFromEvent(evt);
+});
+function releaseStick(evt) {
+  if (evt.pointerId !== activePointerId) return;
+  dragging = false;
+  activePointerId = null;
+  touchAxes = { x: 0, y: 0 };
+  updateStickVisual(0, 0, true);
+}
+baseEl.addEventListener("pointerup", releaseStick);
+baseEl.addEventListener("pointercancel", releaseStick);
+
+// --- Gamepad API (physical controller), preferred over touch when present ---
+
+function readGamepadAxes() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const pad of pads) {
+    if (!pad) continue;
+    let x = pad.axes[0] || 0;
+    let y = pad.axes[1] || 0;
+    if (Math.abs(x) < GAMEPAD_DEADZONE) x = 0;
+    if (Math.abs(y) < GAMEPAD_DEADZONE) y = 0;
+    return { x, y };
+  }
+  return null;
+}
+
+// --- Fixed-rate send loop: always send the latest axes, even if
+// unchanged, so a stuck/idle client is an explicit "0,0" rather than
+// silence (the ESP32-side safety timeout doesn't care either way, but
+// this keeps intent unambiguous for anyone watching the link). ---
+
+setInterval(() => {
+  const gamepadAxes = readGamepadAxes();
+  const axes = gamepadAxes || touchAxes;
+  const velocity = -axes.y * MAX_VELOCITY_MPS; // stick up (negative y) = forward
+  const rotation = axes.x * MAX_ROTATION_RAD_S;
+  sendCommand(velocity, rotation);
+}, SEND_PERIOD_MS);
+</script>
+</body>
+</html>

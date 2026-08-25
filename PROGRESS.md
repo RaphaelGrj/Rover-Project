@@ -388,3 +388,122 @@ cosmétique, des bugs réels ou des risques concrets identifiés) :
   disponible : flasher, mesurer les vraies specs encodeur (ticks/tour
   réels selon le ratio de réduction), calibrer les gains PID, confirmer
   ou ajuster le pinout de `WIRING.md`/`motion_config.h`.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite 3) --- Rover pilotable (Phase 5 + 6 minimales)
+
+### Contexte
+
+Question de l'utilisateur : à partir de quelle phase du roadmap
+Rover devient-il pilotable (manette + interface smartphone) ? Réponse :
+Phase 6, mais elle n'a rien à quoi se connecter tant que la Phase 5
+(rien côté Pi jusqu'ici) n'existe pas au moins a minima. Décision :
+implémenter une tranche minimale des deux --- juste de quoi piloter
+`MOVE` en local, pas encore caméra/VPN/authentification.
+
+Choix technique validé par l'utilisateur : **Python** côté Pi (cohérent
+avec les scripts de test déjà utilisés cette session, `pyserial` pour
+l'UART).
+
+### Ce qui a été fait
+
+Nouveau répertoire `pi/` (nouveau langage dans le dépôt --- premier
+code Python du projet) :
+
+1. **`pi/rover_esp32/`** --- couche protocole :
+   - `protocol.py` : encode/decode de trames Rover Protocol, pur (pas
+     d'I/O), recopie fidèle de l'algorithme de `RoverProtocol.cpp`
+     (checksum XOR, découpage `*CS`). Vérifié par comparaison directe
+     avec `esp32/tools/rover_frame.py` et l'exemple corrigé de
+     `ROVER_PROTOCOL.md` --- valeurs identiques.
+   - `link.py` : `RoverLink`, connexion série via
+     `serial.serial_for_url()` --- accepte aussi bien un port réel
+     (`/dev/ttyUSB0`) qu'une URL `rfc2217://...`, donc le **même code**
+     pilote le robot physique ou la simulation Wokwi. Thread de lecture
+     dédié (`serial.threaded.ReaderThread`, pyserial n'a pas de support
+     asyncio natif).
+
+2. **`pi/rover_core/`** :
+   - `core.py` (`RoverCore`) : ne duplique pas la sécurité de l'ESP32
+     --- quand aucun client de contrôle n'est connecté, arrête
+     simplement d'envoyer `HEARTBEAT` et laisse l'ESP32 passer en
+     `SAFE` tout seul (`ARCHITECTURE_AND_ROADMAP.md` §9). Envoie
+     `SYSTEM action=resume` à la connexion d'un client (nécessaire :
+     `HEARTBEAT` seul ne sort pas de `SAFE`). Gère plusieurs clients de
+     contrôle simultanés sans qu'une déconnexion prématurée coupe tout
+     pour les autres.
+   - `main.py` : point d'entrée (`python -m rover_core.main --port
+     ...`), construit `RoverCore` **à l'intérieur** de la boucle
+     asyncio effectivement utilisée par `aiohttp` (`asyncio.run` +
+     `AppRunner`/`TCPSite`, pas `web.run_app`) --- pour éviter un bug
+     classique de boucle asyncio incohérente entre le thread lecteur
+     série et le serveur web.
+
+3. **`pi/rover_control/`** : serveur `aiohttp` (page `/` + WebSocket
+   `/ws`) + `static/index.html` --- page de contrôle autonome, sans
+   framework JS ni étape de build (une seule dépendance ajoutée :
+   `aiohttp`, cf. règle §27.10 "pas de dépendance lourde si une
+   solution simple suffit) :
+   - Joystick tactile (Pointer Events, un seul modèle pour souris et
+     tactile).
+   - Manette physique (Gamepad API), prioritaire sur le joystick
+     tactile si détectée.
+   - Envoi `{velocity, rotation}` en JSON à 10 Hz, indépendant de la
+     fréquence `HEARTBEAT` du pont Pi↔ESP32.
+
+4. **`.gitignore`** : ajout de `pi/.venv/`, `__pycache__/`, `*.pyc`.
+
+### Validation
+
+Test de bout en bout, en conditions réelles (pas de mock) contre la
+simulation Wokwi déjà en cours (`rfc2217://localhost:4000`) :
+
+- `python -m rover_core.main --port rfc2217://localhost:4000` : connexion
+  OK, `serial.serial_for_url()` fonctionne identiquement pour un port
+  réel et une URL RFC2217.
+- Page `/` servie correctement (bug initial trouvé et corrigé :
+  `add_static(show_index=True)` servait un listing de dossier au lieu
+  de `index.html` --- remplacé par une route explicite).
+- Client WebSocket simulé (script Python, `aiohttp.ClientSession`) :
+  - Connexion → `SYSTEM action=resume` puis boucle `HEARTBEAT` (~150 ms)
+    envoyés automatiquement.
+  - `MOVE velocity=0.20 rotation=0.00` envoyé en boucle → reçu et traité
+    par le firmware (mêmes trames que les tests manuels précédents).
+  - `STATE left_speed=... right_speed=...` reçu en retour et journalisé
+    côté Pi.
+  - Déconnexion → `MOVE velocity=0.00 rotation=0.00` immédiat +
+    arrêt de la boucle `HEARTBEAT` (l'ESP32 repasse en `SAFE` de
+    lui-même ensuite, pas besoin que le Pi le lui dise).
+- `protocol.py` revérifié isolément : `encode_frame`/`decode_frame`
+  produisent des valeurs identiques à `esp32/tools/rover_frame.py` et
+  rejettent bien un checksum invalide.
+
+### Ce qui n'est PAS validé
+
+- Le joystick tactile et la manette (Gamepad API) n'ont pas été
+  testés avec un vrai doigt/une vraie manette --- seul le backend
+  (WebSocket → `RoverCore.move()`) a été validé par un client simulé.
+  Le code utilise des API web standard (Pointer Events, Gamepad API)
+  mais reste à confirmer en conditions réelles sur téléphone/manette.
+- Aucune authentification ni chiffrement sur le serveur de contrôle ---
+  ne pas l'exposer hors d'un réseau local de confiance en l'état.
+- Pas de caméra, pas de VPN, pas d'accès distant (reste de la Phase 6).
+- Pas testé sur Raspberry Pi physique (développé et validé sur la
+  machine de dev Linux Mint, contre la simulation Wokwi).
+
+### État actuel
+
+- **Rover est pilotable en réseau local** (Phase 5 + 6 minimales) :
+  interface web (manette ou joystick tactile) → `MOVE` → ESP32,
+  validé de bout en bout en simulation.
+
+### Prochaines étapes
+
+- Valider le joystick tactile / la manette avec un vrai téléphone et
+  une vraie manette (ouvrir `http://<ip>:8080/` depuis un navigateur).
+- Afficher le retour d'état (`STATE`/`EVENT`/`ERROR`) dans l'interface
+  plutôt que seulement dans les logs du service.
+- Continuer soit la Phase 3 (tête/écran) côté ESP32, soit approfondir
+  Phase 5/6 (config, logs, machine à états, caméra) selon la priorité
+  de l'utilisateur.

@@ -1085,8 +1085,12 @@ Objectif : créer le cerveau.
 
 -   [ ] OS.
 -   [ ] Services Rover.
--   [ ] Rover Core.
--   [ ] Rover ESP32 Interface.
+-   [x] Rover Core (`pi/rover_core/`) --- minimal : gère la connexion
+      ESP32 et le heartbeat/resume, pas encore de machine à états de
+      haut niveau (IDLE/INTERACTING/MOVING/... §20).
+-   [x] Rover ESP32 Interface (`pi/rover_esp32/`) --- pont Rover
+      Protocol complet (encode/decode conforme à
+      `RoverProtocol.cpp`, testé trame par trame), voir PROGRESS.md.
 -   [ ] Configuration.
 -   [ ] Logs.
 -   [ ] Gestion des événements.
@@ -1094,7 +1098,9 @@ Objectif : créer le cerveau.
 
 Résultat :
 
-Le Pi devient l'orchestrateur central.
+Le Pi devient l'orchestrateur central. **Tranche minimale seulement**
+--- suffisante pour piloter Rover (Phase 6 minimale), pas
+l'orchestrateur complet décrit ici.
 
 ------------------------------------------------------------------------
 
@@ -1104,19 +1110,31 @@ Objectif : voir et piloter Rover.
 
 -   [ ] Caméra.
 -   [ ] Flux vidéo local.
--   [ ] Interface de contrôle.
--   [ ] Commandes MOVE.
--   [ ] Commandes HEAD.
--   [ ] Retour d'état.
--   [ ] Contrôle smartphone.
--   [ ] Support manette / gamepad (entrée alternative au smartphone).
+-   [x] Interface de contrôle (`pi/rover_control/`, page web
+      autonome, pas de build).
+-   [x] Commandes MOVE (validé de bout en bout en simulation, voir
+      PROGRESS.md : navigateur → WebSocket → Rover Protocol → ESP32).
+-   [ ] Commandes HEAD (pas de cible : Phase 3 --- servos tête --- pas
+      encore écrite côté ESP32).
+-   [ ] Retour d'état (les trames `STATE`/`EVENT`/`ERROR` sont bien
+      reçues et journalisées côté Pi, mais pas encore affichées dans
+      l'interface).
+-   [x] Contrôle smartphone (joystick tactile, Pointer Events) --- code
+      écrit, backend validé ; reste à valider au toucher sur un vrai
+      téléphone.
+-   [x] Support manette / gamepad (Gamepad API) --- idem, code écrit,
+      reste à valider avec une manette physique branchée.
 -   [ ] Accès distant sécurisé (VPN) pour un pilotage hors réseau local.
--   [ ] Authentification.
+-   [ ] Authentification --- **aucune pour l'instant** : le serveur de
+      contrôle n'a ni auth ni chiffrement, à ne pas exposer hors d'un
+      réseau local de confiance en l'état.
 
 Résultat :
 
 Rover peut être piloté à distance (smartphone ou manette) avec retour
-vidéo, y compris hors du réseau local via VPN.
+vidéo, y compris hors du réseau local via VPN. **Partiellement atteint
+en réseau local seulement** : pilotage MOVE fonctionnel, ni vidéo ni
+accès distant/VPN/auth (voir PROGRESS.md pour l'état détaillé).
 
 Cas d'usage prioritaire : surveillance de la maison à distance
 (déplacement + vidéo en temps réel) en complément du pilotage.

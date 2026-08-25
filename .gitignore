@@ -2,3 +2,7 @@
 .vscode/
 *.o
 *.a
+pi/.venv/
+pi/__pycache__/
+**/__pycache__/
+*.pyc
