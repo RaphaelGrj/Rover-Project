@@ -72,7 +72,17 @@ en Phase 4).
   simulé (pas de chip DC-motor+encodeur câblé) : la boucle PID tourne
   donc en boucle ouverte en simulation (`left_speed`/`right_speed`
   restent à 0 dans la télémétrie `STATE`), ce n'est pas un bug.
-- **Tête / écran / capteurs (Phases 3--4)** : pas encore reflétés dans
-  `diagram.json`, le code correspondant n'existe pas encore. Ajouter
-  les pièces au fur et à mesure en réutilisant ces numéros de pin comme
-  point de départ.
+- **Tête + écran (Phase 3)** : `esp32/diagram.json` câble aussi 2
+  `wokwi-servo` (pitch/yaw) et 1 `board-st7789` (yeux). Ce chip ST7789
+  simulé est **fixe en 240×240** (pas configurable via `attrs`) ---
+  `ROVER_DISPLAY_WIDTH/HEIGHT` dans `display_config.h` sont alignés
+  dessus, pas sur le panneau 240×280 de Lumi (voir `PROGRESS.md`).
+  Limite connue : ce chip communautaire n'expose pas de framebuffer
+  exploitable par `wokwi-cli` (`--screenshot-part` échoue avec "Part
+  does not have a valid framebuffer") --- le rendu des yeux n'a donc pu
+  être validé qu'au niveau protocole (`FACE`/`ANIMATION` acceptés sans
+  crash), **pas visuellement** --- reste à vérifier à l'œil dans
+  VSCode (probablement fonctionnel là où la capture headless ne
+  l'est pas, mais non confirmé).
+- **Capteurs (Phase 4)** : pas encore reflétés dans `diagram.json`, le
+  code correspondant n'existe pas encore.

@@ -6,6 +6,9 @@
 #include "Watchdog.h"
 #include "Diagnostics.h"
 #include "DriveController.h"
+#include "HeadController.h"
+#include "DisplayEngine.h"
+#include "Emotion.h"
 
 // UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
 // section 2); Serial keeps this testable over USB in the meantime.
@@ -13,6 +16,8 @@ RoverProtocol protocol(Serial);
 HeartbeatMonitor heartbeat;
 RoverState state = RoverState::BOOT;
 DriveController drive;
+HeadController head;
+DisplayEngine display;
 unsigned long lastTelemetryMs = 0;
 
 // Called by RoverProtocol for every validated incoming frame.
@@ -59,8 +64,38 @@ void onFrame(const RoverFrame& frame) {
         return;
     }
 
-    // HEAD/FACE/ANIMATION/AUDIO/LIGHT are dispatched to their own modules
-    // once those exist (Phase 3 of ARCHITECTURE_AND_ROADMAP.md).
+    if (strcmp(frame.type, "HEAD") == 0) {
+        // Same gating as MOVE, for the same reason: never obey a stale
+        // command during SAFE, only an explicit resume re-arms it.
+        if (state == RoverState::ACTIVE) {
+            float pitch = frame.getFloat("pitch", 0.0f);
+            float yaw = frame.getFloat("yaw", 0.0f);
+            head.setTarget(pitch, yaw);
+        }
+        return;
+    }
+
+    if (strcmp(frame.type, "FACE") == 0) {
+        // Not gated on ACTIVE/SAFE: showing an emotion has no physical
+        // safety implication the way motor/servo motion does.
+        char emotionName[16];
+        Emotion emotion;
+        if (frame.getField("emotion", emotionName, sizeof(emotionName)) &&
+            parseEmotion(emotionName, emotion)) {
+            display.setEmotion(emotion);
+        }
+        return;
+    }
+
+    if (strcmp(frame.type, "ANIMATION") == 0) {
+        char animationName[16];
+        if (frame.getField("name", animationName, sizeof(animationName))) {
+            display.playAnimation(animationName);
+        }
+        return;
+    }
+
+    // AUDIO/LIGHT are dispatched to their own modules once those exist.
 }
 
 void setup() {
@@ -70,6 +105,8 @@ void setup() {
     // Attaches motor/encoder pins and immediately commands 0 speed, so
     // the driver never has stale/undefined PWM before the first MOVE.
     drive.begin();
+    head.begin();
+    display.begin();
 
     char fields[64];
     snprintf(fields, sizeof(fields), "protocol=%s board=%s state=BOOT",
@@ -82,6 +119,8 @@ void setup() {
 void loop() {
     protocol.poll();
     drive.update();
+    head.update();
+    display.update();
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {
         state = RoverState::SAFE;

@@ -590,3 +590,110 @@ dans `main.cpp`, tout test Wokwi (diagramme non étendu pour servos/écran).
    (headless `wokwi-cli`, checksum via `tools/rover_frame.py`).
 4. Continuer le retour d'état : valider joystick/manette sur vrai
    téléphone/manette (toujours en attente).
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite 5) --- Phase 3 terminée (code + simulation protocole)
+
+### Contexte
+
+L'utilisateur a demandé de terminer la Phase 3 malgré la pause prévue
+plus tôt. Suite directe de la session précédente : `HeadController`/
+`ServoJoint` existaient déjà mais n'étaient pas branchés, et le moteur
+d'yeux n'était pas commencé.
+
+### Ce qui a été fait
+
+1. **`esp32/lib/display/`** (nouveau module) :
+   - `EyeState.h` : struct pure décrivant l'état visuel à dessiner
+     (regard gauche/droite, ouverture, intensité glitch) --- séparation
+     volontaire entre "quoi dessiner" et "pourquoi", pour que le rendu
+     reste une fonction pure de l'état.
+   - `EyeRenderer.{h,cpp}` : rendu des yeux "glitch" (rectangles arrondis
+     RGB décalés cyan/magenta/blanc + iris noire), technique reprise du
+     survol de Lumi mais **réécrite** en fonction pure sur
+     `Adafruit_GFX`, pas copiée (Lumi n'a pas de classe réutilisable,
+     juste une tâche FreeRTOS avec des globales --- voir le survol
+     précédent).
+   - `Emotion.{h,cpp}` : les 8 émotions de la section 15 de
+     `ARCHITECTURE_AND_ROADMAP.md` (IDLE/HAPPY/CURIOUS/SLEEPY/
+     CONFUSED/ALERT/SAD/EXCITED), parsing du champ `emotion=` d'une
+     trame `FACE`.
+   - `DisplayEngine.{h,cpp}` : possède l'écran ST7789 + un profil par
+     émotion (ouverture de base, cadence de clignement, biais de
+     regard, "wander" idle, glitch continu pour `ALERT`,
+     regard asymétrique pour `CONFUSED`) --- **premier jet
+     paramétrique** réutilisant un seul modèle d'œil, pas d'art dédié
+     par émotion (aucune ressource de design fournie). Une seule
+     animation concrète (`GLITCH`, effet RGB-split renforcé, 900 ms)
+     démontre le mécanisme `ANIMATION name=...`, pas une bibliothèque
+     complète.
+   - Détail d'intégration important : `SPI.begin(SCLK, -1, MOSI, CS)`
+     avec MISO explicitement désactivé (`-1`), comme sur Lumi --- sinon
+     `SPI.begin()` par défaut réserve GPIO19 (MISO VSPI par défaut) qui
+     est utilisé ici pour le servo Yaw. Sans ce détail, ça aurait été un
+     conflit de pin silencieux.
+
+2. **`main.cpp`** : dispatch `HEAD` (gated sur `ACTIVE`, même logique
+   que `MOVE`), `FACE` et `ANIMATION` (non gated --- afficher une
+   émotion n'a aucune implication de sécurité physique, contrairement
+   au mouvement). `head.update()`/`display.update()` appelés dans
+   `loop()`. Un nom d'émotion inconnu est ignoré silencieusement (même
+   tolérance qu'une action `SYSTEM` inconnue).
+
+3. **`esp32/diagram.json`** étendu : 2 `wokwi-servo` (pitch/yaw) + 1
+   écran `board-st7789` (le nom exact trouvé par tâtonnement via
+   `wokwi-cli lint`, qui liste les pins valides d'un type de pièce en
+   cas d'erreur --- `wokwi-st7789` n'existe pas).
+   **Découverte en testant** : ce chip simulé est fixe en 240×240, pas
+   configurable ---`display_config.h` corrigé pour correspondre (240×240
+   au lieu de 240×280 repris de Lumi), pour que la simulation et le
+   firmware restent cohérents entre eux.
+
+4. **Compilation** vérifiée sur `esp32_wroom` et `esp32_s3` (RAM 6.1%,
+   Flash 9.4%) après chaque étape.
+
+5. **Validé en simulation** (headless `wokwi-cli` + RFC2217, sur un
+   port isolé 4009 pour ne pas interrompre la session VSCode de
+   l'utilisateur, remis à 4000 après coup) :
+   - Boot avec tout le code Phase 3 chargé (moteurs + tête + écran) :
+     pas de crash, pas de conflit de pin.
+   - `HEAD pitch=15 yaw=-20` accepté en état `ACTIVE`.
+   - `FACE emotion=happy` accepté.
+   - `ANIMATION name=GLITCH` accepté.
+   - `FACE emotion=bogus` (émotion inconnue) : ignoré silencieusement,
+     pas de crash, pas de trame `ERROR`.
+   - `SYSTEM action=diag` après tout ça : `uptime_ms`/`free_heap`
+     stables et cohérents --- pas de reset, pas de fuite mémoire.
+
+### Ce qui n'est PAS validé
+
+- **Le rendu visuel des yeux n'a pas pu être vérifié**, seulement le
+  dispatch protocole. Tentative de capture d'écran via `wokwi-cli
+  --screenshot-part display` : échec, `"Part does not have a valid
+  framebuffer: display"` --- limite du chip communautaire
+  `github:Whiteeeey/chip-st7789` utilisé par `board-st7789`, pas un
+  bug du firmware. Reste à vérifier à l'œil dans le simulateur VSCode
+  (interface graphique, hors de portée de ce terminal) ou sur écran
+  physique.
+- Aucune calibration des limites d'angle des servos ni des profils
+  d'émotion contre du matériel réel (tout est provisoire, comme
+  d'habitude cette phase-ci).
+- Rien testé sur servos/écran physiques.
+
+### État actuel
+
+- **Phase 3 (Tête et écran) : complète au niveau code**, compile sur
+  les deux cibles, validée en simulation au niveau protocole
+  (dispatch `HEAD`/`FACE`/`ANIMATION` sans crash). Rendu visuel non
+  confirmé. Pas de test matériel physique.
+- **Phases 0, 1, 2 : inchangées** depuis les sessions précédentes.
+
+### Prochaines étapes
+
+- Vérifier visuellement le rendu des yeux dans VSCode (l'utilisateur
+  peut le faire directement, capture impossible depuis ce terminal).
+- Phase 4 (Capteurs) ou calibration matérielle des Phases 2/3 dès que
+  le robot physique est disponible.
+- Retour d'état : toujours en attente de validation joystick/manette
+  sur un vrai téléphone/manette.

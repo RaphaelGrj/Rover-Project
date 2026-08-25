@@ -2,7 +2,7 @@
   "version": 1,
   "author": "Rover Project",
   "editor": "wokwi",
-  "//": "Phase 1+2. UART0 -> moniteur serie (Rover Protocol). 4 LEDs sur les pins moteur DRV8613 (IN1/IN2 gauche+droite, motion_config.h) pour visualiser direction/PWM sans moteur reel -- pas de retour d'encodeur simule ici (aucun chip DC-motor+encodeur cable), donc la boucle PID tourne en boucle ouverte en simulation. Voir WIRING.md.",
+  "//": "Phase 1+2+3. UART0 -> moniteur serie (Rover Protocol). 4 LEDs sur les pins moteur DRV8833 (IN1/IN2 gauche+droite) pour visualiser direction/PWM sans moteur reel -- pas de retour d'encodeur simule, donc la boucle PID tourne en boucle ouverte en simulation. 2 servos (pitch/yaw) + 1 ecran ST7789 (yeux/emotions) pour la Phase 3. Voir WIRING.md.",
   "parts": [
     {
       "type": "wokwi-esp32-devkit-v1",
@@ -18,7 +18,10 @@
     { "type": "wokwi-resistor", "id": "r_l_fwd", "top": -20, "left": 160, "attrs": { "value": "220" } },
     { "type": "wokwi-resistor", "id": "r_l_rev", "top": 20, "left": 160, "attrs": { "value": "220" } },
     { "type": "wokwi-resistor", "id": "r_r_fwd", "top": -20, "left": 320, "attrs": { "value": "220" } },
-    { "type": "wokwi-resistor", "id": "r_r_rev", "top": 20, "left": 320, "attrs": { "value": "220" } }
+    { "type": "wokwi-resistor", "id": "r_r_rev", "top": 20, "left": 320, "attrs": { "value": "220" } },
+    { "type": "wokwi-servo", "id": "servo_pitch", "top": -120, "left": 200, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_yaw", "top": -120, "left": 320, "attrs": {} },
+    { "type": "board-st7789", "id": "display", "top": -260, "left": 200, "attrs": {} }
   ],
   "connections": [
     [ "esp32:TX0", "$serialMonitor:RX", "", [] ],
@@ -38,7 +41,24 @@
 
     [ "esp32:D32", "r_r_rev:1", "", [] ],
     [ "r_r_rev:2", "led_r_rev:A", "", [] ],
-    [ "led_r_rev:C", "esp32:GND.2", "", [] ]
+    [ "led_r_rev:C", "esp32:GND.2", "", [] ],
+
+    [ "esp32:D13", "servo_pitch:PWM", "", [] ],
+    [ "servo_pitch:GND", "esp32:GND.1", "", [] ],
+    [ "servo_pitch:V+", "esp32:VIN", "", [] ],
+
+    [ "esp32:D19", "servo_yaw:PWM", "", [] ],
+    [ "servo_yaw:GND", "esp32:GND.2", "", [] ],
+    [ "servo_yaw:V+", "esp32:VIN", "", [] ],
+
+    [ "esp32:D18", "display:SCL", "", [] ],
+    [ "esp32:D23", "display:SDA", "", [] ],
+    [ "esp32:D5", "display:CS", "", [] ],
+    [ "esp32:D2", "display:DC", "", [] ],
+    [ "esp32:D15", "display:RST", "", [] ],
+    [ "display:BL", "esp32:3V3", "", [] ],
+    [ "display:VCC", "esp32:3V3", "", [] ],
+    [ "display:GND", "esp32:GND.1", "", [] ]
   ],
   "dependencies": {}
 }

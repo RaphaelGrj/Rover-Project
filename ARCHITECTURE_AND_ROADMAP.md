@@ -1036,16 +1036,31 @@ ESP32 → STATE
 
 Objectif : donner une personnalité physique à Rover.
 
--   [ ] Servo Pitch.
--   [ ] Servo Yaw.
--   [ ] Limites mécaniques.
--   [ ] Interpolation.
--   [ ] Portage du moteur d'yeux de Lumi.
--   [ ] Expressions.
--   [ ] Animations.
--   [ ] Glitch engine.
--   [ ] Commandes FACE.
--   [ ] Commandes ANIMATION.
+-   [x] Servo Pitch.
+-   [x] Servo Yaw.
+-   [x] Limites mécaniques (souples, placeholders --- voir
+      `head_config.h`).
+-   [x] Interpolation.
+-   [x] Portage du moteur d'yeux de Lumi --- **réécriture**, pas un
+      copier-coller (Lumi n'a pas de classe réutilisable, voir
+      PROGRESS.md), technique RGB-split reprise fidèlement.
+-   [x] Expressions --- les 8 émotions de la section 15, mais en
+      premier jet **paramétrique** (un seul modèle d'œil de base
+      modulé par émotion : ouverture/regard/clignement/glitch), pas
+      encore d'art dédié par émotion.
+-   [x] Animations --- mécanisme générique (`ANIMATION name=...`) avec
+      **une seule** animation concrète (`GLITCH`) comme preuve de
+      fonctionnement, pas une bibliothèque complète.
+-   [x] Glitch engine --- l'effet RGB-split (utilisé par `ALERT` et par
+      l'animation `GLITCH`).
+-   [x] Commandes FACE.
+-   [x] Commandes ANIMATION.
+
+Complet au niveau code et compile sur les deux cibles ; validé en
+simulation Wokwi **au niveau protocole** (dispatch sans crash) mais
+**pas visuellement** --- voir PROGRESS.md pour la limite technique
+rencontrée (capture d'écran headless impossible avec le chip ST7789
+simulé utilisé). Pas testé sur servos/écran physiques réels.
 
 Résultat :
 
