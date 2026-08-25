@@ -52,7 +52,7 @@ l'espace final ni le `*CS` lui-même.
 Exemple :
 
 ```
-MOVE velocity=0.25 rotation=-0.10 *4B
+MOVE velocity=0.25 rotation=-0.10 *39
 ```
 
 Contenu utilisé pour le checksum : `MOVE velocity=0.25 rotation=-0.10`.
@@ -85,7 +85,7 @@ HEARTBEAT      Raspberry Pi → ESP32
 
 | Type        | Champs                          | Exemple                                  |
 |-------------|----------------------------------|-------------------------------------------|
-| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.25 rotation=-0.10 *4B` |
+| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.25 rotation=-0.10 *39` |
 | `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *3A`               |
 | `FACE`      | `emotion`                        | `FACE emotion=happy *2E`                  |
 | `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *11`            |

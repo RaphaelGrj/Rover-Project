@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "author": "Rover Project",
+  "editor": "wokwi",
+  "//": "Phase 1 seulement : le firmware actuel ne parle qu'en Serial (Rover Protocol via USB). Aucun GPIO n'est encore utilise, donc aucun cablage a simuler pour l'instant -- voir WIRING.md pour le pinout de base prevu pour la Phase 2 (moteurs/tete/ecran/capteurs), a ajouter ici une fois ce code ecrit.",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp32",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [ "esp32:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp32:RX0", "$serialMonitor:TX", "", [] ]
+  ],
+  "dependencies": {}
+}

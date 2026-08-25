@@ -12,3 +12,4 @@ L'environnement de développement est sous Linux Mint. Le robot actuel utilise u
 - Garde une indentation à 4 espaces et nomme les variables en anglais.
 - Gère systématiquement les erreurs de communication (I2C, SPI, Serial).
 - Avant d'écrire ou de modifier massivement un fichier, explique brièvement ta logique.
+- Tout code écrit pour le projet doit être commenté : pas besoin de commenter chaque ligne, mais il faut suffisamment d'informations (pourquoi, pas juste quoi) pour s'y retrouver facilement sans relire tout l'historique.

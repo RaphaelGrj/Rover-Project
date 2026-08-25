@@ -11,8 +11,13 @@ RoverProtocol protocol(Serial);
 HeartbeatMonitor heartbeat;
 RoverState state = RoverState::BOOT;
 
+// Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
+    // Any valid frame counts as proof of life from the Pi.
     heartbeat.reset();
+    // First frame after boot promotes us out of READY; SAFE can only be
+    // left via an explicit SYSTEM action=resume (see below), not just
+    // because traffic resumed -- avoids silently un-safing the robot.
     if (state == RoverState::READY) {
         state = RoverState::ACTIVE;
     }

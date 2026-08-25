@@ -1,0 +1,20 @@
+# Config de l'extension VSCode Wokwi (simulation ESP32).
+#
+# Cible par défaut = esp32_wroom, car c'est la carte physique actuelle
+# du robot (voir CLAUDE.md). Pour simuler la cible S3 à la place :
+#   1. compiler avec `pio run -e esp32_s3`
+#   2. remplacer "esp32_wroom" par "esp32_s3" ci-dessous
+#   3. dans diagram.json, remplacer le type de la carte par
+#      "wokwi-esp32-s3-devkitc-1"
+#
+# Il faut avoir compilé le firmware au moins une fois avant de lancer
+# la simulation (`pio run -e esp32_wroom` depuis le dossier esp32/),
+# sinon les fichiers .bin/.elf ci-dessous n'existent pas encore.
+[wokwi]
+version = 1
+firmware = ".pio/build/esp32_wroom/firmware.bin"
+elf = ".pio/build/esp32_wroom/firmware.elf"
+# Expose le port série virtuel en TCP (RFC2217) sur localhost:4000,
+# pour pouvoir s'y connecter en dehors du terminal VSCode (ex: script
+# Python/pyserial) quand taper/coller dans ce terminal ne fonctionne pas.
+rfc2217ServerPort = 4000
