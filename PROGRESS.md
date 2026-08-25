@@ -502,8 +502,91 @@ simulation Wokwi déjà en cours (`rfc2217://localhost:4000`) :
 
 - Valider le joystick tactile / la manette avec un vrai téléphone et
   une vraie manette (ouvrir `http://<ip>:8080/` depuis un navigateur).
-- Afficher le retour d'état (`STATE`/`EVENT`/`ERROR`) dans l'interface
-  plutôt que seulement dans les logs du service.
 - Continuer soit la Phase 3 (tête/écran) côté ESP32, soit approfondir
   Phase 5/6 (config, logs, machine à états, caméra) selon la priorité
   de l'utilisateur.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-25 (suite 4) --- Retour d'état + Phase 3 (en cours)
+
+### Contexte
+
+Demande de l'utilisateur : afficher le retour d'état ESP32 dans
+l'interface web, et démarrer la Phase 3 (tête/écran). Session
+interrompue par l'utilisateur avant la fin de la Phase 3 --- ce qui
+suit distingue clairement ce qui est **fait et validé** de ce qui est
+**écrit mais pas encore branché/testé**.
+
+### Retour d'état dans l'UI --- fait et validé
+
+- `RoverCore` (`pi/rover_core/core.py`) expose un pub-sub
+  (`add_listener`/`remove_listener`) : n'importe quel abonné reçoit
+  chaque trame `STATE`/`EVENT`/`ERROR` reçue de l'ESP32, sans que
+  `RoverCore` ait besoin de connaître aiohttp/WebSocket.
+- `rover_control/server.py` pousse ces trames en JSON au client
+  WebSocket concerné (+ la dernière connue immédiatement à la
+  connexion, pour qu'un client qui rejoint en cours de session ne voie
+  pas un panneau vide).
+- `index.html` affiche trois lignes : `STATE` (permanente, dernière
+  valeur), `EVENT`/`ERROR` (s'effacent après 5 s --- ce sont des
+  occurrences, pas un statut permanent).
+- **Validé** contre la simulation Wokwi en cours : un client WebSocket
+  simulé a bien reçu `{"type": "STATE", ...}` poussé en temps réel
+  après un `MOVE`.
+- Commité (`a0be37c`).
+
+### Phase 3 (tête + écran) --- démarrée, PAS encore intégrée ni testée
+
+Recherche préalable : l'architecture du moteur d'yeux de Lumi
+(`/home/raphael/R-Bot-Data/Git/Lumi-Project`) a été étudiée (agent de
+survol, lecture seule). Constat : ~180 lignes de logique de rendu
+autonome (yeux "glitch" RGB-split, easing blink/regard, icône WiFi),
+basée sur Adafruit_GFX + Adafruit_ST7789, mais **pas** une classe
+réutilisable --- une tâche FreeRTOS avec des globales. Portage prévu
+comme réécriture propre en classe (`DisplayEngine`/`EyeRenderer`), pas
+copier-coller.
+
+**Écrit et compile, mais RIEN de tout ça n'est encore branché à
+`main.cpp` ni testé (ni en simulation, ni autrement)** :
+
+1. `esp32/include/head_config.h` (nouveau) : pinout servos pitch/yaw
+   (GPIO13/19, déjà dans `WIRING.md`), canaux LEDC 4/5 (0--3 réservés
+   aux moteurs), limites souples (placeholders, ±30°/±90°), vitesse
+   d'interpolation.
+2. `esp32/include/display_config.h` (nouveau) : pinout écran ST7789
+   (GPIO18/23/5/2/15, déjà dans `WIRING.md`), résolution 240×280
+   (reprise de Lumi comme hypothèse de départ, pas confirmée pour
+   Rover --- beaucoup d'écrans ST7789 sont 240×240 ou autre).
+3. `esp32/lib/head/ServoJoint.{h,cpp}` : pilotage bas niveau d'un servo
+   via LEDC (angle relatif au centre → largeur d'impulsion).
+4. `esp32/lib/head/HeadController.{h,cpp}` : cible pitch/yaw → servos,
+   avec les mêmes precautions que `DriveController` en Phase 2 (garde
+   NaN/Inf, clamp aux limites souples, interpolation non bloquante).
+5. `esp32/platformio.ini` : ajout de `Adafruit GFX Library` et
+   `Adafruit ST7735 and ST7789 Library` en dépendances (résolues avec
+   succès par PlatformIO, confirmé par la compilation).
+
+**Compilation vérifiée** sur `esp32_wroom` et `esp32_s3` --- mais
+comme rien n'est encore `#include`-é depuis `main.cpp`, le LDF de
+PlatformIO ne compile même pas encore ces fichiers (taille du firmware
+inchangée par rapport au commit précédent) : ça ne prouve donc **pas**
+que `HeadController`/`ServoJoint` compilent réellement ensemble, juste
+que le reste du projet n'est pas cassé.
+
+**Pas commencé du tout** : `DisplayEngine`/`EyeRenderer` (rendu des
+yeux), `Emotion` enum, dispatch des commandes `HEAD`/`FACE`/`ANIMATION`
+dans `main.cpp`, tout test Wokwi (diagramme non étendu pour servos/écran).
+
+### Prochaines étapes
+
+1. Terminer l'intégration `HeadController` dans `main.cpp` (dispatch
+   `HEAD`, `head.update()` dans `loop()`) et vérifier que ça compile
+   **avec** les fichiers réellement inclus cette fois.
+2. Écrire `DisplayEngine`/`EyeRenderer` (yeux + blink/look idle +
+   mapping `Emotion`) et le dispatch `FACE`/`ANIMATION`.
+3. Étendre `esp32/diagram.json` (servo(s) + écran ST7789 Wokwi) et
+   valider en simulation, même méthode que les phases précédentes
+   (headless `wokwi-cli`, checksum via `tools/rover_frame.py`).
+4. Continuer le retour d'état : valider joystick/manette sur vrai
+   téléphone/manette (toujours en attente).
