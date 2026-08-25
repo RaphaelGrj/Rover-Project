@@ -22,6 +22,15 @@
   }
   #status.connected { color: #3fb950; }
   #status.disconnected { color: #f85149; }
+  #telemetry {
+    position: fixed; top: 2.6em; left: 0; right: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 0.2em;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.78em; color: #7d8590; pointer-events: none;
+  }
+  #telemetry .event { color: #d29922; }
+  #telemetry .error { color: #f85149; }
+  #telemetry div:empty { display: none; }
   #stage {
     display: flex; align-items: center; justify-content: center;
     height: 100%;
@@ -54,6 +63,11 @@
 </head>
 <body>
 <div id="status" class="disconnected">Connexion...</div>
+<div id="telemetry">
+  <div id="state-line"></div>
+  <div id="event-line" class="event"></div>
+  <div id="error-line" class="error"></div>
+</div>
 <div id="stage">
   <div id="joystick-base">
     <div id="joystick-stick"></div>
@@ -75,10 +89,40 @@ const GAMEPAD_DEADZONE = 0.08;
 const statusEl = document.getElementById("status");
 const baseEl = document.getElementById("joystick-base");
 const stickEl = document.getElementById("joystick-stick");
+const stateLineEl = document.getElementById("state-line");
+const eventLineEl = document.getElementById("event-line");
+const errorLineEl = document.getElementById("error-line");
 
 // --- WebSocket, with auto-reconnect -----------------------------------
 
 let ws = null;
+let eventClearTimer = null;
+let errorClearTimer = null;
+
+function formatFields(data) {
+  return Object.entries(data)
+    .filter(([key]) => key !== "type")
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
+}
+
+// STATE is a standing status (always shows the latest); EVENT/ERROR are
+// transient occurrences (ROVER_PROTOCOL.md §8: distinct message
+// categories, not one generic "status") so each gets its own line and
+// clears itself after a few seconds instead of lingering forever.
+function handleEsp32Message(data) {
+  if (data.type === "STATE") {
+    stateLineEl.textContent = "etat: " + formatFields(data);
+  } else if (data.type === "EVENT") {
+    eventLineEl.textContent = "evenement: " + formatFields(data);
+    clearTimeout(eventClearTimer);
+    eventClearTimer = setTimeout(() => { eventLineEl.textContent = ""; }, 5000);
+  } else if (data.type === "ERROR") {
+    errorLineEl.textContent = "erreur: " + formatFields(data);
+    clearTimeout(errorClearTimer);
+    errorClearTimer = setTimeout(() => { errorLineEl.textContent = ""; }, 5000);
+  }
+}
 
 function connect() {
   const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
@@ -90,6 +134,11 @@ function connect() {
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();
+  ws.onmessage = (evt) => {
+    let data;
+    try { data = JSON.parse(evt.data); } catch { return; }
+    if (data && typeof data.type === "string") handleEsp32Message(data);
+  };
 }
 connect();
 

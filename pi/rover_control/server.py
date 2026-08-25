@@ -9,6 +9,7 @@ there's a serial port and an ESP32 behind it.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -40,8 +41,29 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
     core: "RoverCore" = request.app["core"]
 
+    def on_esp32_frame(frame_type: str, fields: dict[str, str]) -> None:
+        # RoverCore calls this synchronously from within the same loop
+        # (see core._handle_frame), so we're already on the right event
+        # loop here -- just can't await directly from a plain callback,
+        # hence scheduling the actual send as its own task. A client
+        # that closed between frames makes send_json raise; that's
+        # expected and not worth logging.
+        async def _send() -> None:
+            try:
+                await ws.send_json({"type": frame_type, **fields})
+            except ConnectionResetError:
+                pass
+
+        asyncio.create_task(_send())
+
+    core.add_listener(on_esp32_frame)
     logger.info("control client connected (%s)", request.remote)
     await core.client_connected()
+
+    # A client connecting mid-session shouldn't see a blank status
+    # panel until the next frame happens to arrive from the ESP32.
+    if core.last_report:
+        await ws.send_json(core.last_report)
 
     try:
         async for msg in ws:
@@ -56,6 +78,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             core.move(velocity, rotation)
     finally:
+        core.remove_listener(on_esp32_frame)
         logger.info("control client disconnected (%s)", request.remote)
         await core.client_disconnected()
 

@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Callable
 
 from rover_esp32.link import RoverLink
+
+FrameListener = Callable[[str, dict[str, str]], None]
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,11 @@ class RoverCore:
         # once) are allowed; only stop heartbeating once the *last* one
         # leaves, not the first.
         self._client_count = 0
+        # Anyone wanting a live feed of STATE/EVENT/ERROR frames (the
+        # control page's status panel, see rover_control.server)
+        # subscribes here instead of RoverCore knowing anything about
+        # WebSockets itself.
+        self._listeners: set[FrameListener] = set()
         # Must be constructed from inside a running event loop (see
         # rover_core.main.async_main) so this captures the *actual* loop
         # aiohttp will be driving -- call_soon_threadsafe below is only
@@ -52,6 +60,14 @@ class RoverCore:
         if frame_type in ("STATE", "EVENT", "ERROR"):
             self.last_report = {"type": frame_type, **fields}
             logger.info("ESP32 -> %s %s", frame_type, fields)
+            for listener in list(self._listeners):
+                listener(frame_type, fields)
+
+    def add_listener(self, listener: FrameListener) -> None:
+        self._listeners.add(listener)
+
+    def remove_listener(self, listener: FrameListener) -> None:
+        self._listeners.discard(listener)
 
     # --- Pi -> ESP32 ---------------------------------------------------
 
