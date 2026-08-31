@@ -784,3 +784,110 @@ fin de journée.
   le dosage du glitch/les proportions selon le retour de l'utilisateur.
 - Reste identique à la session précédente : Phase 4, calibration
   matérielle Phases 2/3, validation joystick/manette physique.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 --- Premier test matériel réel (écran) + rendu des yeux validé
+
+### Contexte
+
+Premier branchement de matériel physique sur le projet (ESP32 WROOM +
+écran ST7789), demande explicite de l'utilisateur : valider uniquement
+l'affichage (yeux/glitch), sans moteurs/servos câblés. Session menée
+depuis une machine Windows (pas l'environnement Linux Mint habituel du
+projet).
+
+### Mise en place de l'outillage de test
+
+- **Driver CP210x manquant** : Windows ne détectait aucun port COM pour
+  l'ESP32 (`CP2102 USB to UART Bridge Controller` en erreur, code 28
+  "drivers not installed"). Résolu par l'utilisateur en installant le
+  driver Silicon Labs officiel --- port `COM10` apparu ensuite.
+- **PlatformIO CLI installé** (`pip install platformio`) plutôt que de
+  passer par l'extension VS Code : `PROGRESS.md` (session 2026-08-25)
+  documentait déjà un moniteur série VS Code peu fiable en saisie pour
+  ce genre de test ; le CLI + un script `pyserial` dédié
+  (`rover_test.py`, même logique que `esp32/tools/rover_frame.py` +
+  `pi/rover_esp32/link.py`) permet d'envoyer les trames et de lire les
+  réponses directement, sans dépendre de l'UI.
+- Build + upload confirmés fonctionnels via
+  `pio run -e esp32_wroom -t upload --upload-port COM10`.
+
+### Écran : deux problèmes identifiés au premier essai, corrigés
+
+1. **Mauvaise résolution/orientation** : `display_config.h` utilisait
+   240x240 (valeur calée sur le chip simulé Wokwi, jamais confirmée sur
+   le vrai panneau --- voir PROGRESS.md 2026-08-25 suite 5). Le panneau
+   réel est en fait **240x280** (comme celui de Lumi) et s'affichait en
+   portrait alors que Rover est prévu en paysage. Corrigé :
+   - `display_config.h` distingue maintenant les dimensions natives du
+     panneau (`ROVER_DISPLAY_PANEL_WIDTH/HEIGHT` = 240x280, portrait)
+     des dimensions logiques utilisées par tout le rendu
+     (`ROVER_DISPLAY_WIDTH/HEIGHT` = 280x240, paysage).
+   - `DisplayEngine::begin()` appelle `_tft.init()` avec les dimensions
+     natives puis `_tft.setRotation(ROVER_DISPLAY_ROTATION)` (valeur
+     `1`, 90° --- `3` en secours si l'image sort inversée/miroir selon
+     le sens de câblage du ruban, ce que le logiciel ne peut pas
+     deviner).
+   - Conséquence pour Wokwi : le chip simulé `board-st7789` reste fixe
+     en 240x240, donc la simulation ne représente plus fidèlement le
+     rendu visuel réel (elle reste valide au niveau protocole
+     seulement, ce qui était déjà sa seule garantie jusqu'ici).
+
+2. **Effet glitch "fouillis de couleur"** : la première version
+   remplissait l'œil trois fois (copie cyan décalée, copie magenta
+   décalée, blanc par-dessus) --- correct en théorie (le blanc ne
+   laissait dépasser que de fines bandes cyan/magenta sur les bords),
+   mais rendu réel jugé confus par l'utilisateur. Retravaillé en trois
+   passes de retouche (`EyeRenderer.cpp`) suite aux retours successifs :
+   - Œil toujours un remplissage blanc unique et propre (jamais teinté).
+   - Contour permanent : une ligne cyan et une ligne rose tracées
+     (`drawRoundRect`, pas un remplissage) légèrement décalées de
+     part et d'autre de l'œil --- épaissi à 2px sur un offset de 2px
+     après un premier essai jugé pas assez visible.
+   - Glitch animé : quelques traits fins (1px d'épaisseur) positionnés
+     aléatoirement à chaque frame (~30 Hz, aucun état mémorisé --- un
+     nouveau tirage indépendant à chaque redraw, ce qui donne l'effet
+     de scintillement), favorisés à 65% horizontaux après retour
+     explicite de l'utilisateur, fréquence/nombre de traits liés à
+     `glitchIntensity` (donc plus dense en `ALERT`/`ANIMATION=GLITCH`).
+   - Rayon des coins arrondis augmenté (`taille/4` → `taille/3`) sur
+     demande.
+   - Un bug de compilation `esp32_s3` a été corrigé au passage :
+     `std::max(int, long)` ne compile pas (déduction de template
+     ambiguë) --- `random()` renvoie un `long`, les appels ont été
+     explicitement castés en `int`.
+
+### Validation
+
+- Compilation vérifiée sur `esp32_wroom` et `esp32_s3` après chaque
+  itération (RAM ~6%, Flash ~9.6%).
+- Flash réel + script de test (`SYSTEM ping` → 7 émotions `FACE` →
+  `ANIMATION GLITCH` → `SYSTEM diag`) rejoué à chaque itération :
+  aucune trame `ERROR`, `uptime_ms`/`free_heap` stables (pas de fuite,
+  pas de reset) sur toute la session.
+- **Rendu visuel confirmé par l'utilisateur sur écran physique réel**
+  (validation humaine, pas automatisable) après la dernière itération :
+  taille des yeux, orientation paysage, coins arrondis, contour
+  cyan/rose et glitch jugés corrects.
+
+### État actuel
+
+- **Phase 3 (Tête et écran)** : le volet écran est maintenant
+  **validé visuellement sur matériel réel**, en plus du code/protocole
+  déjà validés précédemment. Les servos (pitch/yaw) restent non testés
+  sur matériel physique --- prochaine étape naturelle si du matériel
+  reste disponible.
+- `display_config.h` porte maintenant la résolution réelle confirmée
+  (240x280) au lieu d'une valeur provisoire calée sur Wokwi.
+
+### Prochaines étapes
+
+- Tester les servos tête (pitch/yaw) sur matériel réel, même méthode
+  (script `pyserial` + trames `HEAD`, mais nécessite `SYSTEM
+  action=resume`/un flux `HEARTBEAT` puisque `HEAD` est gated sur
+  `ACTIVE`, contrairement à `FACE`/`ANIMATION`).
+- Phase 4 (capteurs) ou calibration matérielle Phase 2 (moteurs/PID)
+  dès que ce matériel est disponible.
+- Validation joystick/manette sur un vrai téléphone/manette (toujours
+  en attente depuis la session du 2026-08-25).

@@ -76,7 +76,11 @@ void DisplayEngine::begin() {
     // instead (head_config.h). Matches the approach already proven on
     // the sibling Lumi project.
     SPI.begin(ROVER_PIN_DISPLAY_SCLK, -1, ROVER_PIN_DISPLAY_MOSI, ROVER_PIN_DISPLAY_CS);
-    _tft.init(ROVER_DISPLAY_WIDTH, ROVER_DISPLAY_HEIGHT);
+    // init() takes the panel's native (pre-rotation) size; setRotation()
+    // then turns it landscape, which is also what makes tft.width()/
+    // height() match ROVER_DISPLAY_WIDTH/HEIGHT afterwards (display_config.h).
+    _tft.init(ROVER_DISPLAY_PANEL_WIDTH, ROVER_DISPLAY_PANEL_HEIGHT);
+    _tft.setRotation(ROVER_DISPLAY_ROTATION);
     _tft.setSPISpeed(ROVER_DISPLAY_SPI_HZ);
     // One full clear at boot; every frame after this only touches the
     // two eye cells (EyeRenderer::draw), not the whole panel.

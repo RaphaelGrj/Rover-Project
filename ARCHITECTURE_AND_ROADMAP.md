@@ -1057,10 +1057,11 @@ Objectif : donner une personnalité physique à Rover.
 -   [x] Commandes ANIMATION.
 
 Complet au niveau code et compile sur les deux cibles ; validé en
-simulation Wokwi **au niveau protocole** (dispatch sans crash) mais
-**pas visuellement** --- voir PROGRESS.md pour la limite technique
-rencontrée (capture d'écran headless impossible avec le chip ST7789
-simulé utilisé). Pas testé sur servos/écran physiques réels.
+simulation Wokwi au niveau protocole (dispatch sans crash) et
+**désormais validé visuellement sur écran ST7789 physique réel**
+(240x280, paysage) --- voir PROGRESS.md 2026-08-31. Yeux, contour
+glitch cyan/rose et animation GLITCH confirmés à l'œil. Servos toujours
+non testés sur matériel réel.
 
 Résultat :
 
