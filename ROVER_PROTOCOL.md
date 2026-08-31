@@ -102,8 +102,11 @@ ne reçoivent pas d'ACK.
 | `action=`  | Effet                                                        |
 |------------|---------------------------------------------------------------|
 | `ping`     | l'ESP32 répond `SYSTEM action=pong`                           |
-| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9)                |
+| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9) --- refusé tant que l'E-stop physique est enfoncé (`estop_pressed`, §7.2) |
 | `diag`     | diagnostic série : l'ESP32 répond `STATE uptime_ms=... free_heap=... state=... board=... protocol=...` |
+| `set_pid`  | calibre les gains PID moteur à chaud, persistés en NVS (survit au reboot) : `SYSTEM action=set_pid kp=180 ki=300 kd=0` --- un champ omis garde sa valeur actuelle. Répond `STATE pid_kp=... pid_ki=... pid_kd=...`, ou `ERROR code=invalid_pid_gains` si une valeur est négative/NaN/infinie |
+| `get_pid`  | répond `STATE pid_kp=... pid_ki=... pid_kd=...` avec les gains actuellement actifs |
+| `reset_pid` | revient aux gains compilés par défaut (`motion_config.h`) et oublie la valeur sauvegardée en NVS |
 
 ------------------------------------------------------------------------
 
@@ -172,6 +175,7 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `checksum_invalid`     | trame reçue corrompue                 |
 | `frame_too_long`       | trame reçue > 128 octets              |
 | `unknown_command`      | `TYPE` non reconnu                    |
+| `invalid_pid_gains`    | `SYSTEM action=set_pid` avec une valeur négative, NaN ou infinie |
 
 ```
 ERROR code=motor_overcurrent *3D

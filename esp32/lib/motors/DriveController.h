@@ -31,6 +31,19 @@ public:
     // Fills "left_speed=... right_speed=..." for a STATE frame.
     void buildTelemetryFields(char* out, size_t outLen) const;
 
+    // Applies the same gains to both wheels' PID -- see
+    // esp32/lib/calibration/CalibrationStore.h and main.cpp's
+    // SYSTEM action=set_pid/get_pid/reset_pid for the runtime API this
+    // backs. Both wheels share one set of gains (not tuned
+    // independently) since the two motors are the same part.
+    void setPidGains(float kp, float ki, float kd) {
+        _pidL.setGains(kp, ki, kd);
+        _pidR.setGains(kp, ki, kd);
+    }
+    float pidKp() const { return _pidL.kp(); }
+    float pidKi() const { return _pidL.ki(); }
+    float pidKd() const { return _pidL.kd(); }
+
 private:
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
                       float targetMps, float dtSeconds, float& measuredOut);

@@ -14,6 +14,7 @@
 #include "EStop.h"
 #include "BatteryMonitor.h"
 #include "RoverOTA.h"
+#include "CalibrationStore.h"
 
 // UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
 // section 2); Serial keeps this testable over USB in the meantime.
@@ -66,6 +67,43 @@ void onFrame(const RoverFrame& frame) {
             char fields[96];
             buildDiagnosticsFields(fields, sizeof(fields), state);
             protocol.send("STATE", fields);
+        } else if (strcmp(action, "set_pid") == 0) {
+            // Runtime PID tuning without a reflash per attempt -- any
+            // field left out keeps its current value (getFloat's
+            // default), so eg. "set_pid kp=200" alone only touches Kp.
+            float kp = frame.getFloat("kp", drive.pidKp());
+            float ki = frame.getFloat("ki", drive.pidKi());
+            float kd = frame.getFloat("kd", drive.pidKd());
+            if (isnan(kp) || isinf(kp) || isnan(ki) || isinf(ki) || isnan(kd) || isinf(kd) ||
+                kp < 0.0f || ki < 0.0f || kd < 0.0f) {
+                protocol.sendError("invalid_pid_gains");
+            } else {
+                drive.setPidGains(kp, ki, kd);
+                CalibrationStore::setFloat("pid_kp", kp);
+                CalibrationStore::setFloat("pid_ki", ki);
+                CalibrationStore::setFloat("pid_kd", kd);
+                char fields2[64];
+                snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f", kp, ki, kd);
+                protocol.send("STATE", fields2);
+            }
+        } else if (strcmp(action, "get_pid") == 0) {
+            char fields2[64];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
+                     drive.pidKp(), drive.pidKi(), drive.pidKd());
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "reset_pid") == 0) {
+            // Reverts to the compiled-in placeholders (motion_config.h)
+            // and forgets the NVS override, rather than just resetting
+            // the in-memory value -- a reboot after this must not bring
+            // the old override back.
+            drive.setPidGains(ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            CalibrationStore::remove("pid_kp");
+            CalibrationStore::remove("pid_ki");
+            CalibrationStore::remove("pid_kd");
+            char fields2[64];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
+                     ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            protocol.send("STATE", fields2);
         }
         return;
     }
@@ -124,6 +162,15 @@ void setup() {
     // Attaches motor/encoder pins and immediately commands 0 speed, so
     // the driver never has stale/undefined PWM before the first MOVE.
     drive.begin();
+    // Any PID gains saved via a previous SYSTEM action=set_pid survive
+    // reboots -- falls back to the compiled defaults (motion_config.h)
+    // when nothing has ever been stored (first boot, or after
+    // action=reset_pid).
+    drive.setPidGains(
+        CalibrationStore::getFloat("pid_kp", ROVER_PID_KP),
+        CalibrationStore::getFloat("pid_ki", ROVER_PID_KI),
+        CalibrationStore::getFloat("pid_kd", ROVER_PID_KD)
+    );
     head.begin();
     display.begin();
     sensors.begin();

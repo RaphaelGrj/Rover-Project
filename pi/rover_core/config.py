@@ -29,6 +29,8 @@ DEFAULTS: dict[str, Any] = {
     "http_port": 8080,
     "log_level": "INFO",
     "log_dir": None,  # None = console only; set to enable rotating file logs
+    "tls_cert": None,  # None = plain HTTP/WS; set alongside tls_key to enable HTTPS/WSS
+    "tls_key": None,
 }
 
 

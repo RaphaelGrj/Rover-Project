@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import ssl
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -52,6 +53,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--log-dir", default=None, help="Directory for rotating log files (default: console only)"
     )
+    parser.add_argument(
+        "--tls-cert",
+        default=None,
+        help="Path to a TLS certificate (PEM). Set alongside --tls-key to serve HTTPS/WSS "
+        "instead of plain HTTP/WS -- see pi/README.md for how to generate a self-signed one. "
+        "Never commit a real cert/key to the repo.",
+    )
+    parser.add_argument("--tls-key", default=None, help="Path to the TLS private key (PEM) matching --tls-cert.")
     return parser.parse_args()
 
 
@@ -68,7 +77,27 @@ def resolve_settings(args: argparse.Namespace) -> dict:
         "http_port": args.http_port or config["http_port"],
         "log_level": args.log_level or config["log_level"],
         "log_dir": args.log_dir or config["log_dir"],
+        "tls_cert": args.tls_cert or config["tls_cert"],
+        "tls_key": args.tls_key or config["tls_key"],
     }
+
+
+def build_ssl_context(tls_cert: str | None, tls_key: str | None) -> ssl.SSLContext | None:
+    """Returns None (plain HTTP/WS) unless both a cert and key were
+    given and actually exist -- TLS is opt-in, and a half-configured
+    pair (typo'd path, etc.) must fail loudly rather than silently
+    falling back to unencrypted, which could go unnoticed on a shared
+    network."""
+    if not tls_cert and not tls_key:
+        return None
+    if not tls_cert or not tls_key:
+        raise SystemExit("--tls-cert and --tls-key must both be set to enable HTTPS/WSS (or neither).")
+    if not Path(tls_cert).is_file() or not Path(tls_key).is_file():
+        raise SystemExit(f"TLS cert/key not found: {tls_cert} / {tls_key}")
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
+    return context
 
 
 def configure_logging(log_level: str, log_dir: str | None) -> None:
@@ -98,11 +127,15 @@ async def async_main(settings: dict) -> None:
     app = create_app(core, token, camera)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, settings["http_host"], settings["http_port"])
+
+    ssl_context = build_ssl_context(settings["tls_cert"], settings["tls_key"])
+    site = web.TCPSite(runner, settings["http_host"], settings["http_port"], ssl_context=ssl_context)
     await site.start()
+    scheme = "https" if ssl_context else "http"
     logger.info(
-        "control server listening on http://%s:%d (append ?token=... from the log line above)",
-        settings["http_host"], settings["http_port"],
+        "control server listening on %s://%s:%d (append ?token=... from the log line above)%s",
+        scheme, settings["http_host"], settings["http_port"],
+        "" if ssl_context else " -- PLAIN HTTP: the token above travels unencrypted on this network",
     )
 
     try:

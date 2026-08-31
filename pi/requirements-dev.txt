@@ -1,0 +1,4 @@
+# Test-only dependencies -- not needed to actually run Rover, so kept
+# separate from requirements.txt (the real robot's Pi never installs this).
+-r requirements.txt
+pytest~=8.3

@@ -51,6 +51,10 @@ def token_matches(candidate: str | None, expected: str) -> bool:
     didn't write it and may end up exposed more broadly than intended
     (eg. port-forwarded before the VPN work in Phase 6 exists), so it
     costs nothing to not cut this corner."""
-    if candidate is None:
+    # `expected` should never actually be empty in practice
+    # (resolve_token() always returns a real value), but guarding it
+    # here too means an empty candidate can never match by accident --
+    # defense in depth costs nothing on a security-relevant check.
+    if not candidate or not expected:
         return False
     return hmac.compare_digest(candidate, expected)

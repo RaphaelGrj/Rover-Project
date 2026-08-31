@@ -12,6 +12,14 @@ pi/__pycache__/
 pi/config.json
 pi/logs/
 
+# TLS cert/key (pi/README.md "HTTPS/WSS") and the systemd env file
+# (pi/rover.env.example is the tracked template) -- generated/filled in
+# locally per deployment, never committed.
+pi/*.pem
+pi/*.crt
+pi/*.key
+pi/rover.env
+
 # Never commit real WiFi/OTA credentials (esp32/OTA.md) -- those are
 # meant to be set as environment variables, not files, but this is a
 # backstop in case a future contributor adds a local credentials file

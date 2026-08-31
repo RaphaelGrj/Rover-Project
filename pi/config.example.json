@@ -4,5 +4,7 @@
   "http_host": "0.0.0.0",
   "http_port": 8080,
   "log_level": "INFO",
-  "log_dir": null
+  "log_dir": null,
+  "tls_cert": null,
+  "tls_key": null
 }

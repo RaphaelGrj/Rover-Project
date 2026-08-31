@@ -1034,7 +1034,23 @@ Objectif : obtenir une plateforme roulante fiable.
 Complet au niveau code et validé en simulation Wokwi (voir PROGRESS.md) ;
 pas encore testé sur moteurs/encodeurs physiques réels, ni calibré
 (gains PID et géométrie roue dans `motion_config.h` sont des valeurs de
-départ arbitraires).
+départ arbitraires). **Calibration des gains PID désormais possible sans
+reflash** : `SYSTEM action=set_pid/get_pid/reset_pid`, persisté en NVS
+(`esp32/lib/calibration/CalibrationStore.h`), validé en conditions
+réelles y compris la survie à un redémarrage (PROGRESS.md 2026-08-31)
+--- ne remplace pas le calibrage lui-même (toujours à faire une fois les
+moteurs/encodeurs réels disponibles), juste l'outillage pour le faire
+vite. La géométrie roue (`ROVER_WHEEL_DIAMETER_M` etc.) reste en dur
+dans `motion_config.h` pour l'instant, pas encore dans ce mécanisme.
+
+Simulation Wokwi d'un encodeur moteur (boucle fermée en simulation)
+étudiée mais **pas implémentée** : Wokwi n'a pas de chip officiel pour
+ça, seulement des projets tiers avec un chip personnalisé (API Custom
+Chips C de Wokwi) --- écrire un tel chip depuis zéro n'a pas été fait
+cette session, faute de pouvoir le valider (pas d'accès `wokwi-cli`
+avec jeton dans cet environnement). La boucle PID continue donc de
+tourner en boucle ouverte en simulation (`left_speed`/`right_speed`
+restent à 0), sujet à reprendre avec l'accès Wokwi complet.
 
 Résultat :
 

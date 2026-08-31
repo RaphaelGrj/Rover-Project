@@ -1,6 +1,5 @@
 #include "WheelPID.h"
 #include <Arduino.h>
-#include "motion_config.h"
 
 void WheelPID::reset() {
     _integral = 0.0f;
@@ -31,6 +30,6 @@ int16_t WheelPID::update(float targetMps, float measuredMps, float dtSeconds) {
     _lastMeasuredMps = measuredMps;
     _hasLastMeasured = true;
 
-    float output = ROVER_PID_KP * error + ROVER_PID_KI * _integral + ROVER_PID_KD * derivative;
+    float output = _kp * error + _ki * _integral + _kd * derivative;
     return (int16_t)constrain(output, -255.0f, 255.0f);
 }

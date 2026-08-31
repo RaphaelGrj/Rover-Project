@@ -57,6 +57,51 @@ un fichier journal tournant (`rover_core.log`, 1 Mo × 5 fichiers max) ---
 utile pour rejouer ce qui s'est passé après coup. `pi/logs/` est ignoré
 par git.
 
+## HTTPS/WSS (chiffrement)
+
+Par défaut, le serveur parle en HTTP/WebSocket **non chiffrés** --- le
+token d'accès circule donc en clair sur le WiFi local, lisible par
+quelqu'un d'autre sur le même réseau. Pour chiffrer, générer un
+certificat auto-signé (jamais à commiter, `pi/*.crt`/`pi/*.key` sont
+ignorés par git) :
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout pi/rover.key -out pi/rover.crt -days 365 -subj "/CN=rover.local"
+```
+
+puis lancer avec :
+
+```bash
+python -m rover_core.main --port /dev/ttyUSB0 --tls-cert rover.crt --tls-key rover.key
+```
+
+Le navigateur affichera un avertissement de sécurité (certificat
+auto-signé, normal) --- accepter/continuer manuellement. La page
+bascule automatiquement le WebSocket en `wss://` selon le protocole de
+la page (`index.html`, déjà écrit pour ça). `--tls-cert` et `--tls-key`
+doivent être donnés ensemble ou pas du tout --- le serveur refuse de
+démarrer sinon plutôt que de retomber silencieusement en clair.
+
+## Démarrage automatique (systemd)
+
+`pi/rover-core.service` est un gabarit d'unité systemd pour lancer
+`rover_core` au démarrage du Pi et le relancer automatiquement en cas
+de plantage. Ne contient aucun secret --- le token (`ROVER_CONTROL_TOKEN`)
+vit dans un fichier séparé, jamais commité :
+
+```bash
+cp pi/rover.env.example pi/rover.env
+nano pi/rover.env   # y mettre ton propre token
+
+sudo cp pi/rover-core.service /etc/systemd/system/
+sudo nano /etc/systemd/system/rover-core.service   # adapter les chemins/utilisateur
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now rover-core
+sudo journalctl -u rover-core -f   # suivre les logs (utile pour récupérer le token si rover.env est vide)
+```
+
 ## Trouver le Pi sur le réseau (mDNS)
 
 Raspberry Pi OS inclut Avahi (mDNS) par défaut : une fois l'hostname du

@@ -1409,3 +1409,130 @@ erreur 500.
 - Reste par ailleurs identique aux sessions précédentes : matériel
   (VL53L0X/borniers, moteurs/PID, servos, MPU6050/BME688), Raspberry Pi,
   OTA/E-stop/batterie sur matériel réel dès que possible.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 4) --- 5 nouvelles améliorations (tests Python, HTTPS, systemd, encodeur Wokwi, calibration PID)
+
+### Contexte
+
+Suite de la liste de propositions de la session précédente, les 5 dans
+l'ordre demandé.
+
+### 1. Tests automatisés Python (`pi/tests/`)
+
+`pytest` (dev-only, `pi/requirements-dev.txt`, séparé du
+`requirements.txt` du robot réel) : 25 tests couvrant `rover_esp32.
+protocol` (mêmes valeurs de checksum vérifiées que côté C++, erreurs de
+décodage), `RoverCore` (machine à états comportementale --- via un
+`FakeLink` qui n'ouvre jamais de vrai port série, juste un
+enregistreur d'appels `.send()`) et `rover_control.auth` (génération de
+token, comparaison). Bug de sécurité trouvé et corrigé en écrivant les
+tests : `token_matches("", "")` renvoyait `True` (deux chaînes vides
+sont égales pour `hmac.compare_digest`) --- durci pour rejeter aussi un
+`expected` vide, même si ce cas ne se produit pas en pratique
+(`resolve_token()` ne renvoie jamais une chaîne vide). Les tests d'état
+d'erreur avec délai (5 s réels) sont accélérés via `monkeypatch` sur la
+constante du module plutôt que d'attendre pour de vrai. **25/25
+passent** en local (premier run, sans itération nécessaire). Job CI
+`python-tests` ajouté (`.github/workflows/esp32-build.yml`, renommé
+"Rover CI", déclenché aussi sur `pi/**` désormais).
+
+### 2. HTTPS/WSS
+
+`--tls-cert`/`--tls-key` (CLI + `config.json`) : si les deux sont
+fournis et existent, le serveur sert en HTTPS avec un
+`ssl.SSLContext`, sinon HTTP classique. Refuse de démarrer si un seul
+des deux est donné (jamais de repli silencieux en clair sur une
+config à moitié faite). `index.html` bascule déjà tout seul en `wss://`
+selon `location.protocol` (écrit dès le départ pour ça, aucun
+changement JS nécessaire). Aucun certificat généré ni commis --- juste
+la commande `openssl` documentée dans `pi/README.md` pour que
+l'utilisateur en génère un lui-même.
+
+**Validé en conditions réelles** : certificat auto-signé jetable généré
+(`openssl req -x509 ...`, jamais commis), `rover_core` lancé avec
+`--tls-cert`/`--tls-key` contre l'ESP32 réel --- `https://` avec le bon
+token → 200, requête `http://` en clair sur le même port → aucune
+réponse (pas de repli), log confirmant `listening on https://...`.
+
+### 3. Service systemd
+
+`pi/rover-core.service` (gabarit, chemins `/home/pi/...` à adapter) +
+`pi/rover.env.example` --- le token/les secrets vivent dans
+`pi/rover.env` (`EnvironmentFile=-`, jamais dans le fichier `.service`
+commité). Documenté dans `pi/README.md`. **Non testable sur cette
+machine** (Windows, pas de systemd) --- écrit par lecture attentive de
+la syntaxe systemd standard, pas vérifié en conditions réelles.
+
+### 4. Encodeur simulé dans Wokwi --- investigué, PAS implémenté
+
+Recherche : Wokwi n'a pas de chip officiel "DC motor + encoder" ; il
+existe des projets tiers avec un chip personnalisé écrit via l'API
+Custom Chips C de Wokwi (chip.json + chip.c, même mécanisme que le
+`board-st7789` communautaire déjà utilisé pour l'écran). Écrire un tel
+chip depuis zéro (simulation PWM → vitesse → impulsions quadrature)
+est un vrai mini-projet en C bas niveau, et **cette session n'a aucun
+moyen de le tester** (`wokwi-cli` non installé sur cette machine
+Windows, et même installé il faudrait un `WOKWI_CLI_TOKEN` absent ici).
+Plutôt que de livrer du code de simulation non testé et potentiellement
+buggé en le présentant comme fonctionnel, décision de **ne pas
+l'écrire** cette session --- documenté dans `ARCHITECTURE_AND_ROADMAP.md`
+(Phase 2) comme piste concrète pour une session future avec accès
+Wokwi complet. La boucle PID continue de tourner en boucle ouverte en
+simulation, comme avant.
+
+### 5. Calibration PID sans reflash
+
+`esp32/lib/calibration/CalibrationStore.h` : petite couche autour de
+`Preferences` (NVS) pour lire/écrire des flottants nommés, avec repli
+sur une valeur par défaut si rien n'est stocké --- jamais un blocage au
+boot si la NVS est vide. `WheelPID` a maintenant des gains
+d'instance modifiables (`setGains`/`kp()`/`ki()`/`kd()`) au lieu des
+constantes globales `ROVER_PID_KP/KI/KD` codées en dur ; `DriveController`
+expose `setPidGains()` appliqué aux deux roues (un seul jeu de gains,
+pas par roue --- même moteur des deux côtés). Trois nouvelles actions
+`SYSTEM` : `set_pid` (valide NaN/Inf/négatif → `ERROR
+code=invalid_pid_gains`, sinon applique + persiste), `get_pid`,
+`reset_pid` (revient aux valeurs compilées et efface la NVS). Documenté
+dans `ROVER_PROTOCOL.md` §5.1 et §7.3.
+
+**Validé en conditions réelles**, séquence complète sur l'ESP32 physique
+(chaque étape = une vraie reconnexion série, donc un vrai reboot matériel,
+pas juste un redémarrage logique) :
+1. `get_pid` → gains par défaut (180.00/300.00/0.00).
+2. `set_pid kp=222.50 ki=111.00 kd=5.00` → appliqué immédiatement.
+3. **Reboot réel** → `get_pid` → toujours 222.50/111.00/5.00 ---
+   persistance NVS confirmée à travers un vrai redémarrage matériel.
+4. `set_pid kp=-1` → `ERROR code=invalid_pid_gains`, aucun crash.
+5. `reset_pid` → retour à 180.00/300.00/0.00.
+6. **Reboot réel** → `get_pid` → toujours 180.00/300.00/0.00 --- confirme
+   que la NVS a bien été effacée, pas juste la valeur en mémoire.
+
+### Validation d'ensemble
+
+- Compilation `esp32_wroom`/`esp32_s3` vérifiée après les changements
+  PID/calibration.
+- Tests natifs C++ (16/16) et Python (25/25) rejoués une dernière fois
+  ensemble après tous les changements de cette session --- aucune
+  régression.
+- Flash réel + séquence de test complète pour la calibration PID
+  (ci-dessus) et pour HTTPS (auth + TLS combinés).
+
+### État actuel
+
+- 4 des 5 points livrés et validés en conditions réelles (tests Python,
+  HTTPS, calibration PID) ou aussi bien que possible sur cette machine
+  (systemd, écrit mais non testable ici, Linux uniquement).
+- 1 point (encodeur Wokwi) explicitement non livré, avec la raison et
+  la piste documentées plutôt que du code non testé présenté comme fait.
+
+### Prochaines étapes
+
+- Tester `pi/rover-core.service` sur un vrai Raspberry Pi.
+- Reprendre l'encodeur simulé Wokwi si l'accès `wokwi-cli`/jeton devient
+  disponible.
+- Calibrer réellement les gains PID une fois les moteurs physiques
+  reçus (l'outillage est prêt, pas les valeurs).
+- Reste identique par ailleurs : matériel Phase 2/4, Raspberry Pi,
+  caméra.

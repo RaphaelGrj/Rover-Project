@@ -1,0 +1,30 @@
+[Unit]
+# systemd unit template for rover_core -- see pi/README.md "Démarrage
+# automatique (systemd)" for installation steps.
+#
+# Paths below (/home/pi/...) are placeholders -- adjust WorkingDirectory,
+# ExecStart and EnvironmentFile to match where this repo actually lives
+# and which user should run it before installing this unit.
+Description=Rover Pi core (ESP32 bridge + control server)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Rover-Project/pi
+
+# Secrets (ROVER_CONTROL_TOKEN, and ROVER_WIFI_*/ROVER_OTA_PASSWORD if
+# ever needed here too) live ONLY in this separate, git-ignored file --
+# never in this unit file, which is tracked in the repo. The leading
+# "-" means systemd won't fail to start if the file doesn't exist yet
+# (falls back to rover_core's own auto-generated token, logged on
+# start -- see `journalctl -u rover-core` in that case).
+EnvironmentFile=-/home/pi/Rover-Project/pi/rover.env
+
+ExecStart=/home/pi/Rover-Project/pi/.venv/bin/python -m rover_core.main --port /dev/ttyUSB0 --log-dir /home/pi/Rover-Project/pi/logs
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
