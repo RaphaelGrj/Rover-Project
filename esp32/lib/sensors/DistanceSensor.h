@@ -41,6 +41,15 @@ private:
     bool _obstacleActive = false;
     unsigned long _lastLeftRetryMs = 0;
     unsigned long _lastRightRetryMs = 0;
+    // Timestamp of the last accepted sample for each side -- unlike
+    // ImuSensor/EnvironmentSensor (whose read calls report failure
+    // directly), the continuous-ranging read path here has no per-call
+    // failure signal, so a sensor that goes silent after a successful
+    // begin() (eg. unplugged mid-run) would otherwise never be detected.
+    // update() watches these and drops leftOk()/rightOk() if a side goes
+    // quiet for too long.
+    unsigned long _lastLeftSampleMs = 0;
+    unsigned long _lastRightSampleMs = 0;
 
     void beginLeft();
     void beginRight();

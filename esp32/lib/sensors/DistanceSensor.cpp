@@ -12,6 +12,12 @@ namespace {
 constexpr uint16_t OUT_OF_RANGE_MM = 8190;  // VL53L0X's own "no target" sentinel
 constexpr uint16_t UNAVAILABLE_MM = 9999;   // begin() never succeeded / sensor lost since
 
+// How long a side can go without a fresh continuous-ranging sample
+// before it's declared failed. Generous relative to the sensor's own
+// ranging period (tens of ms) -- this only needs to catch "gone quiet
+// for real" (unplugged, wedged), not ordinary timing jitter.
+constexpr unsigned long STALE_SAMPLE_TIMEOUT_MS = 1000;
+
 }  // namespace
 
 void DistanceSensor::begin() {
@@ -42,6 +48,7 @@ void DistanceSensor::beginLeft() {
         _leftOk = false;
     }
     _lastLeftRetryMs = millis();
+    _lastLeftSampleMs = millis();  // don't start the staleness clock already expired
     _leftMm = _leftOk ? OUT_OF_RANGE_MM : UNAVAILABLE_MM;
 }
 
@@ -58,6 +65,7 @@ void DistanceSensor::beginRight() {
         _rightOk = false;
     }
     _lastRightRetryMs = millis();
+    _lastRightSampleMs = millis();
     _rightMm = _rightOk ? OUT_OF_RANGE_MM : UNAVAILABLE_MM;
 }
 
@@ -74,13 +82,30 @@ void DistanceSensor::update() {
         beginRight();
     }
 
-    if (_leftOk && _left.isRangeComplete()) {
-        uint16_t mm = _left.readRangeResult();
-        _leftMm = (mm >= OUT_OF_RANGE_MM) ? OUT_OF_RANGE_MM : mm;
+    if (_leftOk) {
+        if (_left.isRangeComplete()) {
+            uint16_t mm = _left.readRangeResult();
+            _leftMm = (mm >= OUT_OF_RANGE_MM) ? OUT_OF_RANGE_MM : mm;
+            _lastLeftSampleMs = now;
+        } else if (now - _lastLeftSampleMs >= STALE_SAMPLE_TIMEOUT_MS) {
+            // Continuous mode has no per-call failure signal the way
+            // ImuSensor/EnvironmentSensor's read calls do -- a silent
+            // sensor (eg. unplugged mid-run) is only caught this way.
+            _leftOk = false;
+            _leftMm = UNAVAILABLE_MM;
+            _lastLeftRetryMs = now;
+        }
     }
-    if (_rightOk && _right.isRangeComplete()) {
-        uint16_t mm = _right.readRangeResult();
-        _rightMm = (mm >= OUT_OF_RANGE_MM) ? OUT_OF_RANGE_MM : mm;
+    if (_rightOk) {
+        if (_right.isRangeComplete()) {
+            uint16_t mm = _right.readRangeResult();
+            _rightMm = (mm >= OUT_OF_RANGE_MM) ? OUT_OF_RANGE_MM : mm;
+            _lastRightSampleMs = now;
+        } else if (now - _lastRightSampleMs >= STALE_SAMPLE_TIMEOUT_MS) {
+            _rightOk = false;
+            _rightMm = UNAVAILABLE_MM;
+            _lastRightRetryMs = now;
+        }
     }
 
     evaluateObstacle();

@@ -1024,10 +1024,28 @@ ni simulation Wokwi n'aurait pu attraper :
    `rover_control` déjà écrits (Phase 5/6 minimales) contre le matériel
    réel au lieu de la simulation Wokwi.
 
+### Durcissement immédiat (même session)
+
+Revue critique de `DistanceSensor` par cohérence avec `ImuSensor`/
+`EnvironmentSensor` : ces deux derniers détectent explicitement un échec
+de lecture en cours de route (`_ok = false` si l'appel de lecture
+échoue), mais `DistanceSensor` ne le faisait pas -- le mode "continuous
+ranging" des VL53L0X n'a pas de signal d'échec par lecture comme les
+autres capteurs, donc un capteur débranché *après* un `begin()` réussi
+ne l'aurait jamais fait remonter en `ERROR`. Corrigé en ajoutant un
+horodatage du dernier échantillon reçu par côté ; si plus d'1 s s'écoule
+sans nouvel échantillon alors que le capteur est censé être `ok`, il est
+déclaré en échec (retenté ensuite comme les autres). Recompilé et
+reflashé sur l'ESP32 WROOM réel : toujours aucun crash, comportement
+identique côté protocole (aucun capteur câblé pour l'instant, donc ce
+chemin n'a pas encore pu être exercé en conditions réelles -- seule la
+non-régression a pu être vérifiée).
+
 ### État actuel
 
 - **Phase 4 (capteurs)** : complète au niveau code, compile sur les
   deux cibles, **validée sur ESP32 WROOM physique** pour le cas "aucun
-  capteur câblé" (robustesse). Lecture réelle des capteurs à valider
-  dès réception/câblage (étape 1 du plan ci-dessus).
+  capteur câblé" (robustesse, y compris la détection de perte en cours
+  de route pour les VL53L0X). Lecture réelle des capteurs à valider dès
+  réception/câblage (étape 1 du plan ci-dessus).
 - **Phases 0, 1, 2, 3** : inchangées.
