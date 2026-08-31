@@ -60,10 +60,19 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     logger.info("control client connected (%s)", request.remote)
     await core.client_connected()
 
-    # A client connecting mid-session shouldn't see a blank status
-    # panel until the next frame happens to arrive from the ESP32.
-    if core.last_report:
-        await ws.send_json(core.last_report)
+    # A client connecting mid-session shouldn't see a blank status panel
+    # until the next frame happens to arrive from the ESP32 -- replay
+    # everything currently known: the merged STATE fields (distance/IMU/
+    # environment/wheel speed all accumulate into one dict, see
+    # RoverCore._handle_frame), the last EVENT/ERROR if any, and the
+    # current high-level behavior state.
+    if core.last_state:
+        await ws.send_json({"type": "STATE", **core.last_state})
+    if core.last_event:
+        await ws.send_json({"type": "EVENT", **core.last_event})
+    if core.last_error:
+        await ws.send_json({"type": "ERROR", **core.last_error})
+    await ws.send_json({"type": "ROVER_STATE", "state": core.state.name})
 
     try:
         async for msg in ws:

@@ -1049,3 +1049,161 @@ non-régression a pu être vérifiée).
   de route pour les VL53L0X). Lecture réelle des capteurs à valider dès
   réception/câblage (étape 1 du plan ci-dessus).
 - **Phases 0, 1, 2, 3** : inchangées.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 2) --- 5 améliorations transverses (CI, tests, Wokwi Phase 4, machine à états Pi, UI capteurs)
+
+### Contexte
+
+En attendant le matériel (châssis, moteurs, capteurs), demande de
+l'utilisateur : proposer des améliorations exploitables sans dépendre
+du Raspberry Pi physique ni de nouveau matériel. Cinq pistes proposées
+et validées par l'utilisateur, réalisées dans l'ordre.
+
+### 1. CI GitHub Actions
+
+`.github/workflows/esp32-build.yml` : build `esp32_wroom` et
+`esp32_s3` sur chaque push/PR touchant `esp32/`, plus un job de tests
+natifs (voir point 2). Aurait attrapé automatiquement le bug de
+compilation spécifique à `esp32_s3` de la session précédente
+(`std::max`/`random()`). Vérifié en conditions réelles : push déclenché,
+run surveillé via l'API GitHub (`gh` CLI absent sur cette machine, pas
+de compilateur C/C++ local non plus -- validation faite par polling de
+l'API publique du dépôt). **Les 3 jobs passent** (`build (esp32_wroom)`,
+`build (esp32_s3)`, `test`).
+
+### 2. Tests unitaires (RoverProtocol, WheelPID, Emotion)
+
+Obstacle rencontré : PlatformIO compile tout un dossier `lib/` en bloc
+dès qu'un seul fichier en est référencé -- `WheelPID` et `Emotion`
+partageaient un dossier avec du code dépendant du matériel ESP32
+(`MotorDriver`/`Encoder`/`DriveController` ; `DisplayEngine`/
+`EyeRenderer`), donc les tester nativement (sans ESP32) aurait forcé la
+compilation de ce code matériel aussi. Résolu en les déplaçant dans
+leurs propres dossiers (`lib/wheel_pid/`, `lib/emotion/`) --- aucun
+changement de comportement, recompilation `esp32_wroom`/`esp32_s3`
+vérifiée identique (même RAM/Flash) après le déplacement.
+
+Nouvel environnement PlatformIO `native` (compilateur hôte, pas
+d'ESP32), avec un stub minimal `test/stubs/Arduino.h` (juste
+`constrain()` et une classe `Stream` abstraite) et un `FakeStream.h`
+(capture les appels `printf()`, fournit des octets à `available()`/
+`read()`) pour tester `RoverProtocol` sans matériel réel. Suites Unity :
+- `RoverProtocol` : checksum de sortie vérifié contre la valeur déjà
+  validée dans `ROVER_PROTOCOL.md`/`rover_frame.py` (`MOVE
+  velocity=0.25 rotation=-0.10 *39`), round-trip envoi→parsing,
+  checksum invalide rejeté, trame trop longue rejetée (`frame_too_long`),
+  tolérance `\r\n`, accesseurs `RoverFrame::getField/getInt/getFloat`.
+- `WheelPID` : signe de sortie selon l'erreur, saturation à ±255,
+  garde `dtSeconds<=0`, `reset()` efface bien l'anti-windup.
+- `Emotion` : les 8 émotions, sensibilité à la casse, nom inconnu.
+
+Pas de compilateur C/C++ sur cette machine Windows pour exécuter
+`pio test -e native` localement -- validé via la CI (point 1) à la
+place. Deux valeurs de checksum d'abord devinées à la main dans les
+tests (`*2B`/`*58`) se sont révélées fausses à la vérification via
+`rover_frame.py` (`*6B`/`*4B` réels) -- corrigées avant de committer,
+bon rappel de ne jamais committer un checksum non recalculé.
+
+### 3. Wokwi -- simulation Phase 4
+
+Wokwi n'a pas de chip officiel pour VL53L0X ni BME680/688 (vérifié via
+la doc officielle) ; seul `wokwi-mpu6050` existe. Ajouté au
+`diagram.json` (I2C partagé, adresse par défaut 0x68, pas de fabrication
+de chip communautaire pour les deux autres -- risque de fragilité déjà
+observé avec `board-st7789`). Documenté explicitement dans
+`diagram.json` et `WIRING.md` que VL53L0X/BME688 restent non simulables
+visuellement, leur dispatch protocole étant déjà validé autrement (test
+matériel réel + sonde de présence I2C). JSON validé syntaxiquement ;
+pas de `wokwi-cli` disponible sur cette machine pour un lint complet des
+noms de pins (contrairement aux sessions précédentes sur Linux Mint).
+
+### 4. Machine à états haut niveau (`rover_core`)
+
+`RoverBehaviorState` (`pi/rover_core/core.py`) : reprend l'énumération
+exacte de la section 20 de l'architecture (IDLE/INTERACTING/MOVING/
+EXPLORING/PATROLLING/FOLLOWING/CHARGING/SLEEPING/ERROR). Seules les
+transitions pilotables par l'existant sont câblées :
+- connexion/déconnexion d'un client de contrôle → INTERACTING/IDLE ;
+- `move()` avec vitesse/rotation non nulle → MOVING (avec une zone morte
+  pour ne pas confondre "0.00 explicite" et "vraiment à l'arrêt") ;
+- une trame `ERROR` de l'ESP32 → ERROR, avec retour automatique après
+  `ERROR_STATE_HOLD_S` (5 s, aligné sur le délai d'effacement déjà
+  utilisé dans l'UI) si aucune nouvelle erreur n'arrive entretemps.
+
+Les transitions vers EXPLORING/PATROLLING/FOLLOWING/CHARGING/SLEEPING
+n'existent pas encore (aucune des phases correspondantes --- navigation,
+vision, énergie --- n'est commencée) : elles sont dans l'énumération
+pour que ces phases futures aient un état où transitionner sans
+redessiner l'enum, pas parce qu'un mécanisme les déclenche aujourd'hui.
+
+Notification des changements d'état réutilise le pub-sub existant de
+`RoverCore` (les mêmes `listener()` que pour `STATE`/`EVENT`/`ERROR`),
+via un type synthétique `ROVER_STATE` -- pas de nouveau mécanisme de
+notification en parallèle.
+
+**Validé en conditions réelles** contre l'ESP32 physique (COM10, Phase 4
+déjà flashée) : `rover_core` lancé, log confirmant `behavior state ->
+ERROR` à la première trame `ERROR code=sensor_timeout` reçue, puis
+`behavior state -> IDLE` exactement ~5 s plus tard (aucune nouvelle
+erreur entretemps) -- comportement exactement conforme à la conception.
+
+### 5. Affichage capteurs dans l'UI de contrôle
+
+`RoverCore.last_report` (un seul dernier frame, tous types confondus,
+écrasé à chaque nouvelle trame) remplacé par `last_state` (fusion
+cumulative des champs `STATE` -- distance/IMU/environnement/vitesse
+roues arrivent dans des lignes `STATE` séparées, donc l'ancien
+`last_report` ne montrait jamais que la dernière catégorie reçue) +
+`last_event`/`last_error` (un de chaque, transitoires). Un client qui se
+connecte reçoit maintenant un instantané complet (état fusionné +
+dernier événement/erreur + état comportemental courant) au lieu d'un
+seul fragment arbitraire.
+
+`index.html` : badge d'état comportemental à côté du statut de
+connexion (libellés français, couleur selon l'état -- vert
+INTERACTING, bleu MOVING, rouge ERROR), et une ligne d'alerte obstacle
+calculée côté client à partir de `distance_left`/`distance_right`, avec
+le même seuil (150 mm) que l'`EVENT obstacle_detected` de l'ESP32, donc
+cohérente avec ce que le firmware considère lui-même comme un obstacle.
+Bug trouvé et corrigé avant tout test : le badge d'état était placé
+*dans* la div `#status`, dont le JS existant fait `textContent = "..."`
+à chaque connexion/déconnexion -- ça aurait supprimé le badge du DOM au
+premier `onopen`. Corrigé en donnant un `<span>` dédié au texte de
+statut.
+
+**Validé en conditions réelles** : `rover_core` relancé contre l'ESP32
+physique, client WebSocket de test connecté --- l'instantané reçu à la
+connexion contient bien tous les champs `STATE` fusionnés
+(`distance_left`, `accel_x`..`gyro_z`, `temperature`..`gas_kohm` dans un
+seul message), la dernière `ERROR` (`bme688`), et `ROVER_STATE
+INTERACTING`. Page `/` vérifiée servie avec les nouveaux éléments
+(`behavior-state`, `obstacle-line`). Syntaxe JS extraite et vérifiée
+avec `node --check` (pas de rendu visuel réel testé -- pas de navigateur
+piloté cette session).
+
+### État actuel
+
+- CI active sur GitHub (build double-cible + tests natifs).
+- Tests unitaires natifs en place pour les 3 modules les plus critiques
+  côté protocole/logique pure ; non exécutables localement sur cette
+  machine (pas de compilateur), validés via CI.
+- Simulation Wokwi étendue à l'IMU (seul capteur Phase 4 avec un chip
+  officiel) ; VL53L0X/BME688 restent protocole-only en simulation.
+- `rover_core` a maintenant une première machine à états haut niveau,
+  validée contre l'ESP32 physique.
+- L'UI de contrôle affiche un état fusionné, un badge d'état, et une
+  alerte obstacle -- validé côté backend/réseau, pas visuellement.
+
+### Prochaines étapes
+
+- Reste identique pour le matériel : VL53L0X/borniers, moteurs/PID,
+  servos tête, MPU6050/BME688, Raspberry Pi (voir plan de test
+  ci-dessus, session précédente).
+- Si du matériel de dev supplémentaire est disponible : installer un
+  compilateur C/C++ (ou utiliser une autre machine) pour exécuter
+  `pio test -e native` localement sans dépendre de la CI à chaque
+  itération.
+- Valider visuellement les changements d'`index.html` dans un vrai
+  navigateur (badge d'état, alerte obstacle).

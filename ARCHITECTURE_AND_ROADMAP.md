@@ -1113,16 +1113,27 @@ Objectif : créer le cerveau.
 
 -   [ ] OS.
 -   [ ] Services Rover.
--   [x] Rover Core (`pi/rover_core/`) --- minimal : gère la connexion
-      ESP32 et le heartbeat/resume, pas encore de machine à états de
-      haut niveau (IDLE/INTERACTING/MOVING/... §20).
+-   [x] Rover Core (`pi/rover_core/`) --- gère la connexion ESP32, le
+      heartbeat/resume, et désormais une première machine à états de
+      haut niveau (voir ci-dessous).
 -   [x] Rover ESP32 Interface (`pi/rover_esp32/`) --- pont Rover
       Protocol complet (encode/decode conforme à
       `RoverProtocol.cpp`, testé trame par trame), voir PROGRESS.md.
 -   [ ] Configuration.
 -   [ ] Logs.
 -   [ ] Gestion des événements.
--   [ ] Machine à états.
+-   [x] Machine à états --- `RoverBehaviorState` (`pi/rover_core/core.py`)
+      reprend exactement l'énumération de la section 20
+      (IDLE/INTERACTING/MOVING/EXPLORING/PATROLLING/FOLLOWING/CHARGING/
+      SLEEPING/ERROR), mais seules les transitions pilotables par ce qui
+      existe déjà sont câblées : connexion/déconnexion d'un client de
+      contrôle (IDLE ↔ INTERACTING), commande `MOVE` non nulle (→
+      MOVING), et une `ERROR` ESP32 (→ ERROR, avec retour automatique
+      après quelques secondes). EXPLORING/PATROLLING/FOLLOWING/CHARGING/
+      SLEEPING n'ont aucun déclencheur pour l'instant (dépendent de
+      phases pas encore commencées : navigation, vision, énergie).
+      Validé en conditions réelles contre l'ESP32 physique (voir
+      PROGRESS.md 2026-08-31).
 
 Résultat :
 
@@ -1144,9 +1155,14 @@ Objectif : voir et piloter Rover.
       PROGRESS.md : navigateur → WebSocket → Rover Protocol → ESP32).
 -   [ ] Commandes HEAD (pas de cible : Phase 3 --- servos tête --- pas
       encore écrite côté ESP32).
--   [ ] Retour d'état (les trames `STATE`/`EVENT`/`ERROR` sont bien
-      reçues et journalisées côté Pi, mais pas encore affichées dans
-      l'interface).
+-   [x] Retour d'état -- les trames `STATE`/`EVENT`/`ERROR` sont
+      affichées dans l'interface (commit `ebc2aa3`) ; désormais
+      améliorées avec un état fusionné (les différentes lignes `STATE`
+      --- distance/IMU/environnement/vitesse --- s'accumulent au lieu de
+      s'écraser), un badge d'état comportemental (IDLE/INTERACTING/
+      MOVING/ERROR/...) et un bandeau d'alerte obstacle basé sur
+      `distance_left`/`distance_right` (même seuil que l'`EVENT
+      obstacle_detected` de l'ESP32). Voir PROGRESS.md 2026-08-31.
 -   [x] Contrôle smartphone (joystick tactile, Pointer Events) --- code
       écrit, backend validé ; reste à valider au toucher sur un vrai
       téléphone.

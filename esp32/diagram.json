@@ -2,7 +2,7 @@
   "version": 1,
   "author": "Rover Project",
   "editor": "wokwi",
-  "//": "Phase 1+2+3. UART0 -> moniteur serie (Rover Protocol). 4 LEDs sur les pins moteur DRV8833 (IN1/IN2 gauche+droite) pour visualiser direction/PWM sans moteur reel -- pas de retour d'encodeur simule, donc la boucle PID tourne en boucle ouverte en simulation. 2 servos (pitch/yaw) + 1 ecran ST7789 (yeux/emotions) pour la Phase 3. Voir WIRING.md.",
+  "//": "Phase 1+2+3+4. UART0 -> moniteur serie (Rover Protocol). 4 LEDs sur les pins moteur DRV8833 (IN1/IN2 gauche+droite) pour visualiser direction/PWM sans moteur reel -- pas de retour d'encodeur simule, donc la boucle PID tourne en boucle ouverte en simulation. 2 servos (pitch/yaw) + 1 ecran ST7789 (yeux/emotions) pour la Phase 3. Phase 4 : MPU6050 simule (chip Wokwi officiel) sur le bus I2C partage -- VL53L0X et BME688 n'ont PAS de chip Wokwi officiel (ni de chip communautaire fiable trouve a ce jour) donc restent absents de ce diagramme ; leur dispatch protocole (FACE/HEAD/etc. gere pareil) est deja valide via la sonde de presence I2C (voir sensors_config.h/I2CProbe.h) et sur ESP32 physique reel (PROGRESS.md 2026-08-31), juste pas visuellement/electriquement en simulation. Voir WIRING.md.",
   "parts": [
     {
       "type": "wokwi-esp32-devkit-v1",
@@ -21,7 +21,8 @@
     { "type": "wokwi-resistor", "id": "r_r_rev", "top": 20, "left": 320, "attrs": { "value": "220" } },
     { "type": "wokwi-servo", "id": "servo_pitch", "top": -120, "left": 200, "attrs": {} },
     { "type": "wokwi-servo", "id": "servo_yaw", "top": -120, "left": 320, "attrs": {} },
-    { "type": "board-st7789", "id": "display", "top": -260, "left": 200, "attrs": {} }
+    { "type": "board-st7789", "id": "display", "top": -260, "left": 200, "attrs": {} },
+    { "type": "wokwi-mpu6050", "id": "imu", "top": 40, "left": 400, "attrs": {} }
   ],
   "connections": [
     [ "esp32:TX0", "$serialMonitor:RX", "", [] ],
@@ -58,7 +59,12 @@
     [ "esp32:D15", "display:RST", "", [] ],
     [ "display:BL", "esp32:3V3", "", [] ],
     [ "display:VCC", "esp32:3V3", "", [] ],
-    [ "display:GND", "esp32:GND.1", "", [] ]
+    [ "display:GND", "esp32:GND.1", "", [] ],
+
+    [ "esp32:D21", "imu:SDA", "", [] ],
+    [ "esp32:D22", "imu:SCL", "", [] ],
+    [ "imu:VCC", "esp32:3V3", "", [] ],
+    [ "imu:GND", "esp32:GND.2", "", [] ]
   ],
   "dependencies": {}
 }

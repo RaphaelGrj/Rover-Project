@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from enum import Enum, auto
 from typing import Callable
 
 from rover_esp32.link import RoverLink
@@ -26,11 +27,54 @@ logger = logging.getLogger(__name__)
 # while a client is actively connected.
 HEARTBEAT_PERIOD_S = 0.15
 
+# Below this, a MOVE's velocity/rotation counts as "not really moving"
+# for behavior-state purposes (a client sending 0.00/0.00 while idle
+# shouldn't read as MOVING).
+MOVEMENT_DEADZONE = 0.02
+
+# How long ERROR is held as the behavior state before falling back,
+# absent a new ERROR -- mirrors the control UI's own ERROR line timeout
+# (rover_control/static/index.html) so the two don't disagree about how
+# "sticky" an error looks.
+ERROR_STATE_HOLD_S = 5.0
+
+
+class RoverBehaviorState(Enum):
+    """Pi-side, high-level behavior state (ARCHITECTURE_AND_ROADMAP.md
+    §20) -- deliberately NOT the ESP32's own hardware state machine
+    (BOOT/READY/ACTIVE/SAFE/ERROR, board_config.h); the two "ne doivent
+    pas être confondus" per that section. Most values below aren't
+    reachable yet since the phases that would drive them don't exist
+    yet (no vision, navigation, audio, or battery monitoring) -- they're
+    listed now, matching §20's diagram exactly, so those future phases
+    have a state to transition into without redesigning this enum.
+    """
+    BOOT = auto()
+    IDLE = auto()
+    INTERACTING = auto()
+    MOVING = auto()
+    EXPLORING = auto()   # Phase 9 (navigation autonome) -- unused today
+    PATROLLING = auto()  # Phase 9 -- unused today
+    FOLLOWING = auto()   # Phase 8 (vision) -- unused today
+    CHARGING = auto()    # Phase 19 (énergie) -- unused today
+    SLEEPING = auto()    # Phase 11 (comportement) -- unused today
+    ERROR = auto()
+
 
 class RoverCore:
     def __init__(self, link: RoverLink) -> None:
         self.link = link
-        self.last_report: dict[str, str] = {}
+        # STATE fields accumulate here (each STATE line only carries a
+        # subset -- distance, IMU, environment, wheel speed, diag --
+        # merging keeps the latest known value of every field ever seen,
+        # instead of a late-joining client only seeing whichever single
+        # STATE line happened to arrive last). EVENT/ERROR stay as one
+        # discrete occurrence each, not merged -- see rover_control's UI.
+        self.last_state: dict[str, str] = {}
+        self.last_event: dict[str, str] | None = None
+        self.last_error: dict[str, str] | None = None
+        self.state = RoverBehaviorState.IDLE
+        self._error_clear_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         # Multiple control clients (e.g. a phone and a laptop tab at
         # once) are allowed; only stop heartbeating once the *last* one
@@ -57,11 +101,50 @@ class RoverCore:
         self._loop.call_soon_threadsafe(self._handle_frame, frame_type, fields)
 
     def _handle_frame(self, frame_type: str, fields: dict[str, str]) -> None:
-        if frame_type in ("STATE", "EVENT", "ERROR"):
-            self.last_report = {"type": frame_type, **fields}
-            logger.info("ESP32 -> %s %s", frame_type, fields)
-            for listener in list(self._listeners):
-                listener(frame_type, fields)
+        if frame_type == "STATE":
+            self.last_state.update(fields)
+        elif frame_type == "EVENT":
+            self.last_event = dict(fields)
+        elif frame_type == "ERROR":
+            self.last_error = dict(fields)
+        else:
+            return
+
+        logger.info("ESP32 -> %s %s", frame_type, fields)
+        for listener in list(self._listeners):
+            listener(frame_type, fields)
+
+        if frame_type == "ERROR":
+            # A real hardware error (ARCHITECTURE_AND_ROADMAP.md section
+            # 21) takes priority over whatever the behavior state was --
+            # held for ERROR_STATE_HOLD_S, then falls back to wherever
+            # client-connection state alone would put it, unless another
+            # ERROR arrives first and restarts the hold.
+            self._set_state(RoverBehaviorState.ERROR)
+            if self._error_clear_task is not None:
+                self._error_clear_task.cancel()
+            self._error_clear_task = asyncio.create_task(self._clear_error_after_delay())
+
+    def _set_state(self, new_state: RoverBehaviorState) -> None:
+        if new_state == self.state:
+            return
+        self.state = new_state
+        logger.info("behavior state -> %s", new_state.name)
+        # Piggybacks on the same STATE/EVENT/ERROR listener mechanism as
+        # a synthetic frame type, rather than a second parallel
+        # notification path -- rover_control's UI already forwards
+        # whatever it receives here generically (server.py).
+        for listener in list(self._listeners):
+            listener("ROVER_STATE", {"state": new_state.name})
+
+    async def _clear_error_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(ERROR_STATE_HOLD_S)
+            self._set_state(
+                RoverBehaviorState.INTERACTING if self._client_count > 0 else RoverBehaviorState.IDLE
+            )
+        except asyncio.CancelledError:
+            pass
 
     def add_listener(self, listener: FrameListener) -> None:
         self._listeners.add(listener)
@@ -73,6 +156,10 @@ class RoverCore:
 
     def move(self, velocity: float, rotation: float) -> None:
         self.link.send("MOVE", {"velocity": f"{velocity:.2f}", "rotation": f"{rotation:.2f}"})
+        if abs(velocity) > MOVEMENT_DEADZONE or abs(rotation) > MOVEMENT_DEADZONE:
+            self._set_state(RoverBehaviorState.MOVING)
+        elif self._client_count > 0:
+            self._set_state(RoverBehaviorState.INTERACTING)
 
     async def client_connected(self) -> None:
         """A control client just took over. Explicitly resume (covers
@@ -82,6 +169,12 @@ class RoverCore:
         (main.cpp), so skipping this would leave the robot refusing to
         move until someone resumes it by hand."""
         self._client_count += 1
+        # Don't downgrade an already-MOVING state just because a second
+        # client joined (eg. a phone connecting while a gamepad is
+        # already driving) -- only claim INTERACTING if nothing more is
+        # already happening.
+        if self.state not in (RoverBehaviorState.MOVING, RoverBehaviorState.ERROR):
+            self._set_state(RoverBehaviorState.INTERACTING)
         self.link.send("SYSTEM", {"action": "resume"})
         if self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -101,6 +194,8 @@ class RoverCore:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
         self.move(0.0, 0.0)
+        if self.state != RoverBehaviorState.ERROR:
+            self._set_state(RoverBehaviorState.IDLE)
 
     async def _heartbeat_loop(self) -> None:
         try:

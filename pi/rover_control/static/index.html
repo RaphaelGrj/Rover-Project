@@ -22,6 +22,14 @@
   }
   #status.connected { color: #3fb950; }
   #status.disconnected { color: #f85149; }
+  #behavior-state {
+    display: inline-block; margin-left: 0.6em; padding: 0.1em 0.6em;
+    border-radius: 1em; font-size: 0.85em; background: #21262d; color: #7d8590;
+  }
+  #behavior-state.state-moving { background: #1f6feb33; color: #58a6ff; }
+  #behavior-state.state-interacting { background: #3fb95033; color: #3fb950; }
+  #behavior-state.state-error { background: #f8514933; color: #f85149; }
+  #telemetry .obstacle { color: #f85149; font-weight: 600; }
   #telemetry {
     position: fixed; top: 2.6em; left: 0; right: 0;
     display: flex; flex-direction: column; align-items: center; gap: 0.2em;
@@ -62,8 +70,9 @@
 </style>
 </head>
 <body>
-<div id="status" class="disconnected">Connexion...</div>
+<div id="status" class="disconnected"><span id="status-text">Connexion...</span><span id="behavior-state"></span></div>
 <div id="telemetry">
+  <div id="obstacle-line" class="obstacle"></div>
   <div id="state-line"></div>
   <div id="event-line" class="event"></div>
   <div id="error-line" class="error"></div>
@@ -87,11 +96,28 @@ const SEND_PERIOD_MS = 100;
 const GAMEPAD_DEADZONE = 0.08;
 
 const statusEl = document.getElementById("status");
+const statusTextEl = document.getElementById("status-text");
 const baseEl = document.getElementById("joystick-base");
 const stickEl = document.getElementById("joystick-stick");
+const behaviorStateEl = document.getElementById("behavior-state");
+const obstacleLineEl = document.getElementById("obstacle-line");
 const stateLineEl = document.getElementById("state-line");
 const eventLineEl = document.getElementById("event-line");
 const errorLineEl = document.getElementById("error-line");
+
+// Mirrors ROVER_OBSTACLE_THRESHOLD_MM (esp32/include/sensors_config.h) --
+// distance_left/right below this is exactly what makes the ESP32 itself
+// fire EVENT name=obstacle_detected, so the UI warning lines up with it.
+const OBSTACLE_THRESHOLD_MM = 150;
+
+// French label for each RoverBehaviorState (pi/rover_core/core.py) --
+// kept as a lookup rather than showing the raw enum name so this stays
+// readable even once EXPLORING/PATROLLING/etc. start appearing.
+const BEHAVIOR_STATE_LABELS = {
+  IDLE: "inactif", INTERACTING: "en attente", MOVING: "en mouvement",
+  EXPLORING: "exploration", PATROLLING: "patrouille", FOLLOWING: "suivi",
+  CHARGING: "charge", SLEEPING: "sommeil", ERROR: "erreur",
+};
 
 // --- WebSocket, with auto-reconnect -----------------------------------
 
@@ -106,13 +132,40 @@ function formatFields(data) {
     .join(" ");
 }
 
-// STATE is a standing status (always shows the latest); EVENT/ERROR are
-// transient occurrences (ROVER_PROTOCOL.md §8: distinct message
-// categories, not one generic "status") so each gets its own line and
-// clears itself after a few seconds instead of lingering forever.
+// STATE fields accumulate here across messages -- the ESP32 sends
+// distance/IMU/environment/wheel-speed/diag as separate STATE lines
+// (ROVER_PROTOCOL.md §7.1), so merging (not replacing) is what lets the
+// display show all of them at once instead of flickering between
+// whichever single line arrived most recently. Mirrors the same merge
+// RoverCore does server-side for a late-joining client's replay.
+let mergedState = {};
+
+function updateObstacleLine() {
+  const left = Number(mergedState.distance_left);
+  const right = Number(mergedState.distance_right);
+  const closeLeft = Number.isFinite(left) && left < OBSTACLE_THRESHOLD_MM;
+  const closeRight = Number.isFinite(right) && right < OBSTACLE_THRESHOLD_MM;
+  if (!closeLeft && !closeRight) {
+    obstacleLineEl.textContent = "";
+    return;
+  }
+  const sides = [closeLeft && "gauche", closeRight && "droite"].filter(Boolean).join(" + ");
+  obstacleLineEl.textContent = `⚠ obstacle proche (${sides})`;
+}
+
+// STATE is a standing status (always shows the latest merged fields);
+// EVENT/ERROR are transient occurrences (ROVER_PROTOCOL.md §8: distinct
+// message categories, not one generic "status") so each gets its own
+// line and clears itself after a few seconds instead of lingering
+// forever. ROVER_STATE is a synthetic type (not part of Rover Protocol
+// itself -- see RoverCore._set_state) carrying the Pi's own high-level
+// behavior state.
 function handleEsp32Message(data) {
   if (data.type === "STATE") {
-    stateLineEl.textContent = "etat: " + formatFields(data);
+    mergedState = { ...mergedState, ...data };
+    delete mergedState.type;
+    stateLineEl.textContent = "etat: " + formatFields(mergedState);
+    updateObstacleLine();
   } else if (data.type === "EVENT") {
     eventLineEl.textContent = "evenement: " + formatFields(data);
     clearTimeout(eventClearTimer);
@@ -121,16 +174,27 @@ function handleEsp32Message(data) {
     errorLineEl.textContent = "erreur: " + formatFields(data);
     clearTimeout(errorClearTimer);
     errorClearTimer = setTimeout(() => { errorLineEl.textContent = ""; }, 5000);
+  } else if (data.type === "ROVER_STATE") {
+    behaviorStateEl.textContent = BEHAVIOR_STATE_LABELS[data.state] || data.state;
+    behaviorStateEl.className = "state-" + String(data.state).toLowerCase();
   }
 }
 
 function connect() {
   const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
   ws = new WebSocket(url);
-  ws.onopen = () => { statusEl.textContent = "Connecte"; statusEl.className = "connected"; };
+  ws.onopen = () => { statusTextEl.textContent = "Connecte"; statusEl.className = "connected"; };
   ws.onclose = () => {
-    statusEl.textContent = "Deconnecte -- nouvelle tentative...";
+    statusTextEl.textContent = "Deconnecte -- nouvelle tentative...";
     statusEl.className = "disconnected";
+    // Stale sensor/behavior readouts from before the drop would
+    // otherwise linger on screen looking current; the replay-on-connect
+    // (server.py) refreshes all of this again once reconnected.
+    behaviorStateEl.textContent = "";
+    behaviorStateEl.className = "";
+    mergedState = {};
+    stateLineEl.textContent = "";
+    obstacleLineEl.textContent = "";
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();
