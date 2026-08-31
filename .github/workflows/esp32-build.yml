@@ -1,0 +1,63 @@
+name: ESP32 firmware build
+
+# Compiles both PlatformIO targets (esp32_wroom and esp32_s3) on every
+# push/PR touching the firmware, so a target-specific compile error
+# (eg. the std::max/random() long-vs-int mismatch that only broke
+# esp32_s3, found manually during Phase 4 -- see PROGRESS.md
+# 2026-08-31) can't slip in unnoticed just because someone only built
+# one environment locally.
+
+on:
+  push:
+    paths:
+      - "esp32/**"
+      - ".github/workflows/esp32-build.yml"
+  pull_request:
+    paths:
+      - "esp32/**"
+      - ".github/workflows/esp32-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [esp32_wroom, esp32_s3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO packages/toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+          key: platformio-${{ matrix.environment }}-${{ hashFiles('esp32/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.environment }}
+        working-directory: esp32
+        run: pio run -e ${{ matrix.environment }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native unit tests (RoverProtocol, WheelPID, Emotion)
+        working-directory: esp32
+        run: pio test -e native
