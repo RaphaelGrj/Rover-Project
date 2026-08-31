@@ -124,6 +124,14 @@ broker est injoignable, la publication reste simplement désactivée
 (log d'info/avertissement), le reste de `rover_core` continue de
 fonctionner normalement.
 
+## Accès distant sécurisé (VPN)
+
+Piloter Rover depuis l'extérieur du réseau local, sans exposer
+directement `rover_control` sur Internet --- voir `pi/VPN.md` pour le
+guide complet (WireGuard, auto-hébergé, un seul port UDP à ouvrir sur
+la box). Le token d'accès reste obligatoire une fois connecté au VPN,
+les deux se cumulent.
+
 ## Trouver le Pi sur le réseau (mDNS)
 
 Raspberry Pi OS inclut Avahi (mDNS) par défaut : une fois l'hostname du

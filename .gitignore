@@ -20,6 +20,11 @@ pi/*.crt
 pi/*.key
 pi/rover.env
 
+# WireGuard configs (pi/VPN.md) contain private keys -- only the
+# .example.conf templates are tracked.
+pi/wireguard/wg0.conf
+pi/wireguard/client.conf
+
 # Never commit real WiFi/OTA credentials (esp32/OTA.md) -- those are
 # meant to be set as environment variables, not files, but this is a
 # backstop in case a future contributor adds a local credentials file

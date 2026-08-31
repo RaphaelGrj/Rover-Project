@@ -1216,22 +1216,35 @@ Objectif : voir et piloter Rover.
       téléphone.
 -   [x] Support manette / gamepad (Gamepad API) --- idem, code écrit,
       reste à valider avec une manette physique branchée.
--   [ ] Accès distant sécurisé (VPN) pour un pilotage hors réseau local.
+-   [x] Accès distant sécurisé (VPN) --- guide complet WireGuard
+      auto-hébergé (`pi/VPN.md`), templates de config commités
+      (`pi/wireguard/*.example.conf`, jamais de vraie clé committée),
+      un seul port UDP à exposer sur la box (jamais le port HTTP/HTTPS
+      de `rover_control` directement). Le token d'accès reste
+      obligatoire une fois connecté au VPN --- défense en profondeur,
+      pas un remplacement. **Non testé en conditions réelles** (pas de
+      Raspberry Pi ni de box/routeur disponibles pour ça cette
+      session) --- documentation et templates de configuration
+      seulement, à vérifier une fois le Pi physique en place.
 -   [x] Authentification --- token d'accès obligatoire sur toutes les
       routes (page, WebSocket, vidéo), généré aléatoirement à chaque
       démarrage si `ROVER_CONTROL_TOKEN` n'est pas fixé par
       l'utilisateur, jamais de valeur par défaut codée en dur (important
-      pour un projet open source, voir `pi/README.md` "Sécurité"). Pas
-      de chiffrement TLS --- toujours à ne pas exposer hors d'un réseau
-      local de confiance sans le VPN prévu ci-dessus.
+      pour un projet open source, voir `pi/README.md` "Sécurité").
+      Chiffrement TLS/WSS désormais disponible en option
+      (`--tls-cert`/`--tls-key`, certificat auto-signé à générer
+      soi-même, voir `pi/README.md` "HTTPS/WSS") --- toujours à ne pas
+      exposer hors d'un réseau local de confiance sans le VPN ci-dessus.
 
 Résultat :
 
 Rover peut être piloté à distance (smartphone ou manette) avec retour
-vidéo, y compris hors du réseau local via VPN. **Partiellement atteint
-en réseau local seulement** : pilotage MOVE fonctionnel, authentifié ;
-infrastructure vidéo prête mais sans caméra ; ni accès distant/VPN ni
-chiffrement (voir PROGRESS.md pour l'état détaillé).
+vidéo, y compris hors du réseau local via VPN. **Atteint au niveau
+logiciel** : pilotage MOVE/HEAD fonctionnel et authentifié, chiffrement
+TLS/WSS disponible en option, guide VPN complet ; **caméra toujours
+absente** (aucun matériel choisi/reçu, `BOM.md`) et VPN non testé en
+conditions réelles faute de Raspberry Pi/routeur disponibles (voir
+PROGRESS.md pour l'état détaillé).
 
 Cas d'usage prioritaire : surveillance de la maison à distance
 (déplacement + vidéo en temps réel) en complément du pilotage.

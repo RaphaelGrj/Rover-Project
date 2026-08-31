@@ -1722,3 +1722,65 @@ tests Python passent après ajout.
   réel, caméra, MQTT contre un vrai broker, buzzer audible).
 - VPN (Phase 6) serait la prochaine pièce manquante de cette phase si
   on continue dans cet ordre.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 7) --- Phase 6 terminée (VPN)
+
+### Contexte
+
+Demande de l'utilisateur : "fini la Phase 6". État avant cette session :
+tout coché sauf Caméra (matériel non choisi/reçu, rien à coder --- pas
+"terminable" sans achat) et Accès distant sécurisé (VPN).
+
+### VPN (WireGuard, auto-hébergé)
+
+`pi/VPN.md` : guide complet --- pourquoi WireGuard (léger, dans le noyau
+Linux, auto-hébergé donc aucune donnée ne transite par un tiers,
+cohérent avec l'exigence "pas de fuite de données" du projet), comment
+ça s'intègre à l'existant (**aucun changement dans `rover_core`/
+`rover_control`** : une fois connecté au VPN, un appareil distant
+obtient une IP dans le tunnel et joint le Pi comme s'il était sur le
+LAN ; le token d'accès reste obligatoire en plus --- défense en
+profondeur, pas un remplacement), installation pas à pas, et notes de
+sécurité (une paire de clés par appareil, révocation en supprimant un
+bloc `[Peer]`, `AllowedIPs` restreint au sous-réseau du tunnel plutôt
+que `0.0.0.0/0`).
+
+`pi/wireguard/wg0.example.conf` (serveur, Pi) et `client.example.conf`
+(client distant) : templates commités avec des valeurs placeholder
+explicites, jamais de vraie clé générée --- même principe que les
+certificats TLS et les identifiants OTA des sessions précédentes.
+`.gitignore` mis à jour (`wg0.conf`/`client.conf` réels ignorés,
+seuls les `.example.conf` suivis).
+
+Mention de Tailscale comme alternative plus simple (pas de
+port-forwarding manuel) pour qui préfère la simplicité à
+l'auto-hébergement complet --- non retenu par défaut pour rester
+cohérent avec l'exigence de contrôle total des données.
+
+Au passage, corrigé une note obsolète dans `ARCHITECTURE_AND_ROADMAP.md`
+qui disait encore "pas de chiffrement TLS" alors que le support
+HTTPS/WSS existe depuis la session précédente.
+
+### Ce qui n'est PAS validé
+
+**Rien de testable en conditions réelles cette session** : ni Raspberry
+Pi physique, ni routeur/box pour la redirection de port UDP, ni
+appareil client réel pour se connecter au tunnel. Documentation et
+templates de configuration uniquement --- syntaxe WireGuard standard et
+stable, mais jamais exécutée ni vérifiée par cette session.
+
+### État actuel
+
+- **Phase 6 terminée au niveau logiciel/documentation**, à l'exception
+  de la Caméra (matériel non disponible, hors du périmètre "code").
+  VPN écrit mais non testé (pas de matériel), même statut que le
+  service systemd d'une session précédente.
+
+### Prochaines étapes
+
+- Tester le VPN une fois le Raspberry Pi et l'accès au routeur
+  disponibles.
+- Reste identique par ailleurs : matériel Phase 2/4, caméra, MQTT
+  contre un vrai broker, buzzer audible, systemd sur Pi réel.
