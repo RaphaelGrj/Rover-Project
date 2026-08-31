@@ -793,6 +793,20 @@ Le Pi peut alors prendre des décisions :
 Mais les protections électriques matérielles doivent rester
 indépendantes du logiciel.
 
+**État (2026-08-31)** : `STATE battery=...` et `EVENT name=low_battery`
+sont implémentés côté ESP32 (`esp32/lib/power/BatteryMonitor.h`), mais
+**désactivés par défaut** (`ROVER_BATTERY_MONITORING_ENABLED = false`,
+`power_config.h`) tant que le diviseur de tension n'est pas câblé et
+calibré --- contrairement aux capteurs I2C (Phase 4), une broche ADC ne
+peut pas détecter "rien n'est branché ici", donc mieux vaut ne rien
+publier que publier du bruit comme si c'était un vrai niveau de
+batterie. Un bouton d'arrêt d'urgence physique existe aussi maintenant
+(`esp32/lib/safety/EStop.h`, `EVENT name=estop_pressed`) --- c'est
+exactement la "protection électrique matérielle indépendante du
+logiciel" que cette section demande, mais implémentée en dur dans le
+firmware plutôt qu'un circuit séparé : elle fonctionne dès le boot,
+avec ou sans bouton physique câblé.
+
 ------------------------------------------------------------------------
 
 # 20. États globaux de Rover
@@ -1119,8 +1133,12 @@ Objectif : créer le cerveau.
 -   [x] Rover ESP32 Interface (`pi/rover_esp32/`) --- pont Rover
       Protocol complet (encode/decode conforme à
       `RoverProtocol.cpp`, testé trame par trame), voir PROGRESS.md.
--   [ ] Configuration.
--   [ ] Logs.
+-   [x] Configuration --- fichier `pi/config.json` optionnel
+      (`pi/config.example.json` pour le gabarit), un argument CLI
+      explicite garde priorité. Voir `pi/rover_core/config.py`.
+-   [x] Logs --- fichier journal tournant optionnel (`--log-dir`,
+      `RotatingFileHandler`), console par défaut. Voir
+      `pi/rover_core/main.py`.
 -   [ ] Gestion des événements.
 -   [x] Machine à états --- `RoverBehaviorState` (`pi/rover_core/core.py`)
       reprend exactement l'énumération de la section 20
@@ -1147,8 +1165,13 @@ l'orchestrateur complet décrit ici.
 
 Objectif : voir et piloter Rover.
 
--   [ ] Caméra.
--   [ ] Flux vidéo local.
+-   [ ] Caméra --- aucune choisie/reçue (`BOM.md`).
+-   [x] Flux vidéo local --- infrastructure logicielle prête
+      (`pi/rover_control/camera.py`, MJPEG via `picamera2`, protégée par
+      le même token que le reste) et branchée dans l'UI, mais répond
+      `503 unavailable` tant qu'aucune caméra n'est choisie/branchée ---
+      s'active automatiquement dès qu'une l'est, sans changement de
+      code. Voir PROGRESS.md 2026-08-31.
 -   [x] Interface de contrôle (`pi/rover_control/`, page web
       autonome, pas de build).
 -   [x] Commandes MOVE (validé de bout en bout en simulation, voir
@@ -1169,16 +1192,21 @@ Objectif : voir et piloter Rover.
 -   [x] Support manette / gamepad (Gamepad API) --- idem, code écrit,
       reste à valider avec une manette physique branchée.
 -   [ ] Accès distant sécurisé (VPN) pour un pilotage hors réseau local.
--   [ ] Authentification --- **aucune pour l'instant** : le serveur de
-      contrôle n'a ni auth ni chiffrement, à ne pas exposer hors d'un
-      réseau local de confiance en l'état.
+-   [x] Authentification --- token d'accès obligatoire sur toutes les
+      routes (page, WebSocket, vidéo), généré aléatoirement à chaque
+      démarrage si `ROVER_CONTROL_TOKEN` n'est pas fixé par
+      l'utilisateur, jamais de valeur par défaut codée en dur (important
+      pour un projet open source, voir `pi/README.md` "Sécurité"). Pas
+      de chiffrement TLS --- toujours à ne pas exposer hors d'un réseau
+      local de confiance sans le VPN prévu ci-dessus.
 
 Résultat :
 
 Rover peut être piloté à distance (smartphone ou manette) avec retour
 vidéo, y compris hors du réseau local via VPN. **Partiellement atteint
-en réseau local seulement** : pilotage MOVE fonctionnel, ni vidéo ni
-accès distant/VPN/auth (voir PROGRESS.md pour l'état détaillé).
+en réseau local seulement** : pilotage MOVE fonctionnel, authentifié ;
+infrastructure vidéo prête mais sans caméra ; ni accès distant/VPN ni
+chiffrement (voir PROGRESS.md pour l'état détaillé).
 
 Cas d'usage prioritaire : surveillance de la maison à distance
 (déplacement + vidéo en temps réel) en complément du pilotage.

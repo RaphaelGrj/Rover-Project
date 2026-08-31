@@ -11,6 +11,9 @@
 #include "DisplayEngine.h"
 #include "Emotion.h"
 #include "SensorHub.h"
+#include "EStop.h"
+#include "BatteryMonitor.h"
+#include "RoverOTA.h"
 
 // UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
 // section 2); Serial keeps this testable over USB in the meantime.
@@ -21,8 +24,12 @@ DriveController drive;
 HeadController head;
 DisplayEngine display;
 SensorHub sensors;
+EStop estop;
+BatteryMonitor battery;
+RoverOTA ota;
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
+unsigned long lastBatteryTelemetryMs = 0;
 
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
@@ -31,7 +38,10 @@ void onFrame(const RoverFrame& frame) {
     // First frame after boot promotes us out of READY; SAFE can only be
     // left via an explicit SYSTEM action=resume (see below), not just
     // because traffic resumed -- avoids silently un-safing the robot.
-    if (state == RoverState::READY) {
+    // Guarded on the E-stop too: if the button is already held down at
+    // boot, the very first frame must not promote straight to ACTIVE
+    // just because loop()'s own estop check hasn't run yet this cycle.
+    if (state == RoverState::READY && !estop.isPressed()) {
         state = RoverState::ACTIVE;
     }
 
@@ -45,7 +55,12 @@ void onFrame(const RoverFrame& frame) {
 
         if (strcmp(action, "ping") == 0) {
             protocol.send("SYSTEM", "action=pong");
-        } else if (strcmp(action, "resume") == 0 && state == RoverState::SAFE) {
+        } else if (strcmp(action, "resume") == 0 && state == RoverState::SAFE && !estop.isPressed()) {
+            // A resume must never override a physically-held E-stop --
+            // that would defeat the entire point of a hardware safety
+            // layer. Only the heartbeat-timeout SAFE can be resumed this
+            // way; releasing the button is necessary but not itself
+            // sufficient (still requires this same explicit resume).
             state = RoverState::ACTIVE;
         } else if (strcmp(action, "diag") == 0) {
             char fields[96];
@@ -112,6 +127,11 @@ void setup() {
     head.begin();
     display.begin();
     sensors.begin();
+    estop.begin();
+    battery.begin();
+    // Entirely opt-in (see RoverOTA.h) -- a no-op that returns
+    // immediately unless WiFi/OTA credentials were set at build time.
+    ota.begin();
 
     char fields[64];
     snprintf(fields, sizeof(fields), "protocol=%s board=%s state=BOOT",
@@ -139,11 +159,38 @@ void loop() {
     head.update();
     display.update();
     sensors.update();
+    estop.update();
+    battery.update();
+    ota.update();
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {
         state = RoverState::SAFE;
         drive.stop();
         protocol.send("EVENT", "name=heartbeat_timeout");
+    }
+
+    // Hardware E-stop takes priority over everything else and is
+    // checked independently of the heartbeat timeout above -- it must
+    // stop the robot even while the Pi link is perfectly healthy.
+    static bool wasEstopPressed = false;
+    if (estop.isPressed() && !wasEstopPressed) {
+        state = RoverState::SAFE;
+        drive.stop();
+        protocol.send("EVENT", "name=estop_pressed");
+    }
+    wasEstopPressed = estop.isPressed();
+
+    if (battery.hasReading()) {
+        if (battery.consumeLowBatteryEvent()) {
+            protocol.send("EVENT", "name=low_battery");
+        }
+        unsigned long batteryNow = millis();
+        if (batteryNow - lastBatteryTelemetryMs >= ROVER_BATTERY_UPDATE_PERIOD_MS) {
+            lastBatteryTelemetryMs = batteryNow;
+            char batteryFields[16];
+            battery.buildTelemetryFields(batteryFields, sizeof(batteryFields));
+            protocol.send("STATE", batteryFields);
+        }
     }
 
     // Sensor EVENT/ERROR/STATE are never gated on ACTIVE/SAFE: unlike

@@ -18,6 +18,14 @@ on:
       - ".github/workflows/esp32-build.yml"
   workflow_dispatch:
 
+# Default GITHUB_TOKEN permissions are broad (write access to most of
+# the repo's API); this workflow only ever reads the checked-out code
+# and runs a local build/test, so it gets nothing beyond read access --
+# least privilege, and one less thing a compromised action/dependency
+# in this workflow could abuse.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

@@ -67,6 +67,17 @@
     position: fixed; bottom: 0.8em; left: 0; right: 0;
     text-align: center; font-size: 0.8em; color: #7d8590;
   }
+  /* Video: a small corner panel, not a full-screen takeover -- the
+     joystick underneath is still the primary control surface. */
+  #video-panel {
+    position: fixed; top: 3.4em; right: 0.6em;
+    width: min(36vw, 220px); aspect-ratio: 4 / 3;
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    overflow: hidden; display: flex; align-items: center; justify-content: center;
+  }
+  #video-feed { width: 100%; height: 100%; object-fit: cover; }
+  #video-feed[hidden] { display: none; }
+  #video-unavailable { font-size: 0.75em; color: #7d8590; text-align: center; padding: 0.5em; }
 </style>
 </head>
 <body>
@@ -76,6 +87,10 @@
   <div id="state-line"></div>
   <div id="event-line" class="event"></div>
   <div id="error-line" class="error"></div>
+</div>
+<div id="video-panel">
+  <img id="video-feed" alt="Flux video Rover">
+  <div id="video-unavailable">Camera indisponible</div>
 </div>
 <div id="stage">
   <div id="joystick-base">
@@ -104,6 +119,20 @@ const obstacleLineEl = document.getElementById("obstacle-line");
 const stateLineEl = document.getElementById("state-line");
 const eventLineEl = document.getElementById("event-line");
 const errorLineEl = document.getElementById("error-line");
+const videoFeedEl = document.getElementById("video-feed");
+const videoUnavailableEl = document.getElementById("video-unavailable");
+
+// This page was itself only reachable because the URL carried a valid
+// ?token= (rover_control/server.py's auth_middleware, checked on every
+// route) -- the same token has to be forwarded on the WebSocket and
+// video requests below, since each is its own HTTP request the
+// middleware checks independently.
+const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
+
+videoFeedEl.hidden = true;
+videoFeedEl.addEventListener("load", () => { videoFeedEl.hidden = false; videoUnavailableEl.hidden = true; });
+videoFeedEl.addEventListener("error", () => { videoFeedEl.hidden = true; videoUnavailableEl.hidden = false; });
+videoFeedEl.src = "/video?token=" + encodeURIComponent(ACCESS_TOKEN);
 
 // Mirrors ROVER_OBSTACLE_THRESHOLD_MM (esp32/include/sensors_config.h) --
 // distance_left/right below this is exactly what makes the ESP32 itself
@@ -181,7 +210,8 @@ function handleEsp32Message(data) {
 }
 
 function connect() {
-  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+    "/ws?token=" + encodeURIComponent(ACCESS_TOKEN);
   ws = new WebSocket(url);
   ws.onopen = () => { statusTextEl.textContent = "Connecte"; statusEl.className = "connected"; };
   ws.onclose = () => {

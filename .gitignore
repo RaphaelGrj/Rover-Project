@@ -6,3 +6,15 @@ pi/.venv/
 pi/__pycache__/
 **/__pycache__/
 *.pyc
+
+# Local config/logs (pi/config.example.json is the tracked template) --
+# never commit an actual deployment's config or log output.
+pi/config.json
+pi/logs/
+
+# Never commit real WiFi/OTA credentials (esp32/OTA.md) -- those are
+# meant to be set as environment variables, not files, but this is a
+# backstop in case a future contributor adds a local credentials file
+# out of habit from another project.
+esp32/**/wifi_credentials*
+esp32/**/*secrets*

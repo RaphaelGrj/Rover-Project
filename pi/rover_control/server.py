@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING
 
 from aiohttp import WSMsgType, web
 
+from .auth import token_matches
+from .camera import CameraStream
+
 if TYPE_CHECKING:
     from rover_core.core import RoverCore
 
@@ -28,12 +31,32 @@ async def index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(STATIC_DIR / "index.html")
 
 
-def create_app(core: "RoverCore") -> web.Application:
-    app = web.Application()
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """Applies to every route on this app (see create_app) -- a new
+    route added later (the /video endpoint added this same session is
+    exactly the case this guards against) is protected automatically
+    instead of relying on remembering to add the check to it too."""
+    token = request.app["token"]
+    if not token_matches(request.query.get("token"), token):
+        return web.Response(status=403, text="Forbidden: missing or invalid ?token=")
+    return await handler(request)
+
+
+def create_app(core: "RoverCore", token: str, camera: CameraStream | None = None) -> web.Application:
+    app = web.Application(middlewares=[auth_middleware])
     app["core"] = core
+    app["token"] = token
+    app["camera"] = camera or CameraStream()
     app.router.add_get("/", index)
     app.router.add_get("/ws", websocket_handler)
+    app.router.add_get("/video", video_handler)
     return app
+
+
+async def video_handler(request: web.Request) -> web.StreamResponse:
+    camera: CameraStream = request.app["camera"]
+    return await camera.mjpeg_response(request)
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:

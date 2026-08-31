@@ -73,6 +73,8 @@
 | Batterie embarquée (LiPo/Li-ion) | 1 pack | ❓ | Alimentation autonome du robot fini | Chimie/capacité/tension pas encore choisies --- dépend de l'autonomie voulue et du budget de poids du châssis |
 | Régulateur(s) de tension (vers 5V Pi, vers 6V moteurs) | ❓ | ❓ | Adapter la tension batterie aux besoins de chaque sous-système | Dépend de la tension de la batterie choisie ci-dessus |
 | Interrupteur d'alimentation général | 1 | ❓ | Coupure physique de l'alimentation embarquée | Pas encore spécifié |
+| Bouton poussoir E-stop (NO, à GND) | 1 | 🛒 | Arrêt d'urgence matériel | Code déjà en place côté firmware (`esp32/lib/safety/EStop.h`, GPIO25) et fonctionne sans lui pour l'instant --- pas bloquant, à câbler dès réception |
+| Pont diviseur de tension (2 résistances) | 1 | 🛒 | Mesure batterie via ADC | Valeurs exactes à choisir selon la tension de la batterie retenue ci-dessus ; monitoring désactivé dans le firmware tant que ce n'est pas câblé/calibré (`power_config.h`) |
 
 ------------------------------------------------------------------------
 
@@ -92,6 +94,11 @@ Ne pas commander maintenant --- listé pour mémoire, phases pas encore
 commencées :
 
 - Caméra (Phase 6) --- module Pi Camera ou webcam USB, non décidé.
+  Piste envisagée : mini-module type Arducam "spy camera" (capteur
+  OV5647, ~6mm de large, câble plat déporté) pour le contraste de place
+  dans la tête (voir PROGRESS.md 2026-08-31). Logiciel déjà prêt côté
+  Pi (`pi/rover_control/camera.py`, via `picamera2`) --- s'active tout
+  seul dès qu'un module est branché, aucun changement de code attendu.
 - Micro/haut-parleur (Phase 7, audio) --- non décidé.
 - Tout composant Home Assistant/domotique (Phase 10).
 

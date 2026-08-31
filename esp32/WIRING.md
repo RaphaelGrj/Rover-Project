@@ -39,7 +39,8 @@
 | Moteur droit IN1 (avant)          | GPIO33    | DRV8833 |
 | Moteur droit IN2 (arrière)        | GPIO32    | DRV8833 |
 | DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard |
-| *(libres)*                        | GPIO14, GPIO25 | anciennement PWMA/PWMB dans le plan TB6612FNG, plus nécessaires avec le DRV8833 |
+| Bouton E-stop                     | GPIO25    | `INPUT_PULLUP` (voir `esp32/lib/safety/EStop.h`) --- bouton entre cette broche et GND, pressé = LOW. **Non câblé pour l'instant** : la broche flotte HIGH (relâché) grâce au pull-up interne, le firmware fonctionne à l'identique avec ou sans bouton physique |
+| Diviseur de tension batterie (ADC) | GPIO14   | ⚠ Désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`) tant que le diviseur n'est pas câblé/calibré. GPIO14 est en ADC2, illisible pendant que le WiFi est actif (OTA) --- à reconsidérer si les deux fonctions sont utilisées en même temps |
 | Encodeur gauche A                 | GPIO34    | entrée seule (pas de pull interne, prévoir pull-up externe si besoin) |
 | Encodeur gauche B                 | GPIO35    | entrée seule |
 | Encodeur droit A                  | GPIO36    | entrée seule |

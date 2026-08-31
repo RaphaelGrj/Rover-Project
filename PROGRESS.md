@@ -1207,3 +1207,205 @@ piloté cette session).
   itération.
 - Valider visuellement les changements d'`index.html` dans un vrai
   navigateur (badge d'état, alerte obstacle).
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 3) --- Validation visuelle UI + 9 chantiers (sécurité, robustesse, vidéo)
+
+### Contexte
+
+Deux demandes de l'utilisateur dans la foulée : (1) valider visuellement
+le rendu de `rover_control` (point resté ouvert depuis la session
+précédente), et (2) un compilateur C/C++ local
+(`C:\Users\rapha\tools\mingw64`, MinGW-w64 16.2.0, installé sans droits
+admin via une archive portable WinLibs --- Chocolatey nécessitait une
+élévation indisponible dans ce terminal). Puis, à partir des
+propositions d'amélioration listées en fin de session précédente,
+l'utilisateur a demandé les 8 points de sécurité/robustesse dans
+l'ordre, plus un retour vidéo, avec une exigence explicite : **le projet
+sera open source (GitHub), donc aucune faille de sécurité ni fuite de
+données (les siennes ou celles de futurs utilisateurs)**.
+
+### Validation visuelle de l'UI
+
+Skill `run` → pas de skill projet existant → `chromium-cli` absent
+(environnement non-headless) → bascule sur `claude-in-chrome` (pilote le
+vrai Chrome de l'utilisateur). `rover_control` lancé contre l'ESP32 réel
+(COM10), page ouverte, capture d'écran :
+- Badge d'état "en attente" (INTERACTING, vert) au repos.
+- Ligne d'état fusionnée avec tous les champs capteurs.
+- Aucune erreur console.
+Puis test des cas non atteints naturellement en injectant des messages
+via `javascript_exec` (les fonctions du script inline sont globales,
+donc appelables directement) : `distance_left=100` → bandeau "⚠
+obstacle proche (gauche)" affiché correctement (écrasé quasi aussitôt
+par la vraie télémétrie ESP32 qui renvoie 9999, preuve que le flux
+temps réel fonctionne) ; `ROVER_STATE=MOVING` → badge bleu "en
+mouvement". Les trois couleurs/badges se comportent comme prévu.
+
+### 1. E-stop matériel (bouton non disponible → conçu pour ne rien bloquer)
+
+`esp32/lib/safety/EStop.h` + `safety_config.h` (GPIO25, `INPUT_PULLUP`)
+: sans bouton câblé, la broche lit un "relâché" stable grâce au
+pull-up interne --- même principe que la sonde de présence I2C
+(`I2CProbe.h`) appliqué à une entrée GPIO. Prend le pas sur le
+heartbeat : force `SAFE` indépendamment, bloque `SYSTEM action=resume`
+tant que le bouton reste physiquement enfoncé (corrigé un vrai risque
+en cours de route : la promotion automatique READY→ACTIVE au premier
+frame reçu devait aussi vérifier l'E-stop, sinon un bouton déjà enfoncé
+au boot aurait pu être court-circuité selon l'ordre d'exécution dans
+`loop()`). Nouvel `EVENT name=estop_pressed` documenté dans
+`ROVER_PROTOCOL.md` (checksum vérifié via `rover_frame.py`, pas deviné).
+Compilé et testé sur l'ESP32 réel : aucun crash, aucun événement
+parasite avec la broche non câblée.
+
+### 2. Monitoring batterie (désactivé par défaut)
+
+`esp32/lib/power/BatteryMonitor.h` + `power_config.h` : lecture ADC +
+diviseur de tension, `EVENT name=low_battery` avec hystérésis. **Flag
+`ROVER_BATTERY_MONITORING_ENABLED = false` par défaut** --- contrairement
+à l'I2C, une broche ADC ne peut pas détecter "rien n'est câblé ici" ; le
+bruit d'une broche flottante rapporté comme un vrai niveau de batterie
+serait activement trompeur, pire que ne rien publier du tout. GPIO14
+choisi (libre) mais documenté comme en conflit avec le WiFi (ADC2,
+illisible pendant que l'OTA --- point 3 --- est active) : à revoir si
+les deux sont utilisées ensemble un jour. Testé sur ESP32 réel : aucune
+trame `STATE battery=` envoyée (comportement attendu, désactivé).
+
+### 3. OTA (mise à jour firmware par WiFi) --- le point le plus sensible
+
+`esp32/lib/ota/RoverOTA.h` : **aucun identifiant en dur**. SSID/mot de
+passe WiFi et mot de passe OTA lus depuis des variables d'environnement
+au moment de la compilation (`${sysenv.ROVER_WIFI_SSID}` etc. dans
+`platformio.ini`), jamais commités. Sans SSID configuré : aucune
+activité WiFi du tout. Avec SSID mais sans mot de passe OTA : **refus
+explicite de démarrer** (fail closed --- pas de canal de flash sans
+authentification accessible à n'importe qui sur le réseau local). Bug
+évité proactivement en écrivant le code (leçon tirée du bug watchdog de
+la session Phase 4) : la boucle d'attente de connexion WiFi (jusqu'à
+10 s) tourne dans `setup()`, avant que `loop()` n'ait jamais nourri le
+watchdog matériel (3 s) --- `RoverWatchdog::feed()` ajouté à l'intérieur
+de cette boucle dès l'écriture, pas découvert après coup. Guide complet
+dans `esp32/OTA.md` (pourquoi, comment configurer, limites --- non
+testé en conditions réelles, aucun réseau WiFi configuré pendant cette
+session). Compile sur les deux cibles ; boot vérifié sur ESP32 réel
+sans configuration (comportement par défaut, aucun délai/activité WiFi).
+
+### 4. Configuration + logs persistants (Pi)
+
+`pi/rover_core/config.py` (fichier JSON optionnel, `config.example.json`
+comme gabarit commité, un argument CLI explicite garde priorité) +
+`RotatingFileHandler` optionnel (`--log-dir`, 1 Mo × 5 fichiers) dans
+`main.py`. Testé en conditions réelles contre l'ESP32 : fichier
+`rover_core.log` bien écrit et peuplé.
+
+### 5. mDNS (`rover.local`)
+
+Pas de code : Raspberry Pi OS inclut Avahi par défaut, donc
+`<hostname>.local` fonctionne déjà sans rien installer côté Python ---
+ajouter une dépendance (`zeroconf`) aurait été redondant avec ce que
+l'OS fournit gratuitement. Documenté dans `pi/README.md` (changer le
+hostname via `raspi-config`).
+
+### 6. Authentification sur `rover_control` --- le cœur de l'exigence sécurité
+
+`pi/rover_control/auth.py` : token d'accès obligatoire sur **toutes**
+les routes via un middleware `aiohttp` unique (`auth_middleware`), donc
+une route ajoutée plus tard (le `/video` du point 9, ajouté dans la même
+session) est protégée automatiquement plutôt que de compter sur le
+réflexe de dupliquer la vérification partout. **Aucun token par défaut
+codé en dur** --- lu depuis `ROVER_CONTROL_TOKEN` si défini, sinon généré
+aléatoirement à chaque démarrage et affiché dans les logs (utilisable
+dès le premier lancement sans éditer de fichier, mais jamais prévisible
+pour qui n'a pas accès à cette sortie). Comparaison à temps constant
+(`hmac.compare_digest`) pour éviter une fuite d'information par le
+temps de réponse. `index.html` propage le token de l'URL de la page vers
+le WebSocket et la vidéo (chacun est une requête HTTP indépendante que
+le middleware vérifie séparément).
+
+**Validé en conditions réelles** contre l'ESP32 : sans token → 403,
+mauvais token → 403, bon token → 200, WebSocket avec bon token →
+fonctionne et reçoit bien les trames.
+
+### 7. Dépendances épinglées
+
+`esp32/platformio.ini` (`lib_deps`) et `pi/requirements.txt` : plages
+compatibles (`^x.y.z` / `~=x.y`) sur les versions actuellement
+utilisées/testées, au lieu d'aucune contrainte ou d'un simple `>=` ---
+laisse passer les correctifs de sécurité, bloque une montée de version
+majeure surprise. Recompilé sur les deux cibles ESP32 + tests natifs
+relancés en local (16/16 passent) après le changement, aucune
+régression.
+
+### 8. Permissions CI minimales
+
+`.github/workflows/esp32-build.yml` : `permissions: contents: read` au
+niveau du workflow --- le `GITHUB_TOKEN` par défaut a des droits plus
+larges dont ce workflow (compilation + tests uniquement) n'a jamais
+besoin.
+
+### 9. Retour vidéo dans l'interface de contrôle
+
+`pi/rover_control/camera.py` : flux MJPEG (`multipart/x-mixed-replace`,
+pas de WebRTC --- zéro dépendance de signalisation, s'affiche avec un
+simple `<img>`) via `picamera2`. **Aucune caméra choisie pour Rover à ce
+jour** (`BOM.md`) : `CameraStream` capture l'échec d'import/init dans un
+`except Exception` large (assumé, commenté) et bascule `available =
+False` sans jamais faire planter le reste du serveur --- même principe
+"matériel optionnel" que les capteurs Phase 4, appliqué à une caméra.
+Route `/video` protégée par le même token que tout le reste (point 6).
+`index.html` affiche "Caméra indisponible" au lieu d'une image cassée
+si le flux échoue à charger.
+
+**Validé en conditions réelles** : `/video` avec bon token → `503
+camera unavailable` (comportement gracieux exact attendu sur cette
+machine de dev sans `picamera2`/caméra) au lieu d'un crash ou d'une
+erreur 500.
+
+### Validation d'ensemble
+
+- Compilation `esp32_wroom`/`esp32_s3` vérifiée après chaque ajout, et
+  une dernière fois après l'épinglage des dépendances.
+- Tests natifs (16/16) relancés en local avec le compilateur
+  fraîchement installé, sans régression.
+- Flash réel sur ESP32 (COM10) : boot stable avec E-stop/batterie/OTA
+  tous inertes par défaut (aucun capteur/bouton/réseau câblé), aucun
+  crash, comportement identique à avant ces ajouts côté capteurs Phase 4
+  (les 4 `ERROR sensor_timeout` toujours présents, normal).
+- `rover_core` relancé en conditions réelles avec `--log-dir` : auth
+  (403/200), WebSocket authentifié, vidéo indisponible gracieuse, et
+  fichier de log peuplé, tous vérifiés par des requêtes réelles.
+
+### Ce qui n'est PAS validé
+
+- OTA jamais testée avec un vrai réseau WiFi (aucun configuré cette
+  session).
+- E-stop jamais testé avec un vrai bouton physique.
+- Monitoring batterie jamais testé (désactivé par conception, en
+  attente du diviseur de tension).
+- Caméra jamais testée (aucune choisie/reçue).
+- `picamera2` n'est même pas dans `requirements.txt` --- il ne
+  s'installe et ne fonctionne que sur un vrai Raspberry Pi (dépend de
+  `libcamera`), impossible à valider sur cette machine de dev Windows ;
+  `camera.py` gère son absence proprement (`except Exception` sur
+  l'import), donc `pi/` reste installable et fonctionnel partout ailleurs
+  sans cette dépendance.
+
+### État actuel
+
+- Sécurité : authentification obligatoire sur tout le serveur de
+  contrôle, aucun secret (WiFi/OTA/token) codé en dur nulle part dans le
+  dépôt, dépendances épinglées, permissions CI minimales --- posture
+  raisonnable pour un projet open source à ce stade de maturité.
+- Robustesse : E-stop et monitoring batterie ajoutés sans dépendre du
+  matériel correspondant (même discipline que la Phase 4).
+- UI : validée visuellement en conditions réelles, flux vidéo prêt à
+  l'emploi dès qu'une caméra existera.
+
+### Prochaines étapes
+
+- `picamera2` sur le vrai Raspberry Pi une fois disponible, pour
+  valider `/video` avec une vraie caméra.
+- Reste par ailleurs identique aux sessions précédentes : matériel
+  (VL53L0X/borniers, moteurs/PID, servos, MPU6050/BME688), Raspberry Pi,
+  OTA/E-stop/batterie sur matériel réel dès que possible.

@@ -153,7 +153,14 @@ EVENT name=obstacle_detected *0B
 EVENT name=robot_lifted *07
 EVENT name=head_limit *05
 EVENT name=low_battery *0D
+EVENT name=estop_pressed *12
 ```
+
+`estop_pressed` : bouton d'arrêt d'urgence physique enfoncé (voir
+`esp32/lib/safety/EStop.h`) -- force l'état `SAFE` indépendamment du
+heartbeat, et bloque `SYSTEM action=resume` tant que le bouton reste
+enfoncé (relâcher le bouton ne suffit pas à lui seul, un `resume`
+explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 
 ### 7.3 ERROR
 

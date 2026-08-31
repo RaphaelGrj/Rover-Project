@@ -1,0 +1,8 @@
+{
+  "port": "/dev/ttyUSB0",
+  "baudrate": 115200,
+  "http_host": "0.0.0.0",
+  "http_port": 8080,
+  "log_level": "INFO",
+  "log_dir": null
+}
