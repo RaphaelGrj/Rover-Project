@@ -51,8 +51,11 @@ private:
     unsigned long _nextBlinkMs = 0;
 
     // One-shot animation on top of the current emotion; NONE = not
-    // playing, eyes render normally.
-    enum class PlayingAnimation { NONE, GLITCH } _animation = PlayingAnimation::NONE;
+    // playing, eyes render normally. Dispatched by name in
+    // DisplayEngine.cpp's playAnimation() -- GLITCH (intensified
+    // RGB-split glitch), LOOK_AROUND (a quick side-to-side look sweep),
+    // WAKE_UP (a brief wide-eyed openness spike that eases back down).
+    enum class PlayingAnimation { NONE, GLITCH, LOOK_AROUND, WAKE_UP } _animation = PlayingAnimation::NONE;
     unsigned long _animationStartMs = 0;
 
     unsigned long _lastUpdateMs = 0;

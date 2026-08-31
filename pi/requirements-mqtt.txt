@@ -1,0 +1,6 @@
+# Optional extra: only needed to enable rover_mqtt (see pi/README.md
+# "MQTT / Home Assistant"). Not in the base requirements.txt so
+# installing/running Rover doesn't require an MQTT client if you don't
+# want one.
+-r requirements.txt
+paho-mqtt~=2.1

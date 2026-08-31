@@ -24,6 +24,7 @@ from rover_esp32.link import RoverLink
 from rover_control.auth import resolve_token
 from rover_control.camera import CameraStream
 from rover_control.server import create_app
+from rover_mqtt.publisher import MqttPublisher
 
 from .config import load_config
 from .core import RoverCore
@@ -61,6 +62,14 @@ def parse_args() -> argparse.Namespace:
         "Never commit a real cert/key to the repo.",
     )
     parser.add_argument("--tls-key", default=None, help="Path to the TLS private key (PEM) matching --tls-cert.")
+    parser.add_argument(
+        "--mqtt-host",
+        default=None,
+        help="MQTT broker host. Publishes Rover's state periodically if set -- "
+        "see pi/README.md 'MQTT / Home Assistant'. Unset by default (no publishing).",
+    )
+    parser.add_argument("--mqtt-port", type=int, default=None)
+    parser.add_argument("--mqtt-topic-prefix", default=None)
     return parser.parse_args()
 
 
@@ -79,6 +88,10 @@ def resolve_settings(args: argparse.Namespace) -> dict:
         "log_dir": args.log_dir or config["log_dir"],
         "tls_cert": args.tls_cert or config["tls_cert"],
         "tls_key": args.tls_key or config["tls_key"],
+        "mqtt_host": args.mqtt_host or config["mqtt_host"],
+        "mqtt_port": args.mqtt_port or config["mqtt_port"],
+        "mqtt_topic_prefix": args.mqtt_topic_prefix or config["mqtt_topic_prefix"],
+        "mqtt_publish_period_s": config["mqtt_publish_period_s"],
     }
 
 
@@ -115,6 +128,21 @@ def configure_logging(log_level: str, log_dir: str | None) -> None:
     )
 
 
+async def _mqtt_publish_loop(core: RoverCore, mqtt: MqttPublisher, period_s: float) -> None:
+    """Periodic, decoupled from the raw per-field STATE cadence (the
+    ESP32 sends distance/IMU/environment/wheel-speed as separate lines
+    every 200-500ms, ROVER_PROTOCOL.md §7.1) -- publishing a full
+    snapshot that often would be excessive MQTT traffic for what is
+    meant to be a coarse "what's Rover up to" signal for Home
+    Assistant, not a high-rate telemetry feed."""
+    try:
+        while True:
+            mqtt.publish_state({"behavior_state": core.state.name, **core.last_state})
+            await asyncio.sleep(period_s)
+    except asyncio.CancelledError:
+        pass
+
+
 async def async_main(settings: dict) -> None:
     link = RoverLink(settings["port"], settings["baudrate"])
     core = RoverCore(link)  # must be built inside the running loop, see core.py
@@ -138,9 +166,19 @@ async def async_main(settings: dict) -> None:
         "" if ssl_context else " -- PLAIN HTTP: the token above travels unencrypted on this network",
     )
 
+    mqtt = MqttPublisher(settings["mqtt_host"], settings["mqtt_port"], settings["mqtt_topic_prefix"])
+    mqtt_task = None
+    if mqtt.available:
+        mqtt_task = asyncio.create_task(
+            _mqtt_publish_loop(core, mqtt, settings["mqtt_publish_period_s"])
+        )
+
     try:
         await asyncio.Event().wait()  # run until cancelled (Ctrl+C -> KeyboardInterrupt)
     finally:
+        if mqtt_task is not None:
+            mqtt_task.cancel()
+        mqtt.close()
         await runner.cleanup()
         link.stop()
 

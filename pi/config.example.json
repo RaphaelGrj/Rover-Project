@@ -6,5 +6,9 @@
   "log_level": "INFO",
   "log_dir": null,
   "tls_cert": null,
-  "tls_key": null
+  "tls_key": null,
+  "mqtt_host": null,
+  "mqtt_port": 1883,
+  "mqtt_topic_prefix": "rover",
+  "mqtt_publish_period_s": 10.0
 }

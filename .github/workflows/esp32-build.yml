@@ -84,8 +84,11 @@ jobs:
 
       - name: Install dependencies
         working-directory: pi
-        run: pip install -r requirements-dev.txt
+        # requirements-mqtt.txt (which itself pulls in requirements-dev.txt's
+        # pytest via requirements.txt) so the MQTT tests exercise the real
+        # paho-mqtt connect-failure path too, not just the "not installed" one.
+        run: pip install -r requirements-mqtt.txt -r requirements-dev.txt
 
-      - name: Run pi/ unit tests (protocol, RoverCore, auth)
+      - name: Run pi/ unit tests (protocol, RoverCore, auth, MQTT)
         working-directory: pi
         run: python -m pytest tests/ -v

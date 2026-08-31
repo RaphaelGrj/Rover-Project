@@ -55,6 +55,8 @@ constexpr unsigned long BLINK_DURATION_MS = 180;
 constexpr float BLINK_MIN_OPENNESS = 0.05f;
 
 constexpr unsigned long GLITCH_ANIMATION_DURATION_MS = 900;
+constexpr unsigned long LOOK_AROUND_DURATION_MS = 1200;
+constexpr unsigned long WAKE_UP_DURATION_MS = 600;
 
 // Small continuous sway added on top of the eased look target, so
 // nothing is ever perfectly still even when "wander" is off for that
@@ -107,6 +109,12 @@ void DisplayEngine::setEmotion(Emotion emotion) {
 void DisplayEngine::playAnimation(const char* name) {
     if (strcmp(name, "GLITCH") == 0) {
         _animation = PlayingAnimation::GLITCH;
+        _animationStartMs = millis();
+    } else if (strcmp(name, "LOOK_AROUND") == 0) {
+        _animation = PlayingAnimation::LOOK_AROUND;
+        _animationStartMs = millis();
+    } else if (strcmp(name, "WAKE_UP") == 0) {
+        _animation = PlayingAnimation::WAKE_UP;
         _animationStartMs = millis();
     }
     // Unrecognized name: silently ignored (see header comment).
@@ -174,9 +182,29 @@ void DisplayEngine::render(unsigned long nowMs) {
     float breatheY = sinf(nowMs * 0.0017f + 1.7f) * BREATHE_AMOUNT * 0.7f;
     float renderLookX = constrain(_lookX + breatheX, -1.0f, 1.0f);
     float renderLookY = constrain(_lookY + breatheY, -1.0f, 1.0f);
+    float renderOpenness = _openness;
+
+    // LOOK_AROUND/WAKE_UP override the idle-computed look/openness for
+    // their duration, same layering principle GLITCH already uses for
+    // glitchIntensity below -- the underlying emotion keeps ticking
+    // (blink timers etc.) underneath, this only overrides what gets
+    // drawn while the animation is active.
+    if (_animation == PlayingAnimation::LOOK_AROUND) {
+        float progress = (float)(nowMs - _animationStartMs) / (float)LOOK_AROUND_DURATION_MS;
+        // One full left-right-center sweep across the animation's
+        // duration -- starts and ends at 0 so it blends cleanly back
+        // into whatever the idle look direction was.
+        renderLookX = sinf(progress * 2.0f * PI) * 0.8f;
+    } else if (_animation == PlayingAnimation::WAKE_UP) {
+        float progress = constrain(
+            (float)(nowMs - _animationStartMs) / (float)WAKE_UP_DURATION_MS, 0.0f, 1.0f);
+        // Wide-eyed spike (up to EyeRenderer's own MAX_OPENNESS=1.3) that
+        // eases back down to this emotion's normal openness by the end.
+        renderOpenness = 1.3f - (1.3f - profile.baseOpenness) * progress;
+    }
 
     EyeState state;
-    state.openness = _openness;
+    state.openness = renderOpenness;
     state.glitchIntensity =
         (_animation == PlayingAnimation::GLITCH) ? 1.0f : profile.glitchIntensity;
 
@@ -200,8 +228,10 @@ void DisplayEngine::update() {
     float dtSeconds = (now - _lastUpdateMs) / 1000.0f;
     _lastUpdateMs = now;
 
-    if (_animation == PlayingAnimation::GLITCH &&
-        now - _animationStartMs >= GLITCH_ANIMATION_DURATION_MS) {
+    unsigned long animationElapsed = now - _animationStartMs;
+    if ((_animation == PlayingAnimation::GLITCH && animationElapsed >= GLITCH_ANIMATION_DURATION_MS) ||
+        (_animation == PlayingAnimation::LOOK_AROUND && animationElapsed >= LOOK_AROUND_DURATION_MS) ||
+        (_animation == PlayingAnimation::WAKE_UP && animationElapsed >= WAKE_UP_DURATION_MS)) {
         _animation = PlayingAnimation::NONE;
     }
 

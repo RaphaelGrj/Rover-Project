@@ -31,6 +31,10 @@ DEFAULTS: dict[str, Any] = {
     "log_dir": None,  # None = console only; set to enable rotating file logs
     "tls_cert": None,  # None = plain HTTP/WS; set alongside tls_key to enable HTTPS/WSS
     "tls_key": None,
+    "mqtt_host": None,  # None = MQTT publishing disabled (see rover_mqtt.publisher)
+    "mqtt_port": 1883,
+    "mqtt_topic_prefix": "rover",
+    "mqtt_publish_period_s": 10.0,
 }
 
 

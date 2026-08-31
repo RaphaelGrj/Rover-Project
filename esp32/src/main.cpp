@@ -15,6 +15,7 @@
 #include "BatteryMonitor.h"
 #include "RoverOTA.h"
 #include "CalibrationStore.h"
+#include "Buzzer.h"
 
 // UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
 // section 2); Serial keeps this testable over USB in the meantime.
@@ -28,6 +29,7 @@ SensorHub sensors;
 EStop estop;
 BatteryMonitor battery;
 RoverOTA ota;
+Buzzer buzzer;
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
 unsigned long lastBatteryTelemetryMs = 0;
@@ -176,6 +178,7 @@ void setup() {
     sensors.begin();
     estop.begin();
     battery.begin();
+    buzzer.begin();
     // Entirely opt-in (see RoverOTA.h) -- a no-op that returns
     // immediately unless WiFi/OTA credentials were set at build time.
     ota.begin();
@@ -197,6 +200,7 @@ void setup() {
         protocol.send("ERROR", errFields);
     }
 
+    buzzer.play(BuzzerSound::BOOT);
     state = RoverState::READY;
 }
 
@@ -209,6 +213,7 @@ void loop() {
     estop.update();
     battery.update();
     ota.update();
+    buzzer.update();
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {
         state = RoverState::SAFE;
@@ -224,12 +229,14 @@ void loop() {
         state = RoverState::SAFE;
         drive.stop();
         protocol.send("EVENT", "name=estop_pressed");
+        buzzer.play(BuzzerSound::ESTOP);
     }
     wasEstopPressed = estop.isPressed();
 
     if (battery.hasReading()) {
         if (battery.consumeLowBatteryEvent()) {
             protocol.send("EVENT", "name=low_battery");
+            buzzer.play(BuzzerSound::LOW_BATTERY);
         }
         unsigned long batteryNow = millis();
         if (batteryNow - lastBatteryTelemetryMs >= ROVER_BATTERY_UPDATE_PERIOD_MS) {
@@ -255,6 +262,7 @@ void loop() {
     }
     if (sensors.consumeObstacleEvent()) {
         protocol.send("EVENT", "name=obstacle_detected");
+        buzzer.play(BuzzerSound::OBSTACLE);
     }
 
     unsigned long sensorNow = millis();

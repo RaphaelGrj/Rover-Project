@@ -1536,3 +1536,129 @@ pas juste un redémarrage logique) :
   reçus (l'outillage est prêt, pas les valeurs).
 - Reste identique par ailleurs : matériel Phase 2/4, Raspberry Pi,
   caméra.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 5) --- 5 fonctionnalités de comportement/personnalité (buzzer, réflexe obstacle, sommeil, animations, MQTT)
+
+### Contexte
+
+Suite de la troisième liste de propositions de la session, les 5 dans
+l'ordre. L'utilisateur a signalé avoir des buzzers disponibles pour le
+point 1.
+
+### 1. Buzzer (bip sonore, ESP32)
+
+**Contrainte matérielle réelle découverte en préparant ce point** : plus
+aucun GPIO totalement libre sur le WROOM (tout est pris par moteurs/
+encodeurs/servos/écran/I2C/E-stop/batterie), et `WIRING.md` interdisait
+explicitement `GPIO12` (risque de mauvaise sélection de tension flash
+au boot). Question posée à l'utilisateur plutôt que de trancher seul
+--- **GPIO12 retenu**, règle assouplie explicitement dans `WIRING.md`
+avec l'avertissement correspondant.
+
+`esp32/lib/sound/Buzzer.h` : lecture non-bloquante (`tone()`/`noTone()`,
+avancée via `millis()` dans `update()`, jamais de `delay()`) d'un motif
+de bips court par événement (`BOOT`, `OBSTACLE`, `LOW_BATTERY`,
+`ESTOP`) --- fonctionne avec un buzzer passif (fréquence respectée) ou
+actif (ignore la fréquence, suit juste le rythme on/off). Câblé au
+boot, à l'E-stop, à la batterie faible et à l'obstacle détecté.
+
+**Validé sur ESP32 réel** : boot stable avec GPIO12 piloté par le
+firmware (aucune corruption observée), buzzer pas encore physiquement
+branché par l'utilisateur au moment du test --- son audible à confirmer
+une fois câblé.
+
+### 2. Réflexe d'arrêt automatique sur obstacle (Pi)
+
+Décision de conception : plutôt que de s'appuyer sur l'`EVENT
+obstacle_detected` (un déclenchement ponctuel, sans `EVENT` de
+"dégagé" côté firmware), `RoverCore.move()` réévalue à chaque appel la
+distance `STATE` la plus récente (`last_state`, même seuil 150mm que
+l'ESP32 et l'UI) : une vitesse **positive** demandée alors qu'un
+obstacle est proche est ramenée à 0, la marche arrière et la rotation
+sur place restent libres. Un garde-fou simple, pas de la navigation ---
+le Pi ne décide toujours de rien de plus que "ne fonce pas dedans".
+
+**Validé par tests** (`pi/tests/test_core.py`) : avancer bloqué,
+reculer/tourner autorisés, débloqué dès que la distance repasse au-delà
+du seuil.
+
+### 3. Comportement "sommeil" en cas d'inactivité (Pi)
+
+`RoverCore` déclenche `FACE emotion=sleepy` après `IDLE_SLEEPY_DELAY_S`
+(120s) sans client connecté, armé dès la construction (état initial
+IDLE) et à chaque retour à IDLE ; annulé et remplacé par `FACE
+emotion=idle` (réveil) dès qu'on quitte IDLE, quelle que soit la
+destination. Réutilise le mécanisme générique de `_set_state` déjà en
+place.
+
+**Validé par tests** (délai raccourci via `monkeypatch`) et **en
+conditions réelles** contre l'ESP32 : `FACE emotion=idle` bien reçu
+lors d'une transition hors IDLE (observé jusque dans un cas limite ---
+une `ERROR` de capteur arrivant avant que le client ait fini de se
+connecter, la garde `state not in (MOVING, ERROR)` a fonctionné comme
+prévu).
+
+### 4. Bibliothèque d'animations élargie (ESP32)
+
+Deux nouvelles animations en plus de `GLITCH`, réutilisant uniquement
+les champs déjà existants d'`EyeState` (direction du regard, ouverture)
+--- aucun changement de structure : `LOOK_AROUND` (balayage sinusoïdal
+gauche-droite-centre sur 1,2s) et `WAKE_UP` (pic d'ouverture large qui
+redescend vers le profil normal sur 0,6s), en couche par-dessus
+l'émotion active, même principe de superposition que `GLITCH` pour
+`glitchIntensity`.
+
+**Validé sur ESP32 réel** : dispatch accepté sans crash
+(`ANIMATION name=LOOK_AROUND`, `ANIMATION name=WAKE_UP`), `diag` de
+suivi confirmant `free_heap`/`uptime` stables. Rendu visuel non
+re-vérifié à l'œil cette fois (déjà fait pour le mécanisme de base en
+session précédente via `claude-in-chrome` -- pas repris ici faute de
+changement du rendu écran lui-même, seulement de nouvelles trajectoires
+d'yeux).
+
+### 5. Publication MQTT minimale (Pi)
+
+`pi/rover_mqtt/publisher.py` : instantané périodique (état
+comportemental + toute la télémétrie connue) publié sur
+`<préfixe>/state`, `retain=True`. Double option : dépendance
+(`paho-mqtt`, extra séparé `requirements-mqtt.txt`, pas dans les
+dépendances de base) et fonctionnalité (aucun host configuré = jamais
+importé). Un avertissement de dépréciation de l'API paho-mqtt 2.x
+détecté et corrigé immédiatement (`CallbackAPIVersion.VERSION2`
+explicite) plutôt que laissé trainer.
+
+**Validé par tests** (5 tests : sans host, sans `paho-mqtt` installé
+--- simulé via un monkeypatch d'`__import__` --- broker injoignable
+avec un vrai port refusé, `publish_state`/`close` sans connexion). Pas
+de vrai broker MQTT disponible pour un test de bout en bout avec
+publication réelle cette session.
+
+### Validation d'ensemble
+
+- Compilation `esp32_wroom`/`esp32_s3` vérifiée après buzzer et
+  animations.
+- Tests natifs C++ (16/16) et Python (36/36, +11 depuis la session
+  précédente) rejoués ensemble à la fin --- aucune régression.
+- CI mise à jour pour installer `requirements-mqtt.txt` en plus de
+  `requirements-dev.txt`, afin que le test MQTT "broker injoignable"
+  exerce le vrai chemin de connexion `paho-mqtt`, pas seulement le
+  chemin "bibliothèque absente".
+
+### État actuel
+
+- Les 5 points sont livrés et validés (tests automatisés et/ou matériel
+  réel selon ce qui était testable). Seul le son audible du buzzer et
+  la publication MQTT de bout en bout vers un vrai broker restent à
+  confirmer par l'utilisateur (dépendent respectivement du câblage
+  physique et d'un broker MQTT/Home Assistant réel, ni l'un ni l'autre
+  disponibles dans cette session).
+
+### Prochaines étapes
+
+- Confirmer le son du buzzer une fois câblé sur GPIO12.
+- Tester la publication MQTT contre un vrai broker (Mosquitto ou
+  l'add-on Home Assistant) une fois disponible.
+- Reste identique par ailleurs : matériel Phase 2/4, Raspberry Pi,
+  caméra, encodeur Wokwi, systemd sur Pi réel.

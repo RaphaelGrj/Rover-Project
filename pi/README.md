@@ -102,6 +102,28 @@ sudo systemctl enable --now rover-core
 sudo journalctl -u rover-core -f   # suivre les logs (utile pour récupérer le token si rover.env est vide)
 ```
 
+## MQTT / Home Assistant (premier pas minimal)
+
+Publication optionnelle de l'état de Rover sur un broker MQTT ---
+**pas** l'intégration Home Assistant complète (Phase 10 de
+`ARCHITECTURE_AND_ROADMAP.md`), juste un instantané périodique (état
+comportemental + toute la télémétrie connue) sur `<préfixe>/state`.
+Rien n'est activé par défaut : ni le broker (aucun host configuré), ni
+la dépendance (`paho-mqtt` n'est pas dans `requirements.txt` de base).
+
+```bash
+pip install -r requirements-mqtt.txt
+python -m rover_core.main --port /dev/ttyUSB0 --mqtt-host 192.168.1.50
+```
+
+Options : `--mqtt-port` (1883 par défaut), `--mqtt-topic-prefix`
+(`rover` par défaut), ou les mêmes clés dans `config.json`
+(`mqtt_host`, `mqtt_port`, `mqtt_topic_prefix`,
+`mqtt_publish_period_s`). Si `paho-mqtt` n'est pas installé ou que le
+broker est injoignable, la publication reste simplement désactivée
+(log d'info/avertissement), le reste de `rover_core` continue de
+fonctionner normalement.
+
 ## Trouver le Pi sur le réseau (mDNS)
 
 Raspberry Pi OS inclut Avahi (mDNS) par défaut : une fois l'hostname du
@@ -146,6 +168,8 @@ s'active tout seul si `picamera2` peut l'initialiser.
 - `rover_control/` : serveur web (`aiohttp`) + page de contrôle statique
   (`static/index.html`, HTML/JS/CSS en un seul fichier, pas de build) +
   `auth.py` (token d'accès) + `camera.py` (flux vidéo optionnel).
+- `rover_mqtt/` : `publisher.py`, publication MQTT optionnelle
+  (`paho-mqtt`, extra séparé).
 
 ## Sécurité : ce qui est garanti où
 

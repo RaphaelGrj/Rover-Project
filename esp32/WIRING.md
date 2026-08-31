@@ -20,11 +20,19 @@
 
 ## Pins évitées volontairement
 
-- `GPIO0`, `GPIO2`, `GPIO12`, `GPIO15` : broches de *strapping* (état
-  au boot). Utilisées seulement pour des signaux jugés à faible risque
-  (voir tableau), jamais pour un signal avec pull-up externe fort
-  (I2C, etc.). `GPIO12` en particulier n'est utilisée nulle part
-  (risque de sélection de tension flash incorrecte au boot).
+- `GPIO0`, `GPIO2`, `GPIO15` : broches de *strapping* (état au boot).
+  Utilisées seulement pour des signaux jugés à faible risque (voir
+  tableau), jamais pour un signal avec pull-up externe fort (I2C, etc.).
+- `GPIO12` : broche de *strapping* (sélection de tension flash au
+  boot) --- **règle assouplie le 2026-08-31**, décision explicite de
+  l'utilisateur : plus aucun GPIO totalement libre sur le WROOM une
+  fois tous les périphériques Phases 2-4 + E-stop/batterie/buzzer
+  attribués. Utilisée pour le buzzer (voir tableau) --- un buzzer
+  piezo passif est une charge haute impédance qui tire rarement assez
+  fort sur la broche pendant la fenêtre de boot pour changer la
+  détection de tension flash, mais **si le boot du WROOM se comporte
+  bizarrement après ce câblage (mode/taille de flash mal détecté, sortie
+  série très précoce corrompue), cette broche est la première suspecte**.
 - `GPIO1`, `GPIO3` : UART0, réservé console/programmation USB.
 - `GPIO6`--`GPIO11` : reliés à la flash SPI interne, jamais disponibles.
 
@@ -41,6 +49,7 @@
 | DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard |
 | Bouton E-stop                     | GPIO25    | `INPUT_PULLUP` (voir `esp32/lib/safety/EStop.h`) --- bouton entre cette broche et GND, pressé = LOW. **Non câblé pour l'instant** : la broche flotte HIGH (relâché) grâce au pull-up interne, le firmware fonctionne à l'identique avec ou sans bouton physique |
 | Diviseur de tension batterie (ADC) | GPIO14   | ⚠ Désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`) tant que le diviseur n'est pas câblé/calibré. GPIO14 est en ADC2, illisible pendant que le WiFi est actif (OTA) --- à reconsidérer si les deux fonctions sont utilisées en même temps |
+| Buzzer (bip sonore)                | GPIO12    | ⚠ Strapping, voir "Pins évitées volontairement" ci-dessus --- `esp32/lib/sound/Buzzer.h`. Buzzer passif ou actif, les deux fonctionnent avec `tone()`/`noTone()` pour un simple signal on/off rythmé |
 | Encodeur gauche A                 | GPIO34    | entrée seule (pas de pull interne, prévoir pull-up externe si besoin) |
 | Encodeur gauche B                 | GPIO35    | entrée seule |
 | Encodeur droit A                  | GPIO36    | entrée seule |

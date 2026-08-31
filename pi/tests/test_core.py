@@ -76,6 +76,58 @@ def test_move_within_deadzone_does_not_claim_moving():
     run(body())
 
 
+def test_move_forward_is_clamped_when_obstacle_is_close():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.move(0.2, 0.0)
+        assert ("MOVE", {"velocity": "0.00", "rotation": "0.00"}) in link.sent
+        # Clamped to a stop -- must not read as MOVING.
+        assert core.state != RoverBehaviorState.MOVING
+
+    run(body())
+
+
+def test_move_backward_is_not_clamped_when_obstacle_is_close():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.move(-0.2, 0.0)  # backing away must still work
+        assert ("MOVE", {"velocity": "-0.20", "rotation": "0.00"}) in link.sent
+
+    run(body())
+
+
+def test_rotation_in_place_is_not_clamped_when_obstacle_is_close():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.move(0.0, 0.5)  # turning in place must still work
+        assert ("MOVE", {"velocity": "0.00", "rotation": "0.50"}) in link.sent
+
+    run(body())
+
+
+def test_move_forward_is_allowed_once_obstacle_clears():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.on_frame("STATE", {"distance_left": "9999"})  # cleared, no separate "cleared" event exists
+        await asyncio.sleep(0)
+        core.move(0.2, 0.0)
+        assert ("MOVE", {"velocity": "0.20", "rotation": "0.00"}) in link.sent
+
+    run(body())
+
+
 def test_second_client_connecting_does_not_downgrade_moving():
     async def body():
         core = RoverCore(FakeLink())
@@ -112,6 +164,32 @@ def test_error_state_auto_clears_after_hold_period(monkeypatch):
         assert core.state == RoverBehaviorState.ERROR
         await asyncio.sleep(0.15)
         assert core.state == RoverBehaviorState.IDLE
+
+    run(body())
+
+
+def test_idle_plays_sleepy_face_after_delay(monkeypatch):
+    monkeypatch.setattr(core_module, "IDLE_SLEEPY_DELAY_S", 0.05)
+
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)  # starts IDLE, sleepy timer armed immediately
+        await asyncio.sleep(0.15)
+        assert ("FACE", {"emotion": "sleepy"}) in link.sent
+
+    run(body())
+
+
+def test_client_connecting_cancels_pending_sleepy_and_wakes_face():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        await core.client_connected()
+        # Leaving IDLE must both cancel the timer and immediately show a
+        # non-sleepy face -- checked together since they're the same
+        # guarantee ("no longer looks asleep once someone shows up").
+        assert ("FACE", {"emotion": "idle"}) in link.sent
+        await core.client_disconnected()
 
     run(body())
 

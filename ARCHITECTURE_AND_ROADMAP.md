@@ -1078,9 +1078,12 @@ Objectif : donner une personnalité physique à Rover.
       premier jet **paramétrique** (un seul modèle d'œil de base
       modulé par émotion : ouverture/regard/clignement/glitch), pas
       encore d'art dédié par émotion.
--   [x] Animations --- mécanisme générique (`ANIMATION name=...`) avec
-      **une seule** animation concrète (`GLITCH`) comme preuve de
-      fonctionnement, pas une bibliothèque complète.
+-   [x] Animations --- mécanisme générique (`ANIMATION name=...`), trois
+      animations concrètes : `GLITCH` (glitch RGB-split intensifié),
+      `LOOK_AROUND` (balayage du regard gauche-droite-centre) et
+      `WAKE_UP` (ouverture grand écarquillée qui redescend) --- toujours
+      pas une bibliothèque complète, mais plus la preuve d'un seul
+      mécanisme isolé. Voir PROGRESS.md 2026-08-31.
 -   [x] Glitch engine --- l'effet RGB-split (utilisé par `ALERT` et par
       l'animation `GLITCH`).
 -   [x] Commandes FACE.
@@ -1318,11 +1321,22 @@ valeur.
 
 Objectif : intégrer Rover à la maison.
 
--   [ ] MQTT.
--   [ ] États Rover.
--   [ ] Capteurs.
--   [ ] Événements.
--   [ ] Commandes.
+-   [x] MQTT --- **premier pas minimal seulement**, pas l'intégration
+      complète décrite par cette phase : `pi/rover_mqtt/publisher.py`
+      publie périodiquement un instantané (état comportemental + tous
+      les champs `STATE` connus) sur `<prefix>/state`, dépendance
+      optionnelle (`paho-mqtt`, `requirements-mqtt.txt`, pas dans les
+      dépendances de base) et broker optionnel (rien ne se passe si non
+      configuré). Voir PROGRESS.md 2026-08-31.
+-   [x] États Rover --- inclus dans l'instantané ci-dessus
+      (`behavior_state`).
+-   [x] Capteurs --- inclus dans l'instantané ci-dessus (distance/IMU/
+      environnement/vitesse, tout ce que `RoverCore.last_state`
+      connaît).
+-   [ ] Événements --- pas encore publiés séparément (seul l'état
+      fusionné l'est, pas les `EVENT`/`ERROR` individuels).
+-   [ ] Commandes --- aucune commande entrante depuis Home Assistant
+      (MQTT sortant uniquement pour l'instant).
 -   [ ] Scènes.
 -   [ ] Notifications.
 -   [ ] Interaction avec les appareils domestiques.

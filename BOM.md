@@ -50,6 +50,14 @@
 
 ------------------------------------------------------------------------
 
+## Son
+
+| Composant | Qté | Statut | Utilité | Notes |
+|---|---|---|---|---|
+| Buzzer (piezo passif ou actif) | 1 | ✅ (déjà en stock) | Bip sonore (boot, obstacle, batterie faible, E-stop) | `esp32/lib/sound/Buzzer.h`, GPIO12 --- broche de strapping normalement évitée, réutilisée faute de GPIO libre restant (voir `WIRING.md`), à surveiller au premier boot avec le buzzer câblé |
+
+------------------------------------------------------------------------
+
 ## Capteurs (Phase 4)
 
 | Composant | Qté | Statut | Utilité | Notes |

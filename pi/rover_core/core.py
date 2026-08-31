@@ -38,6 +38,21 @@ MOVEMENT_DEADZONE = 0.02
 # "sticky" an error looks.
 ERROR_STATE_HOLD_S = 5.0
 
+# How long Rover stays IDLE (no control client connected) before
+# playing FACE emotion=sleepy on its own -- purely cosmetic (the ESP32
+# is already safely stopped via the heartbeat timeout well before this),
+# just makes an unattended Rover look alive instead of frozen on
+# whatever expression it last had.
+IDLE_SLEEPY_DELAY_S = 120.0
+
+# Mirrors ROVER_OBSTACLE_THRESHOLD_MM (esp32/include/sensors_config.h)
+# and the same constant already duplicated client-side in
+# rover_control/static/index.html -- distance_left/right below this is
+# exactly what makes the ESP32 itself fire EVENT name=obstacle_detected,
+# so this reflex agrees with what the firmware and the UI both consider
+# "close".
+OBSTACLE_THRESHOLD_MM = 150.0
+
 
 class RoverBehaviorState(Enum):
     """Pi-side, high-level behavior state (ARCHITECTURE_AND_ROADMAP.md
@@ -91,6 +106,10 @@ class RoverCore:
         # correct if it's the same loop the reader thread's callback
         # ends up scheduled on.
         self._loop = asyncio.get_running_loop()
+        # Starts IDLE (above), so the sleepy timer must be armed here
+        # too -- _set_state() only arms it on a *transition into* IDLE,
+        # which this initial assignment isn't.
+        self._idle_sleepy_task = asyncio.create_task(self._go_idle_sleepy_after_delay())
 
     # --- ESP32 -> Pi -------------------------------------------------
 
@@ -128,6 +147,7 @@ class RoverCore:
     def _set_state(self, new_state: RoverBehaviorState) -> None:
         if new_state == self.state:
             return
+        old_state = self.state
         self.state = new_state
         logger.info("behavior state -> %s", new_state.name)
         # Piggybacks on the same STATE/EVENT/ERROR listener mechanism as
@@ -137,12 +157,30 @@ class RoverCore:
         for listener in list(self._listeners):
             listener("ROVER_STATE", {"state": new_state.name})
 
+        if old_state == RoverBehaviorState.IDLE:
+            # Leaving IDLE cancels the pending sleepy timer, and wakes
+            # the face back up in case it had actually gone sleepy --
+            # harmless (just re-sends "idle") if it hadn't yet.
+            if self._idle_sleepy_task is not None:
+                self._idle_sleepy_task.cancel()
+                self._idle_sleepy_task = None
+            self.link.send("FACE", {"emotion": "idle"})
+        if new_state == RoverBehaviorState.IDLE:
+            self._idle_sleepy_task = asyncio.create_task(self._go_idle_sleepy_after_delay())
+
     async def _clear_error_after_delay(self) -> None:
         try:
             await asyncio.sleep(ERROR_STATE_HOLD_S)
             self._set_state(
                 RoverBehaviorState.INTERACTING if self._client_count > 0 else RoverBehaviorState.IDLE
             )
+        except asyncio.CancelledError:
+            pass
+
+    async def _go_idle_sleepy_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(IDLE_SLEEPY_DELAY_S)
+            self.link.send("FACE", {"emotion": "sleepy"})
         except asyncio.CancelledError:
             pass
 
@@ -154,7 +192,30 @@ class RoverCore:
 
     # --- Pi -> ESP32 ---------------------------------------------------
 
+    def _obstacle_ahead(self) -> bool:
+        """Re-evaluated from the latest STATE telemetry every time,
+        rather than latched from the EVENT itself -- the firmware only
+        ever sends EVENT name=obstacle_detected on the *rising* edge
+        (ROVER_PROTOCOL.md §7.2), there is no corresponding "cleared"
+        event, so treating that EVENT as a lasting flag here would leave
+        the reflex stuck on forever after the first trigger. STATE
+        distance_left/right arrives continuously regardless, so it's
+        the only signal that can say "still close" vs. "clear now"."""
+        try:
+            left = float(self.last_state.get("distance_left", "inf"))
+            right = float(self.last_state.get("distance_right", "inf"))
+        except ValueError:
+            return False
+        return left < OBSTACLE_THRESHOLD_MM or right < OBSTACLE_THRESHOLD_MM
+
     def move(self, velocity: float, rotation: float) -> None:
+        if velocity > 0.0 and self._obstacle_ahead():
+            # Safety clamp, not navigation: refuses to drive *further*
+            # into a detected obstacle (eg. a held joystick, a stuck
+            # gamepad axis) -- backing away (negative velocity) and
+            # turning in place both stay available, the Pi still decides
+            # what to do next.
+            velocity = 0.0
         self.link.send("MOVE", {"velocity": f"{velocity:.2f}", "rotation": f"{rotation:.2f}"})
         if abs(velocity) > MOVEMENT_DEADZONE or abs(rotation) > MOVEMENT_DEADZONE:
             self._set_state(RoverBehaviorState.MOVING)
