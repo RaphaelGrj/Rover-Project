@@ -891,3 +891,143 @@ projet).
   dès que ce matériel est disponible.
 - Validation joystick/manette sur un vrai téléphone/manette (toujours
   en attente depuis la session du 2026-08-25).
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite) --- Phase 4 (capteurs) écrite, deux bugs réels trouvés au test matériel
+
+### Contexte
+
+Le châssis est encore en impression 3D et les moteurs/capteur de
+distance/borniers ne sont pas encore montés/reçus au moment d'écrire ce
+code -- décision de l'utilisateur : avancer sur le code de la Phase 4
+(capteurs) en s'appuyant sur le roadmap, pendant l'attente matérielle,
+plutôt que de rester bloqué. Demande explicite : prévoir des phases de
+test/validation par étapes pour quand le matériel arrivera (voir la
+section "Plan de test" ci-dessous).
+
+### Ce qui a été écrit
+
+Nouveau module `esp32/lib/sensors/` (Phase 4 complète au niveau code) :
+
+- `DistanceSensor.{h,cpp}` : les deux VL53L0X, séquence XSHUT (gauche
+  réadressé 0x30, droit reste 0x29), mode "continuous ranging" (pas de
+  lecture bloquante dans `update()`), `EVENT name=obstacle_detected`
+  avec hystérésis (deux seuils, `sensors_config.h`).
+- `ImuSensor.{h,cpp}` : MPU6050, lecture accel/gyro périodique.
+- `EnvironmentSensor.{h,cpp}` : BME688 (registres compatibles BME680 --
+  température/humidité/pression/gaz), non-bloquant via
+  `beginReading()`/`endReading()` au lieu du `performReading()` bloquant
+  de la bibliothèque (une conversion BME680 prend 150-300 ms, ce qui
+  aurait gelé le PID moteurs/l'écran à chaque cycle).
+- `SensorHub.{h,cpp}` : agrège les trois, détecte les transitions
+  OK→échec (y compris dès le premier `begin()` au boot, pas seulement
+  une perte en cours de route) pour émettre `ERROR
+  code=sensor_timeout sensor=<nom>` une seule fois par capteur --
+  jamais de spam à chaque nouvelle tentative de reconnexion (toutes les
+  5 s, `ROVER_SENSOR_RETRY_PERIOD_MS`).
+- `main.cpp` : `sensors.begin()`/`update()`, drain des erreurs capteur
+  et de l'événement obstacle à chaque `loop()`, télémétrie `STATE`
+  (distance/IMU/environnement) à 500 ms -- **jamais gated sur
+  ACTIVE/SAFE**, contrairement à `MOVE`/`HEAD` : la conscience
+  situationnelle (obstacle, santé capteur) reste utile au Pi même robot
+  à l'arrêt.
+- `platformio.ini` : ajout des dépendances Adafruit (BusIO, Unified
+  Sensor, MPU6050, `Adafruit_VL53L0X`, BME680 Library) -- résolues et
+  compilées avec succès sur les deux cibles (RAM 6.8%, Flash 11.1% sur
+  S3).
+- `ROVER_PROTOCOL.md` : documenté les nouveaux champs `STATE`
+  (humidity/pressure/gas_kohm, accel_x..gyro_z) et le champ optionnel
+  `sensor=` sur `ERROR code=sensor_timeout`.
+- `WIRING.md` : adresses I2C (VL53L0X gauche réadressé 0x30, MPU6050
+  0x68, BME688 0x77 -- ces deux dernières non confirmées sur le matériel
+  réel) + note sur la sonde de présence I2C obligatoire (voir bug
+  ci-dessous).
+
+### Deux bugs réels trouvés en testant sur l'ESP32 WROOM physique (aucun capteur câblé)
+
+Le test volontaire "aucun capteur branché" (situation exacte du jour :
+tout est en attente de livraison/impression) a servi de test de
+robustesse -- et a immédiatement révélé deux bugs qu'aucune compilation
+ni simulation Wokwi n'aurait pu attraper :
+
+1. **Plantage en boucle au boot (watchdog matériel).** `sensors.begin()`
+   plantait systématiquement le firmware ~6 s après le boot (jamais
+   atteint `loop()`). Diagnostic par instrumentation temporaire
+   (`Serial.printf` entre chaque `begin()` de capteur) : le blocage
+   était entièrement à l'intérieur de `DistanceSensor::begin()` --
+   l'API VL53L0X d'origine de ST (vendue telle quelle par
+   `Adafruit_VL53L0X`, fichiers `vl53l0x_api*.cpp`) reste bloquée
+   indéfiniment dans une boucle d'attente interne (`VL53L0X_WaitDevice-
+   Booted` ou équivalent) au lieu d'échouer proprement quand rien ne
+   répond sur le bus I2C -- un vrai piège pour ce cas précis (0 capteur
+   câblé). Une première tentative de correction (nourrir le watchdog +
+   réduire le timeout I2C via `Wire.setTimeOut(50)`) n'a rien changé
+   (le blocage est interne à un seul appel bibliothèque, invisible de
+   l'extérieur). **Correction retenue** : sonder la présence du capteur
+   (`Wire.beginTransmission`/`endTransmission`, `I2CProbe.h`) **avant**
+   d'appeler le `begin()` de la bibliothèque, jamais après -- appliqué
+   aux trois capteurs (VL53L0X x2, MPU6050, BME688) par précaution,
+   même si seul le VL53L0X a été prouvé bloquant. Root cause vérifiée :
+   confirmé par la trace de debug avant/après.
+2. **Trames `ERROR`/`STATE` tronquées en silence.** Une fois le crash
+   réglé, les trames sorties étaient coupées au milieu d'un mot (`ERROR
+   ... sensor=tof_` au lieu de `tof_left`/`tof_right`, `STATE ...
+   gyro_y=0.00` sans `gyro_z` du tout) -- buffers `char[32]`/`char[64]`
+   dans `main.cpp` trop petits pour le contenu réel (`sensor=tof_right`
+   à lui seul fait 37 octets avec le terminateur ; les 6 champs IMU à
+   zéro font ~75 octets). Corrigé en passant à `char[48]`/`char[96]`
+   avec un commentaire expliquant le calcul, pour que ça ne se
+   reproduise pas silencieusement si un nom de champ s'allonge plus
+   tard.
+
+### Validation
+
+- Compilation vérifiée sur `esp32_wroom` et `esp32_s3` après chaque
+  correction.
+- Flash réel + script de test (`SYSTEM ping` → 7 émotions `FACE` →
+  `ANIMATION GLITCH` → `SYSTEM diag`, script `rover_test.py`) : plus
+  aucun crash, boot stable, les 4 `ERROR code=sensor_timeout
+  sensor=<tof_left|tof_right|imu|bme688>` bien émis une seule fois au
+  boot (aucun capteur câblé, comportement attendu), `STATE
+  distance_left=9999 distance_right=9999` (sentinelle "indisponible"),
+  `STATE accel_x=0.00 ... gyro_z=0.00` et `STATE temperature=0.0 ...
+  gas_kohm=0.0` complets et bien formés, `uptime_ms`/`free_heap`
+  stables sur `SYSTEM action=diag`.
+- **Lecture effective d'un capteur réel non testée** (aucun n'est
+  encore câblé) -- seule la robustesse "capteur absent" est validée à
+  ce stade.
+
+### Plan de test pour la suite (par étapes, au fur et à mesure du matériel)
+
+1. **VL53L0X + borniers (attendu aujourd'hui, 2026-08-31)** : câbler
+   un ou deux VL53L0X selon ce qui est reçu (XSHUT gauche/droit, SDA/SCL
+   partagés -- voir `WIRING.md`). Reflasher le firmware actuel (aucun
+   changement de code nécessaire). Attendu : plus d'`ERROR
+   sensor_timeout sensor=tof_left/tof_right` pour le(s) capteur(s)
+   câblé(s), `STATE distance_left=...`/`distance_right=...` avec des
+   valeurs plausibles en mm, `EVENT name=obstacle_detected` en
+   approchant la main à moins de 150 mm.
+2. **Moteurs + PID (dès châssis + borniers prêts)** : reprendre la
+   Phase 2, câblage propre au lieu de fils volants, calibrer les gains
+   PID et `ROVER_ENCODER_TICKS_PER_REV`/`ROVER_WHEEL_DIAMETER_M` dans
+   `motion_config.h` contre les vraies roues/moteurs N20.
+3. **Servos tête** (dès la tête montée sur le châssis) : `HEAD
+   pitch=... yaw=...` via le même script de test, ajuster les limites
+   souples de `head_config.h` si nécessaire.
+4. **MPU6050 / BME688** (dès réception) : même principe qu'à l'étape 1
+   -- câbler, reflasher sans changement de code, vérifier que l'`ERROR`
+   correspondant disparaît et que les valeurs `STATE` sont plausibles
+   (accel_z proche de 9.8 au repos, température proche de l'ambiante).
+5. **Raspberry Pi** (après validation moteurs, décision explicite de
+   l'utilisateur) : brancher l'UART réel Pi↔ESP32, lancer `rover_core`/
+   `rover_control` déjà écrits (Phase 5/6 minimales) contre le matériel
+   réel au lieu de la simulation Wokwi.
+
+### État actuel
+
+- **Phase 4 (capteurs)** : complète au niveau code, compile sur les
+  deux cibles, **validée sur ESP32 WROOM physique** pour le cas "aucun
+  capteur câblé" (robustesse). Lecture réelle des capteurs à valider
+  dès réception/câblage (étape 1 du plan ci-dessus).
+- **Phases 0, 1, 2, 3** : inchangées.

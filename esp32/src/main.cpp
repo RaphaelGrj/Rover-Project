@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "board_config.h"
 #include "motion_config.h"
+#include "sensors_config.h"
 #include "RoverProtocol.h"
 #include "HeartbeatMonitor.h"
 #include "Watchdog.h"
@@ -9,6 +10,7 @@
 #include "HeadController.h"
 #include "DisplayEngine.h"
 #include "Emotion.h"
+#include "SensorHub.h"
 
 // UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
 // section 2); Serial keeps this testable over USB in the meantime.
@@ -18,7 +20,9 @@ RoverState state = RoverState::BOOT;
 DriveController drive;
 HeadController head;
 DisplayEngine display;
+SensorHub sensors;
 unsigned long lastTelemetryMs = 0;
+unsigned long lastSensorTelemetryMs = 0;
 
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
@@ -107,11 +111,24 @@ void setup() {
     drive.begin();
     head.begin();
     display.begin();
+    sensors.begin();
 
     char fields[64];
     snprintf(fields, sizeof(fields), "protocol=%s board=%s state=BOOT",
              ROVER_PROTOCOL_VERSION, ROVER_BOARD_NAME);
     protocol.send("SYSTEM", fields);
+
+    // Report anything that failed to initialize right away (eg. a
+    // sensor not wired yet) instead of waiting for loop()'s first pass.
+    const char* failedSensor;
+    while (sensors.consumeSensorFailure(&failedSensor)) {
+        // 48, not 32: "code=sensor_timeout sensor=tof_right" alone is
+        // 37 bytes with the terminator -- a first hardware test caught
+        // this being silently truncated (mid-word) by too small a buffer.
+        char errFields[48];
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=%s", failedSensor);
+        protocol.send("ERROR", errFields);
+    }
 
     state = RoverState::READY;
 }
@@ -121,11 +138,44 @@ void loop() {
     drive.update();
     head.update();
     display.update();
+    sensors.update();
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {
         state = RoverState::SAFE;
         drive.stop();
         protocol.send("EVENT", "name=heartbeat_timeout");
+    }
+
+    // Sensor EVENT/ERROR/STATE are never gated on ACTIVE/SAFE: unlike
+    // MOVE/HEAD (physical actuation, must stay off outside ACTIVE),
+    // situational awareness (obstacles, sensor health) stays useful to
+    // the Pi even while the robot is stopped.
+    const char* failedSensor;
+    while (sensors.consumeSensorFailure(&failedSensor)) {
+        // 48, not 32: "code=sensor_timeout sensor=tof_right" alone is
+        // 37 bytes with the terminator -- a first hardware test caught
+        // this being silently truncated (mid-word) by too small a buffer.
+        char errFields[48];
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=%s", failedSensor);
+        protocol.send("ERROR", errFields);
+    }
+    if (sensors.consumeObstacleEvent()) {
+        protocol.send("EVENT", "name=obstacle_detected");
+    }
+
+    unsigned long sensorNow = millis();
+    if (sensorNow - lastSensorTelemetryMs >= ROVER_SENSOR_TELEMETRY_PERIOD_MS) {
+        lastSensorTelemetryMs = sensorNow;
+        // 96, not 64: the IMU's six fields alone need ~75 bytes even
+        // with every value at "0.00" -- another truncation caught on
+        // the same first hardware test as the ERROR buffer above.
+        char sensorFields[96];
+        sensors.buildDistanceFields(sensorFields, sizeof(sensorFields));
+        protocol.send("STATE", sensorFields);
+        sensors.buildImuFields(sensorFields, sizeof(sensorFields));
+        protocol.send("STATE", sensorFields);
+        sensors.buildEnvironmentFields(sensorFields, sizeof(sensorFields));
+        protocol.send("STATE", sensorFields);
     }
 
     // Periodic wheel-speed telemetry while ACTIVE (ROVER_PROTOCOL.md §8,

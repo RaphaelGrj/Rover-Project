@@ -1080,14 +1080,26 @@ réagir
 
 Objectif : donner des sens au robot.
 
--   [ ] MPU6050.
--   [ ] VL53L0X gauche.
--   [ ] VL53L0X droite.
--   [ ] BME688.
--   [ ] Lecture périodique.
--   [ ] Gestion des erreurs.
--   [ ] Transmission STATE.
--   [ ] Transmission EVENT.
+-   [x] MPU6050.
+-   [x] VL53L0X gauche.
+-   [x] VL53L0X droite.
+-   [x] BME688.
+-   [x] Lecture périodique.
+-   [x] Gestion des erreurs.
+-   [x] Transmission STATE.
+-   [x] Transmission EVENT.
+
+Complet au niveau code, compile sur les deux cibles, **validé sur ESP32
+WROOM physique réel** (voir PROGRESS.md 2026-08-31) mais sans aucun
+capteur encore câblé : le test confirme que l'absence des quatre
+capteurs est gérée proprement (`ERROR code=sensor_timeout sensor=...`
+une fois par capteur au boot, aucun crash, télémétrie `STATE` avec
+valeurs "indisponible"), pas que les capteurs eux-mêmes lisent des
+valeurs correctes. Deux bugs réels trouvés et corrigés pendant ce
+premier test (driver VL53L0X bloquant sur capteur absent ; buffers de
+trame trop petits tronquant `ERROR`/`STATE` en silence) -- voir
+PROGRESS.md pour le détail. Lecture effective des capteurs (une fois
+câblés) reste à valider.
 
 Résultat :
 

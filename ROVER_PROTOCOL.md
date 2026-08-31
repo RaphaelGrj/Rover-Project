@@ -135,8 +135,14 @@ message ou groupés) :
 STATE battery=82 *1F
 STATE left_speed=0.24 right_speed=0.26 *0A
 STATE distance_left=420 distance_right=380 *2C
-STATE temperature=24.3 *19
+STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
+STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
 ```
+
+`distance_left`/`distance_right` sont en millimètres ; `9999` signifie
+"capteur indisponible" (échec `begin()` ou perte depuis), `8190`
+signifie "rien détecté dans la portée" (le capteur répond mais ne voit
+pas d'obstacle) -- voir `esp32/lib/sensors/DistanceSensor.cpp`.
 
 ### 7.2 EVENT
 
@@ -162,7 +168,15 @@ EVENT name=low_battery *0D
 
 ```
 ERROR code=motor_overcurrent *3D
+ERROR code=sensor_timeout sensor=tof_left *48
 ```
+
+`sensor=` est un champ optionnel supplémentaire sur `sensor_timeout`
+(même esprit que `reason=` sur un `ACK` d'échec, §7.4) pour indiquer
+lequel des capteurs Phase 4 est en cause : `tof_left`, `tof_right`,
+`imu` ou `bme688`. Émis une seule fois par transition OK→échec (y
+compris un échec dès le boot, pas seulement une perte en cours de
+route), jamais en boucle à chaque nouvelle tentative de reconnexion.
 
 ### 7.4 ACK
 

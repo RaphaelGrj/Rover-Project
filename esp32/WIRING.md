@@ -58,9 +58,24 @@
 | XSHUT VL53L0X droite              | GPIO4     | |
 
 Les deux `VL53L0X` partagent la même adresse I2C par défaut (0x29) : le
-firmware devra maintenir un capteur en reset via son `XSHUT` pendant
-qu'il réadresse l'autre au démarrage (séquence classique, à implémenter
-en Phase 4).
+firmware maintient le droit en reset via son `XSHUT` pendant qu'il
+réadresse le gauche (0x30) au démarrage, puis relâche le droit qui reste
+sur 0x29 (implémenté en Phase 4, `esp32/lib/sensors/DistanceSensor.cpp`).
+
+Adresses I2C par défaut des autres capteurs Phase 4 (non confirmées sur
+le matériel réel, valeurs des bibliothèques utilisées) : MPU6050 = 0x68
+(AD0 à la masse), BME688 = 0x77 (SDO au 3V3 -- 0x76 si SDO est à la
+masse à la place). Voir `esp32/include/sensors_config.h`.
+
+**Important pour tout nouveau capteur I2C** : chaque module Phase 4
+sonde son adresse (`Wire.beginTransmission`/`endTransmission`) avant
+d'appeler le `begin()` de sa bibliothèque -- premier test matériel réel
+(2026-08-31) où le driver VL53L0X d'origine (l'API officielle ST,
+utilisée telle quelle par `Adafruit_VL53L0X`) est resté bloqué
+indéfiniment dans une boucle d'attente interne au lieu d'échouer
+proprement quand rien ne répondait sur le bus, ce qui a fait planter
+tout le firmware (watchdog matériel déclenché, jamais atteint `loop()`).
+Voir `esp32/lib/sensors/I2CProbe.h`.
 
 ------------------------------------------------------------------------
 
