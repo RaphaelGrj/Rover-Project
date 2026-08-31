@@ -1195,8 +1195,14 @@ Objectif : voir et piloter Rover.
       autonome, pas de build).
 -   [x] Commandes MOVE (validé de bout en bout en simulation, voir
       PROGRESS.md : navigateur → WebSocket → Rover Protocol → ESP32).
--   [ ] Commandes HEAD (pas de cible : Phase 3 --- servos tête --- pas
-      encore écrite côté ESP32).
+-   [x] Commandes HEAD --- la Phase 3 (servos tête) est terminée côté
+      ESP32 depuis une session précédente, ce point n'avait juste
+      jamais été branché côté interface : deuxième pad tactile (regard)
+      + stick droit de manette (convention gauche=déplacement,
+      droite=regard), `RoverCore.look()` → `HEAD pitch=... yaw=...`.
+      Validé de bout en bout en conditions réelles (WebSocket → Rover
+      Protocol → ESP32, voir PROGRESS.md 2026-08-31) ; pas testé au
+      toucher sur un vrai téléphone/manette (même limite que MOVE).
 -   [x] Retour d'état -- les trames `STATE`/`EVENT`/`ERROR` sont
       affichées dans l'interface (commit `ebc2aa3`) ; désormais
       améliorées avec un état fusionné (les différentes lignes `STATE`

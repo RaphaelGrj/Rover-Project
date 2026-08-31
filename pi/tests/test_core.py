@@ -76,6 +76,20 @@ def test_move_within_deadzone_does_not_claim_moving():
     run(body())
 
 
+def test_look_sends_head_command_without_touching_behavior_state():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        before = core.state
+        core.look(15.0, -20.0)
+        assert ("HEAD", {"pitch": "15.0", "yaw": "-20.0"}) in link.sent
+        # Unlike move(), looking around has no behavior-state side
+        # effect -- it's not a safety-relevant action.
+        assert core.state == before
+
+    run(body())
+
+
 def test_move_forward_is_clamped_when_obstacle_is_close():
     async def body():
         link = FakeLink()

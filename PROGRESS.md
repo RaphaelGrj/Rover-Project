@@ -1662,3 +1662,63 @@ publication réelle cette session.
   l'add-on Home Assistant) une fois disponible.
 - Reste identique par ailleurs : matériel Phase 2/4, Raspberry Pi,
   caméra, encodeur Wokwi, systemd sur Pi réel.
+
+------------------------------------------------------------------------
+
+## Session du 2026-08-31 (suite 6) --- Commandes HEAD dans l'interface (suite de roadmap)
+
+### Contexte
+
+Demande de l'utilisateur : continuer le code en suivant la roadmap.
+En relisant la Phase 6, la case "Commandes HEAD" était encore décochée
+avec la justification "pas de cible : Phase 3 --- servos tête --- pas
+encore écrite côté ESP32" --- **cette justification est obsolète**, la
+Phase 3 est terminée depuis plusieurs sessions (`HeadController` existe
+et fonctionne). C'était donc du travail concret et prêt à faire, pas
+une proposition à choisir : branché directement.
+
+### Ce qui a été fait
+
+- `pi/rover_core/core.py` : `RoverCore.look(pitch_deg, yaw_deg)` --
+  simple relais vers `HEAD pitch=... yaw=...`, sans aucune logique de
+  machine à états (contrairement à `move()`) puisque regarder autour de
+  soi n'a pas d'implication de sécurité physique, et que l'ESP32 gate
+  déjà lui-même sur `ACTIVE` (`main.cpp`).
+- `pi/rover_control/server.py` : le message WebSocket entrant accepte
+  désormais des champs optionnels `head_pitch`/`head_yaw` en plus de
+  `velocity`/`rotation` --- absents, rien ne bouge côté tête (un client
+  plus ancien ou volontairement "déplacement seul" continue de
+  fonctionner sans modification).
+- `index.html` : un second pad tactile (orange, coin opposé à la vidéo)
+  pour le regard, plus le stick droit d'une manette si branchée
+  (convention gauche=déplacement/droite=regard). Bornes alignées sur
+  `head_config.h` (`±30°` pitch, `±90°` yaw) --- l'ESP32 re-clampe de
+  toute façon. Relâcher le pad ramène le regard au centre (0,0).
+
+**Validé de bout en bout en conditions réelles** : client WebSocket
+authentifié connecté contre l'ESP32 physique, message
+`{velocity:0, rotation:0, head_pitch:15, head_yaw:-20}` envoyé --- log
+du lien série confirmant `-> HEAD pitch=15.0 yaw=-20.0` réellement
+écrit sur le port. Un test unitaire ajouté (`RoverCore.look()` ne
+touche pas la machine à états, contrairement à `move()`). **37/37**
+tests Python passent après ajout.
+
+### Ce qui n'est PAS validé
+
+- Pas testé au doigt sur un vrai téléphone ni avec une vraie manette
+  branchée (même limite déjà connue pour le joystick de déplacement).
+- Rendu du mouvement de tête lui-même non re-vérifié (déjà validé côté
+  ESP32 en Phase 3), seul le chemin de bout en bout côté Pi est
+  nouveau ici.
+
+### État actuel
+
+- Phase 6 : "Commandes HEAD" coché. Reste ouvert dans cette phase :
+  accès distant sécurisé (VPN).
+
+### Prochaines étapes
+
+- Reste identique aux sessions précédentes (matériel, Raspberry Pi
+  réel, caméra, MQTT contre un vrai broker, buzzer audible).
+- VPN (Phase 6) serait la prochaine pièce manquante de cette phase si
+  on continue dans cet ordre.

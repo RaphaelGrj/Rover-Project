@@ -1,5 +1,5 @@
 """aiohttp app: serves the control page and relays joystick/gamepad
-input to RoverCore.move() over a WebSocket.
+input to RoverCore.move()/look() over a WebSocket.
 
 Single static HTML page, no JS framework, no build step
 (ARCHITECTURE_AND_ROADMAP.md §27 rule 10, "ne pas ajouter une
@@ -109,6 +109,18 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 logger.warning("ignoring malformed control message: %r", msg.data)
                 continue
             core.move(velocity, rotation)
+
+            # head_pitch/head_yaw are optional -- older clients (or a
+            # deliberately move-only one) that never send them just
+            # never move the head, rather than being rejected outright.
+            if "head_pitch" in data or "head_yaw" in data:
+                try:
+                    head_pitch = float(data.get("head_pitch", 0.0))
+                    head_yaw = float(data.get("head_yaw", 0.0))
+                except (ValueError, TypeError):
+                    logger.warning("ignoring malformed head look message: %r", msg.data)
+                else:
+                    core.look(head_pitch, head_yaw)
     finally:
         core.remove_listener(on_esp32_frame)
         logger.info("control client disconnected (%s)", request.remote)

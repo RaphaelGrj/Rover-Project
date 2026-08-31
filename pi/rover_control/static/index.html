@@ -78,6 +78,24 @@
   #video-feed { width: 100%; height: 100%; object-fit: cover; }
   #video-feed[hidden] { display: none; }
   #video-unavailable { font-size: 0.75em; color: #7d8590; text-align: center; padding: 0.5em; }
+  /* Head-look pad: smaller than the drive joystick and in the opposite
+     corner -- a secondary control, not the primary one. */
+  #head-pad-base {
+    position: fixed; bottom: 3.2em; left: 0.6em;
+    width: min(32vw, 140px); height: min(32vw, 140px);
+    border-radius: 50%;
+    background: #161b22;
+    border: 2px solid #30363d;
+  }
+  #head-pad-stick {
+    position: absolute; left: 50%; top: 50%;
+    width: 34%; height: 34%;
+    border-radius: 50%;
+    background: #d29922;
+    transform: translate(-50%, -50%);
+    transition: none;
+  }
+  #head-pad-stick.releasing { transition: transform 120ms ease-out; }
 </style>
 </head>
 <body>
@@ -97,7 +115,10 @@
     <div id="joystick-stick"></div>
   </div>
 </div>
-<div id="hint">Manette (Gamepad API) prioritaire si branchée, sinon joystick tactile.</div>
+<div id="head-pad-base">
+  <div id="head-pad-stick"></div>
+</div>
+<div id="hint">Manette (Gamepad API) prioritaire si branchée, sinon joysticks tactiles. Stick droit / pad orange = regard.</div>
 
 <script>
 "use strict";
@@ -107,6 +128,11 @@
 // just the UI's own ceiling, the firmware clamps again regardless.
 const MAX_VELOCITY_MPS = 0.3;
 const MAX_ROTATION_RAD_S = 1.5;
+// Mirrors ROVER_HEAD_PITCH_MIN/MAX_DEG and ROVER_HEAD_YAW_MIN/MAX_DEG
+// (esp32/include/head_config.h) -- the ESP32 clamps again regardless,
+// this just keeps the pad's range meaningful rather than mostly dead.
+const MAX_HEAD_PITCH_DEG = 30;
+const MAX_HEAD_YAW_DEG = 90;
 const SEND_PERIOD_MS = 100;
 const GAMEPAD_DEADZONE = 0.08;
 
@@ -114,6 +140,8 @@ const statusEl = document.getElementById("status");
 const statusTextEl = document.getElementById("status-text");
 const baseEl = document.getElementById("joystick-base");
 const stickEl = document.getElementById("joystick-stick");
+const headBaseEl = document.getElementById("head-pad-base");
+const headStickEl = document.getElementById("head-pad-stick");
 const behaviorStateEl = document.getElementById("behavior-state");
 const obstacleLineEl = document.getElementById("obstacle-line");
 const stateLineEl = document.getElementById("state-line");
@@ -236,9 +264,9 @@ function connect() {
 }
 connect();
 
-function sendCommand(velocity, rotation) {
+function sendCommand(velocity, rotation, headPitch, headYaw) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ velocity, rotation }));
+  ws.send(JSON.stringify({ velocity, rotation, head_pitch: headPitch, head_yaw: headYaw }));
 }
 
 // --- Touch/mouse joystick (Pointer Events: one API for both) ----------
@@ -286,7 +314,56 @@ function releaseStick(evt) {
 baseEl.addEventListener("pointerup", releaseStick);
 baseEl.addEventListener("pointercancel", releaseStick);
 
+// --- Touch/mouse head-look pad -- same pattern as the drive joystick
+// above, but its own pointer id so both can be dragged at once (eg. two
+// thumbs on a phone) instead of one stealing the other's pointer capture. ---
+
+let headTouchAxes = { x: 0, y: 0 };
+let headDragging = false;
+let activeHeadPointerId = null;
+
+function updateHeadStickVisual(x, y, releasing) {
+  headStickEl.classList.toggle("releasing", releasing);
+  const radiusPx = headBaseEl.clientWidth / 2 - headStickEl.clientWidth / 2;
+  headStickEl.style.transform =
+    `translate(calc(-50% + ${x * radiusPx}px), calc(-50% + ${y * radiusPx}px))`;
+}
+
+function setHeadTouchAxesFromEvent(evt) {
+  const rect = headBaseEl.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const radius = rect.width / 2;
+  let x = (evt.clientX - cx) / radius;
+  let y = (evt.clientY - cy) / radius;
+  const mag = Math.hypot(x, y);
+  if (mag > 1) { x /= mag; y /= mag; }
+  headTouchAxes = { x, y };
+  updateHeadStickVisual(x, y, false);
+}
+
+headBaseEl.addEventListener("pointerdown", (evt) => {
+  headDragging = true;
+  activeHeadPointerId = evt.pointerId;
+  headBaseEl.setPointerCapture(evt.pointerId);
+  setHeadTouchAxesFromEvent(evt);
+});
+headBaseEl.addEventListener("pointermove", (evt) => {
+  if (headDragging && evt.pointerId === activeHeadPointerId) setHeadTouchAxesFromEvent(evt);
+});
+function releaseHeadStick(evt) {
+  if (evt.pointerId !== activeHeadPointerId) return;
+  headDragging = false;
+  activeHeadPointerId = null;
+  headTouchAxes = { x: 0, y: 0 };  // spring back to looking straight ahead
+  updateHeadStickVisual(0, 0, true);
+}
+headBaseEl.addEventListener("pointerup", releaseHeadStick);
+headBaseEl.addEventListener("pointercancel", releaseHeadStick);
+
 // --- Gamepad API (physical controller), preferred over touch when present ---
+// Standard mapping: axes 0/1 = left stick (drive), 2/3 = right stick
+// (head look) -- the common left-drive/right-look convention.
 
 function readGamepadAxes() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -296,7 +373,11 @@ function readGamepadAxes() {
     let y = pad.axes[1] || 0;
     if (Math.abs(x) < GAMEPAD_DEADZONE) x = 0;
     if (Math.abs(y) < GAMEPAD_DEADZONE) y = 0;
-    return { x, y };
+    let headX = pad.axes[2] || 0;
+    let headY = pad.axes[3] || 0;
+    if (Math.abs(headX) < GAMEPAD_DEADZONE) headX = 0;
+    if (Math.abs(headY) < GAMEPAD_DEADZONE) headY = 0;
+    return { x, y, headX, headY };
   }
   return null;
 }
@@ -307,11 +388,17 @@ function readGamepadAxes() {
 // this keeps intent unambiguous for anyone watching the link). ---
 
 setInterval(() => {
-  const gamepadAxes = readGamepadAxes();
-  const axes = gamepadAxes || touchAxes;
+  const gamepad = readGamepadAxes();
+  const axes = gamepad || touchAxes;
   const velocity = -axes.y * MAX_VELOCITY_MPS; // stick up (negative y) = forward
   const rotation = axes.x * MAX_ROTATION_RAD_S;
-  sendCommand(velocity, rotation);
+
+  const headAxesX = gamepad ? gamepad.headX : headTouchAxes.x;
+  const headAxesY = gamepad ? gamepad.headY : headTouchAxes.y;
+  const headPitch = -headAxesY * MAX_HEAD_PITCH_DEG; // stick/pad up = look up
+  const headYaw = headAxesX * MAX_HEAD_YAW_DEG;
+
+  sendCommand(velocity, rotation, headPitch, headYaw);
 }, SEND_PERIOD_MS);
 </script>
 </body>

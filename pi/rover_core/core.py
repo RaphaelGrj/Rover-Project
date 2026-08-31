@@ -222,6 +222,14 @@ class RoverCore:
         elif self._client_count > 0:
             self._set_state(RoverBehaviorState.INTERACTING)
 
+    def look(self, pitch_deg: float, yaw_deg: float) -> None:
+        """HEAD pitch/yaw (esp32/lib/head/HeadController.h) -- purely a
+        pass-through, no behavior-state or safety logic of its own:
+        unlike MOVE, looking around has no physical safety implication,
+        the ESP32 already soft-limits and smooths it independently
+        (head_config.h), and it's already gated on ACTIVE there too."""
+        self.link.send("HEAD", {"pitch": f"{pitch_deg:.1f}", "yaw": f"{yaw_deg:.1f}"})
+
     async def client_connected(self) -> None:
         """A control client just took over. Explicitly resume (covers
         both "was already SAFE from a previous disconnect" and "first
