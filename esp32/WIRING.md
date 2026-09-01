@@ -46,14 +46,14 @@
 | Moteur gauche IN2 (arrière)       | GPIO26    | DRV8833, idem |
 | Moteur droit IN1 (avant)          | GPIO33    | DRV8833 |
 | Moteur droit IN2 (arrière)        | GPIO32    | DRV8833 |
-| DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard |
+| DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard. ⚠ **Confirmé bloquant en test matériel (2026-09-01)** : sur le breakout utilisé (pins `SLEEP`/`FAULT`/`OUT1-4`/`IN1-4`/`VCC`/`GND`), `SLEEP` non câblé ne flotte pas vers un état actif par défaut --- le driver reste désactivé en permanence (0 A consommé, aucun moteur ne répond, quoi qu'envoient IN1-4) tant que cette broche n'est pas explicitement reliée au 3V3 |
 | Bouton E-stop                     | GPIO25    | `INPUT_PULLUP` (voir `esp32/lib/safety/EStop.h`) --- bouton entre cette broche et GND, pressé = LOW. **Non câblé pour l'instant** : la broche flotte HIGH (relâché) grâce au pull-up interne, le firmware fonctionne à l'identique avec ou sans bouton physique |
 | Diviseur de tension batterie (ADC) | GPIO14   | ⚠ Désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`) tant que le diviseur n'est pas câblé/calibré. GPIO14 est en ADC2, illisible pendant que le WiFi est actif (OTA) --- à reconsidérer si les deux fonctions sont utilisées en même temps |
 | Buzzer (bip sonore)                | GPIO12    | ⚠ Strapping, voir "Pins évitées volontairement" ci-dessus --- `esp32/lib/sound/Buzzer.h`. Buzzer passif ou actif, les deux fonctionnent avec `tone()`/`noTone()` pour un simple signal on/off rythmé |
-| Encodeur gauche A                 | GPIO34    | entrée seule (pas de pull interne, prévoir pull-up externe si besoin) |
-| Encodeur gauche B                 | GPIO35    | entrée seule |
-| Encodeur droit A                  | GPIO36    | entrée seule |
-| Encodeur droit B                  | GPIO39    | entrée seule |
+| Encodeur gauche A                 | GPIO34    | entrée seule, pas de pull interne --- ⚠ pull-up externe **requise** (voir note ci-dessous) |
+| Encodeur gauche B                 | GPIO35    | entrée seule, idem |
+| Encodeur droit A                  | GPIO36    | entrée seule, idem --- marqué `VP` (ou `SVP`) sur le silkscreen de la plupart des devkits 30 broches, pas "36" |
+| Encodeur droit B                  | GPIO39    | entrée seule, idem --- marqué `VN` (ou `SVN`) sur le silkscreen, pas "39" |
 | Servo tête Pitch                  | GPIO13    | sortie LEDC (PWM servo) |
 | Servo tête Yaw                    | GPIO19    | sortie LEDC (PWM servo) |
 | Écran ST7789 SCLK                 | GPIO18    | SPI logiciel/matriciel |
@@ -71,6 +71,38 @@ Les deux `VL53L0X` partagent la même adresse I2C par défaut (0x29) : le
 firmware maintient le droit en reset via son `XSHUT` pendant qu'il
 réadresse le gauche (0x30) au démarrage, puis relâche le droit qui reste
 sur 0x29 (implémenté en Phase 4, `esp32/lib/sensors/DistanceSensor.cpp`).
+
+------------------------------------------------------------------------
+
+## Câblage moteur → encodeur (N20 6 fils)
+
+Chaque moteur N20 utilisé a 6 fils : 2 pour la puissance (vers le driver,
+voir tableau ci-dessus), 4 pour l'encodeur magnétique intégré. Code
+couleur utilisé (convention la plus courante pour ce type de moteur,
+tension VCC/GND vérifiée au multimètre sur le matériel réel du robot ---
+l'assignation exacte canal A/canal B entre jaune/vert n'a pas de
+conséquence si elle est inversée, ça inverse juste le signe du comptage) :
+
+| Fil    | Fonction          | Destination |
+|--------|-------------------|-------------|
+| Rouge  | Moteur +          | `OUT1`/`OUT3` du driver (selon le moteur) |
+| Noir   | Moteur −          | `OUT2`/`OUT4` du driver |
+| Blanc  | Encodeur VCC      | **3V3 ESP32** (pas le VCC 6V du driver --- les GPIO ne tolèrent pas le 5-6V) |
+| Bleu   | Encodeur GND      | GND commun (ESP32/driver/batterie) |
+| Jaune  | Encodeur canal A  | GPIO34 (gauche) / GPIO36 = `VP` (droit) |
+| Vert   | Encodeur canal B  | GPIO35 (gauche) / GPIO39 = `VN` (droit) |
+
+⚠ **Pull-up externe probablement requise sur les 4 fils de signal
+(jaune/vert des deux moteurs).** Observé en test matériel (2026-09-01) :
+avec VCC (3V3)/GND encodeur vérifiés corrects au multimètre et les
+moteurs confirmés tournants physiquement, les deux encodeurs restaient
+muets (0 tick compté) --- hypothèse retenue : GPIO34/35/36/39 (entrée
+seule, aucun pull interne sur l'ESP32) et la carte encodeur de ce modèle
+probablement en sortie collecteur ouvert plutôt que push-pull. Correctif
+proposé, **pas encore vérifié comme ayant résolu le problème** : une
+résistance de **10 kΩ entre chaque fil de signal et le 3V3** (en
+parallèle du fil existant vers le GPIO, pas en série) --- 4 résistances
+au total. À mettre à jour dès confirmation.
 
 Adresses I2C par défaut des autres capteurs Phase 4 (non confirmées sur
 le matériel réel, valeurs des bibliothèques utilisées) : MPU6050 = 0x68

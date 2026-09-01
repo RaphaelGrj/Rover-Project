@@ -1784,3 +1784,342 @@ stable, mais jamais exécutée ni vérifiée par cette session.
   disponibles.
 - Reste identique par ailleurs : matériel Phase 2/4, caméra, MQTT
   contre un vrai broker, buzzer audible, systemd sur Pi réel.
+
+------------------------------------------------------------------------
+
+## Session du 2026-09-01 --- Premier bring-up moteurs/encodeurs réels (Phase 2) --- instabilité alimentation non résolue
+
+### Contexte
+
+Châssis imprimé et pièces reçues (VL53L0X/borniers, moteurs N20+DRV8833)
+--- déblocage du point bloquant documenté en mémoire depuis le
+2026-08-31. Décision utilisateur : commencer par moteurs + PID plutôt
+que les capteurs de distance. Session menée entièrement en interactif
+(câblage réel par l'utilisateur, guidé pas à pas), pas de nouveau code
+firmware écrit --- uniquement du bring-up matériel et deux petits
+scripts de test ajoutés côté outillage.
+
+### Outillage ajouté
+
+- `pi/tools/motor_test.py` : console interactive (`cmd.Cmd`) pour piloter
+  `MOVE`/`SYSTEM set_pid`/`get_pid`/`resume` en direct sur le port série
+  réel, avec heartbeat automatique en tâche de fond. Prévu pour un usage
+  humain au clavier (pas utilisé directement cette session --- les
+  outils de l'assistant ne peuvent pas piloter un terminal interactif),
+  mais reste l'outil de référence pour la suite.
+- Scripts de test à séquence fixe (non commités, scratch) utilisés pour
+  cette session : ping/diag seul, et un cycle `resume` + `HEARTBEAT` en
+  boucle + `MOVE` 3s + `stop` + `diag`, avec capture de toutes les
+  trames reçues.
+
+### Bugs matériels réels trouvés et corrigés
+
+1. **`SLEEP` du DRV8833 non câblé = driver totalement désactivé.**
+   0 A consommé, aucun moteur ne répond à `IN1-4` quel que soit le
+   contenu de la trame `MOVE`. Confirmé par mesure directe (6V présents
+   sur `VCC`/`GND` du driver, 0V sur `SLEEP`). Corrigé en reliant
+   `SLEEP` au 3V3 de l'ESP32 --- déjà documenté comme le câblage prévu
+   dans `WIRING.md`, mais le risque concret (driver mort si oublié)
+   n'était pas explicite avant ; renforcé dans `WIRING.md` maintenant.
+
+2. **Encodeurs totalement muets (0 tick) malgré des moteurs qui
+   tournent physiquement.** VCC (blanc → 3V3) et GND (bleu) de
+   l'encodeur vérifiés corrects au multimètre, signal (jaune/vert) sur
+   les bonnes broches (GPIO34/35 gauche, GPIO36=`VP`/GPIO39=`VN` droite
+   --- silkscreen différent du numéro GPIO sur ce devkit 30 broches,
+   piège documenté maintenant dans `WIRING.md`). Cause retenue :
+   GPIO34-39 sont entrée seule sans pull interne sur l'ESP32, et la
+   carte encodeur de ce moteur est probablement en sortie collecteur
+   ouvert. **Corrigé en ajoutant une résistance 10kΩ entre chaque fil de
+   signal (jaune, vert, sur les deux moteurs) et le 3V3** --- 4
+   résistances au total, en parallèle du fil existant vers le GPIO.
+   Confirmé : les deux encodeurs comptent des ticks après ce correctif.
+
+3. **Premier board DRV8833 : canal B (IN3/IN4→OUT3/OUT4) défaillant.**
+   Le moteur droit tournait à peine (~50x plus lent que le gauche en
+   télémétrie, confirmé visuellement). Isolé par élimination : (a) le
+   moteur/câble droit fonctionnent bien une fois branchés sur OUT1/OUT2
+   (le canal qui marche), (b) le firmware est parfaitement symétrique
+   entre les deux canaux (`MotorDriver`/`DriveController` génériques,
+   seuls les numéros de pin changent), (c) échanger quel moteur est
+   câblé sur quel canal a fait "suivre" la lenteur au canal, pas au
+   moteur --- **la lenteur suit le canal B, peu importe le moteur
+   branché dessus**. Mesure finale au multimètre pendant un `MOVE`
+   actif : `OUT1`=4.5V/`OUT2`=2V (canal A, cohérent avec une PWM avant
+   normale) contre `OUT3`=0.1V/`OUT4`=5.5V (canal B, inversé et anormal
+   --- `OUT4` presque au max alors qu'il ne devrait pas être piloté dans
+   ce sens). Conclusion : jambe de pont en H endommagée sur ce board
+   précis, probablement pendant la période où `SLEEP` a tourné flottant
+   (bug #1 ci-dessus). **Remplacé par un second board DRV8833** que
+   l'utilisateur avait en réserve --- les deux canaux sont redevenus
+   comparables en vitesse après remplacement (télémétrie ~0.5-0.9 des
+   deux côtés, contre 25-30 vs 0.5 avant).
+
+### Problème non résolu en fin de session : instabilité ESP32 sous charge moteur
+
+Avec le second board DRV8833 en place (tout le câblage vérifié bon un
+par un : GND seul, +IN1/IN2, +IN3/IN4, +SLEEP, chaque étape testée
+stable au repos), l'ESP32 **redémarre en boucle** (`POWERON_RESET`
+répétés) dès qu'une commande `MOVE` réelle fait commuter le driver sous
+charge réelle (VCC 6V actif + PWM effectif) --- pas seulement au repos
+avec `SLEEP` câblé. Isolation faite cette session :
+
+- **6V seul (VCC/GND driver, sans aucun fil de commande vers l'ESP32)**
+  : stable. Le 6V en lui-même, avec une masse commune correcte, n'est
+  pas le problème.
+- **6V + IN1-4 (sans `SLEEP`)** : stable.
+- **6V + IN1-4 + `SLEEP`** : un sursaut de redémarrages au moment de la
+  connexion, puis stabilisation --- `ping`/`diag` fonctionnent
+  normalement ensuite tant qu'aucun `MOVE` n'est envoyé.
+- **6V + câblage complet + `MOVE` réel (PWM sous charge)** : redémarre
+  en boucle de façon persistante, ne se stabilise pas tout seul cette
+  fois.
+
+Un condensateur électrolytique 470µF (+ vers `VCC`, − vers `GND`,
+polarité vérifiée correcte, ni chaud ni gonflé) a été essayé sur
+l'alimentation du driver dans l'espoir de stabiliser la tension --- **a
+semblé aggraver le problème sur le moment, mais retirer le condensateur
+n'a pas fait revenir la stabilité non plus**, donc le condensateur
+n'est probablement pas la cause réelle, juste une coïncidence de timing
+avec une manipulation de câblage qui a dégradé un contact. Retiré par
+prudence.
+
+Hypothèse retenue (non vérifiée faute d'oscilloscope) : la masse
+commune entre le domaine batterie/driver (6V) et le domaine
+ESP32/USB/PC n'est pas assez robuste sur cette breadboard pour absorber
+les pics de courant de commutation PWM sans perturber transitoirement
+l'alimentation logique de l'ESP32 (brownout). Un phénomène apparenté a
+aussi été observé côté encodeur gauche dans le même test : la
+télémétrie continuait de rapporter des vitesses non nulles alors que le
+moteur gauche s'était arrêté net après un quart de tour (silencieux,
+axe libre à la main --- pas un blocage mécanique) --- hypothèse : du
+bruit de commutation capté par le fil de signal non blindé fait croire
+au PID que la roue va déjà trop vite, qui coupe la puissance en
+conséquence. Piste proposée mais pas testée : écarter physiquement les
+fils de signal encodeur des fils de puissance moteur sur la breadboard.
+
+### Ce qui n'est PAS validé
+
+- Aucune commande `MOVE` n'a pu tourner de façon stable et prolongée
+  sur le second board --- la boucle fermée PID sur matériel réel reste
+  donc à confirmer une fois l'instabilité résolue.
+- La calibration des gains PID et de `ROVER_ENCODER_TICKS_PER_REV`/
+  `ROVER_WHEEL_DIAMETER_M` (`motion_config.h`) n'a pas pu être abordée
+  --- les valeurs de vitesse observées avant l'instabilité (25-30 avec
+  le premier board, 0.5-0.9 avec le second) ne sont pas physiquement
+  plausibles avec les constantes placeholder actuelles, à recalibrer
+  une fois le mouvement stable.
+- Servos tête, VL53L0X, MPU6050, BME688 : toujours non câblés, hors
+  périmètre de cette session.
+
+### État actuel
+
+- **Phase 2 (moteurs/PID)** : premier bring-up matériel réel commencé.
+  Trois bugs matériels réels trouvés et corrigés (SLEEP non câblé,
+  encodeurs sans pull-up, board DRV8833 n°1 avec canal B défaillant).
+  Un problème d'instabilité sous charge **reste ouvert et bloque tout
+  test `MOVE` prolongé** --- pas encore de mouvement fiable sur robot
+  physique, ni de calibration PID.
+- `esp32/WIRING.md` mis à jour avec le code couleur moteur→encodeur
+  confirmé (VCC/GND vérifiés au multimètre), la nécessité des pull-up
+  externes 10kΩ, l'avertissement `SLEEP` renforcé, et le nommage
+  `VP`/`VN` du devkit pour GPIO36/39.
+
+### Prochaines étapes
+
+1. **Résoudre l'instabilité sous charge** avant toute autre chose sur
+   Phase 2 --- pistes : masse en étoile/fils de masse plus épais entre
+   domaine batterie et domaine ESP32, oscilloscope si disponible pour
+   voir la forme d'onde réelle sur `VCC`/`GND` pendant un `MOVE`, ou
+   passage à un câblage soudé (moins de points de contact marginal
+   qu'une breadboard) au moins pour l'alimentation et `SLEEP`.
+2. Une fois stable : écarter/reblinder les fils encodeur gauche pour
+   vérifier l'hypothèse de bruit PWM, puis calibrer PID et géométrie
+   roue contre le matériel réel.
+3. Reste identique par ailleurs : servos tête, VL53L0X/MPU6050/BME688,
+   Raspberry Pi, caméra, MQTT contre un vrai broker.
+
+------------------------------------------------------------------------
+
+## Session du 2026-09-01 (suite) --- Chasse à l'instabilité sous charge --- PAUSE, session interrompue en plein diagnostic
+
+### Contexte
+
+Suite directe de la session précédente le même jour : l'ESP32
+redémarrait en boucle (`POWERON_RESET` répétés) dès qu'une commande
+`MOVE` faisait vraiment commuter le second board DRV8833 sous charge.
+Demande explicite de l'utilisateur : "on continue, on résout ce
+problème" --- session longue, très itérative, entièrement du
+diagnostic matériel guidé à distance (mesures multimètre faites par
+l'utilisateur, tests relancés par l'assistant). **Interrompue par
+l'utilisateur en cours de diagnostic** ("on tourne en rond ... je fais
+une pause"), avec consigne explicite de tout noter pour reprendre
+facilement à un niveau d'effort plus élevé (ou sur Opus) la prochaine
+fois. Ce qui suit est donc un état intermédiaire, pas une conclusion.
+
+### Résultats fermes de cette session (à considérer comme acquis)
+
+1. **Le câble USB de l'ESP32 était défectueux** --- contact
+   intermittent, cause probable d'une bonne partie de l'instabilité
+   chassée pendant des heures. Remplacé par un second câble : boot
+   parfaitement stable au repos (0 reset sur 6s de test passif,
+   confirmé plusieurs fois), alors qu'avec l'ancien câble le même test
+   montrait 1 à 5 redémarrages selon les essais. **Toujours vérifier le
+   câble USB en premier** si un ESP32 redémarre de façon erratique sans
+   raison électrique évidente.
+2. **La télémétrie encodeur (pull-up 10kΩ, voir session précédente)
+   est fiable une fois le câblage électriquement sain** --- plusieurs
+   fois cette session, `left_speed`/`right_speed` ont correspondu
+   exactement à ce que l'utilisateur observait à l'œil (moteur immobile
+   → 0, moteur qui tourne fort → valeur élevée et stable). Quand ça ne
+   correspond pas (télémétrie non nulle mais moteur immobile, ou
+   l'inverse), c'est un signal fiable qu'il y a un vrai problème
+   électrique ailleurs (bruit, mauvais contact) --- ne pas l'ignorer.
+3. **Un condensateur céramique 100nF (marquage "104") + un fil de masse
+   dédié court entre `GND` du driver et `GND` de l'ESP32** ont
+   complètement stabilisé le boot **au repos**, mais **pas sous
+   charge** (`MOVE` actif) --- ajouter ensuite un électrolytique 470µF
+   en parallèle n'a pas amélioré la situation sous charge. Cette
+   combinaison reste une bonne pratique de découplage à garder, mais ne
+   suffit pas seule à expliquer/résoudre l'instabilité sous charge
+   observée ce soir-là (qui s'est révélée être en bonne partie le câble
+   USB, cf. point 1).
+4. **Deux boards DRV8833 différents ont chacun montré un canal
+   électriquement faible/mort**, sur des canaux différents :
+   - Board 1 (le tout premier utilisé) : canal B (`IN3`/`IN4`→
+     `OUT3`/`OUT4`) mort --- `OUT3`≈0.1V / `OUT4`≈5.5V mesurés pendant
+     un `MOVE` actif (anormal, `OUT4` ne devrait pas être proche du
+     max). Son canal A (`IN1`/`IN2`→`OUT1`/`OUT2`) fonctionnait très
+     bien (télémétrie ~25-30 en continu, cohérent avec l'observation
+     visuelle).
+   - Board 2 (le remplaçant) : canal A faible (pas mort, mais très en
+     dessous du canal B du même board --- ~0.5-0.56 contre ~23 en
+     télémétrie, confirmé par observation visuelle à plusieurs
+     reprises). Continuité GPIO27→`IN1` et GPIO26→`IN2` vérifiée bonne
+     (0 ohm) --- donc pas un fil coupé, plutôt un souci interne au
+     board (silicium ou pastille de soudure) ou un phénomène pas
+     encore identifié.
+   - Dans les deux cas, un test d'échange (le moteur/câble qui
+     fonctionne bien sur un canal reste faible/mort une fois déplacé
+     sur l'autre canal, et vice versa) a confirmé que le défaut suit le
+     **canal**, pas le moteur ni le câble.
+5. **Solution testée : utiliser les deux boards en même temps**, chacun
+   sur son canal qui fonctionne (board 1 canal A → moteur gauche,
+   board 2 canal B → moteur droit, câblage détaillé donné à
+   l'utilisateur, aucun changement de firmware nécessaire --- les GPIO
+   gardent les mêmes rôles). **N'a PAS donné le résultat espéré** : une
+   fois les deux boards branchés ensemble (VCC/GND partagés), les deux
+   canaux qui fonctionnaient très bien individuellement (~25-30 et ~23)
+   se sont retrouvés tous les deux dégradés (gauche totalement mort à
+   0, droit tombé à ~0.6-0.9) --- voir hypothèses ci-dessous.
+
+### Point où le diagnostic s'est arrêté (à reprendre ici)
+
+Avec les deux boards branchés ensemble :
+- `SLEEP` du board 1 vérifié correct (~3.3V).
+- `VCC` vérifié à 6V sur **les deux** boards pendant un `MOVE` actif
+  (donc pas un problème évident d'alimentation insuffisante au niveau
+  tension, même si la capacité en courant sous charge combinée n'a pas
+  été mesurée directement).
+- Mesure `OUT1`/`OUT2` du board 1 (canal gauche, censé être le "bon"
+  canal de ce board) pendant un `MOVE` actif : **`OUT1`=4.95V,
+  `OUT2`=6.2V** --- `OUT2` est **plus haut que `VCC` lui-même**, ce qui
+  est électriquement impossible pour une sortie de pont en H saine.
+  C'est la dernière mesure prise avant la pause.
+
+**Hypothèses non tranchées pour cette dernière anomalie** (à
+investiguer en premier à la reprise) :
+1. Le board 1, dont le canal A fonctionnait très bien plus tôt dans la
+   soirée, s'est peut-être dégradé/endommagé pendant toute la
+   manipulation de ce soir (débranchements répétés, ou dommage
+   électrique à un moment donné) --- comme pour le canal B du même
+   board découvert mort plus tôt.
+2. Le fait de partager `VCC`/`GND` entre deux boards distincts sur une
+   breadboard déjà fatiguée (beaucoup de points de contact utilisés/
+   réutilisés ce soir) pourrait fausser la référence de masse locale et
+   donner une lecture au multimètre qui n'est pas la vraie tension de
+   sortie du board --- un artefact de mesure plutôt qu'un vrai défaut.
+3. Distinguer les deux : **retester le board 1 tout seul**, sans le
+   board 2 branché du tout (débrancher entièrement `VCC`/`GND`/`IN3`/
+   `IN4`/`SLEEP`/`OUT3`/`OUT4` du board 2), exactement comme la toute
+   première configuration qui fonctionnait bien ce soir. C'est
+   l'instruction donnée à l'utilisateur juste avant la pause --- non
+   exécutée, à faire en premier à la reprise. L'utilisateur a dit
+   vouloir remettre "une seule board comme avant" pendant la pause,
+   donc ce test aura peut-être déjà una réponse partielle à la reprise
+   de session (vérifier ce que l'utilisateur a effectivement fait entre
+   les deux sessions avant de repartir sur les hypothèses ci-dessus).
+
+### Autres pistes explorées et écartées cette session (ne pas les rejouer sans nouvelle info)
+
+- Réglage de courant/mode CC de l'alim de labo : l'alim reste en mode
+  CV (pas de limitation de courant active) pendant les tests, donc pas
+  la cause de l'instabilité sous charge chassée ce soir.
+- Vitesse cible plus faible (`velocity=0.02` au lieu de 0.15) pour
+  réduire l'appel de courant au démarrage moteur : n'a rien changé au
+  comportement de reset --- écarte l'hypothèse "pic de courant au
+  démarrage moteur" comme cause de cette instabilité précise (mais
+  cette hypothèse a été testée **avant** la découverte du câble USB
+  défectueux, donc en présence d'un facteur confondant --- à retester
+  si un nouveau souci d'instabilité apparaît une fois le câble USB
+  écarté).
+- Reconstruction complète du câblage sur une zone neuve de breadboard :
+  n'a paradoxalement rien amélioré sur le moment (fait avant la
+  découverte du câble USB) --- l'usure de la breadboard n'était donc
+  pas la cause principale de cette instabilité-là, même si plusieurs
+  connexions individuelles se sont bel et bien révélées mauvaises
+  pendant la soirée (`VCC` mesuré une fois à 4.09V-4.5V au lieu de 6V
+  sur le second board, jamais totalement élucidé s'il s'agissait d'un
+  mauvais contact isolé ou de quelque chose de plus systématique ---
+  autre point à vérifier en premier à la reprise avec un multimètre
+  posé en continu sur `VCC` pendant qu'on manipule le câblage, plutôt
+  qu'une mesure ponctuelle).
+
+### Outillage ajouté
+
+`pi/tools/move_diagnostic.py` (nouveau, committé) : consolide les
+scripts de test à séquence fixe utilisés en boucle toute la session
+(`--move` pour piloter `HEARTBEAT`+`resume`+`MOVE` pendant une durée
+donnée, sans `--move` pour un test d'écoute passive) --- utile pour
+détecter un redémarrage en boucle sans avoir à relire le flux série brut
+(compte le nombre de trames `SYSTEM ... state=BOOT` reçues). Remplace
+les scripts ad hoc utilisés cette session (non committés, scratch).
+Usage : `python -m tools.move_diagnostic --port COM10` (écoute 6s) ou
+`python -m tools.move_diagnostic --port COM10 --move --duration 10`
+(pilote un `MOVE` pendant 10s, laisse le temps de mesurer au
+multimètre).
+
+### État actuel
+
+- **Phase 2 (moteurs/PID) : toujours pas de mouvement fiable et
+  prolongé obtenu sur les deux moteurs simultanément.** Progrès réels
+  cette session (câble USB, découplage driver, méthode de diagnostic
+  par élimination bien rodée) mais le problème de fond (un canal faible
+  par board DRV8833, aggravé plutôt qu'amélioré en combinant deux
+  boards) n'est pas résolu.
+- L'utilisateur a explicitement demandé une pause et va remettre un
+  câblage à un seul board pendant celle-ci --- **vérifier l'état
+  physique du câblage en tout début de prochaine session avant de
+  supposer quoi que ce soit** (ne pas repartir des hypothèses ci-dessus
+  sans confirmer d'abord ce qui est réellement branché).
+
+### Prochaines étapes (dans l'ordre recommandé)
+
+1. Confirmer l'état du câblage actuel (combien de boards branchés,
+   lequel/lesquels) avant toute nouvelle hypothèse.
+2. Si un seul board est en place : `python -m tools.move_diagnostic
+   --port COM10` (repos) puis `--move` (charge), comparer au dernier
+   résultat connu pour ce board/canal.
+3. Si le comportement diffère de ce qui est documenté ci-dessus pour ce
+   board, repartir de zéro sur le diagnostic plutôt que de supposer que
+   les causes de ce soir s'appliquent encore.
+4. Envisager, si la fragilité de la breadboard reste suspectée : souder
+   au moins les connexions `VCC`/`GND`/`SLEEP` du driver (celles qui
+   ont posé problème le plus souvent ce soir) plutôt que de continuer
+   sur breadboard pure pour ces points précis.
+5. Si un multimètre à enregistrement ou un oscilloscope devient
+   disponible, il permettrait de voir la vraie forme d'onde
+   `VCC`/`OUT1-4` pendant un `MOVE`, ce qu'un multimètre ponctuel ne
+   peut pas montrer (utile vu l'anomalie `OUT2`>`VCC` jamais élucidée).
+6. Reste identique par ailleurs : servos tête, VL53L0X/MPU6050/BME688,
+   Raspberry Pi, caméra, MQTT contre un vrai broker.
