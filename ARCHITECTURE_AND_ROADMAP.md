@@ -1116,7 +1116,11 @@ Objectif : donner des sens au robot.
 -   [x] MPU6050.
 -   [x] VL53L0X gauche.
 -   [x] VL53L0X droite.
--   [x] BME688.
+-   [x] BME280 (remplace le BME688 initialement prévu ici --- voir
+      PROGRESS.md 2026-09-02, le module reçu est en fait un BME280,
+      chip-id 0x60 confirmé au firmware puis par le lien d'achat, pas de
+      capteur de gaz sur cette pièce ; `EnvironmentSensor` adapté à
+      `Adafruit_BME280`, `gas_kohm` reste toujours à 0 en télémétrie).
 -   [x] Lecture périodique.
 -   [x] Gestion des erreurs.
 -   [x] Transmission STATE.
@@ -1131,8 +1135,9 @@ valeurs "indisponible"), pas que les capteurs eux-mêmes lisent des
 valeurs correctes. Deux bugs réels trouvés et corrigés pendant ce
 premier test (driver VL53L0X bloquant sur capteur absent ; buffers de
 trame trop petits tronquant `ERROR`/`STATE` en silence) -- voir
-PROGRESS.md pour le détail. Lecture effective des capteurs (une fois
-câblés) reste à valider.
+PROGRESS.md pour le détail. **Mise à jour 2026-09-02** : MPU6050 et
+BME280 câblés et validés sur matériel réel avec des valeurs cohérentes
+(voir PROGRESS.md) ; VL53L0X gauche/droite restent à câbler/valider.
 
 Résultat :
 

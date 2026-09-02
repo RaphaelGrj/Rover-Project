@@ -12,6 +12,24 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Capteurs Phase 4 (2026-09-02)** : premiers capteurs réels câblés et
+  validés. **MPU6050** : répond à `0x68`, valeurs cohérentes
+  (`accel_z≈-10.5`, proche de la gravité ; gyro quasi nul à l'arrêt).
+  **BME688 prévu → en réalité un BME280** reçu (chip-id lu `0x60` au lieu
+  de `0x61` attendu, confirmé par le lien d'achat) --- pas de capteur de
+  gaz sur cette pièce. `EnvironmentSensor` adapté pour utiliser
+  `Adafruit_BME280` au lieu de `Adafruit_BME680` (voir
+  `esp32/lib/sensors/EnvironmentSensor.{h,cpp}`, `platformio.ini`) ---
+  valeurs cohérentes obtenues (25.7°C, 45.4% humidité, 1019.7 hPa),
+  `gas_kohm` reste à 0 en permanence (pas de hardware pour ça). Adresse
+  renommée `ROVER_ENV_SENSOR_ADDRESS` (était `ROVER_BME688_ADDRESS`,
+  trompeur maintenant) dans `sensors_config.h`, fixée à `0x76`. **VL53L0X
+  gauche/droite pas encore câblés.**
+  Outillage bring-up ajouté au passage, réutilisable pour la suite :
+  `SYSTEM action=i2c_scan` (liste toutes les adresses qui répondent sur
+  le bus) et `action=bme_chip_id` (lit le registre chip-id brut 0xD0) ---
+  utile pour diagnostiquer n'importe quel futur capteur I2C récalcitrant
+  sans deviner à l'aveugle.
 - **Moteurs** : **mouvement stable et symétrique obtenu (2026-09-02)** ---
   `left_speed`/`right_speed` convergent tous les deux proprement sur la
   cible (0.15) et y restent, testé sur 12s sans oscillation ni dérive.
@@ -102,9 +120,13 @@
 6. Servos tête : câblage signal documenté (`WIRING.md`/`head_config.h`),
    mais pas encore testés sur matériel réel, et leur alimentation
    (partager le rail moteurs, pas l'ESP32) reste à ajouter à `WIRING.md`.
-7. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
-   VL53L0X/MPU6050/BME688, Raspberry Pi physique, caméra, MQTT contre un
-   vrai broker, buzzer audible, VPN en conditions réelles.
+7. Capteurs Phase 4 : MPU6050 et BME280 câblés et validés (2026-09-02,
+   voir ci-dessus) --- **VL53L0X gauche/droite restent à câbler**
+   (attention à la séquence `XSHUT` pour le ré-adressage I2C, voir
+   `WIRING.md`).
+8. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
+   Raspberry Pi physique, caméra, MQTT contre un vrai broker, buzzer
+   audible, VPN en conditions réelles.
 
 ------------------------------------------------------------------------
 

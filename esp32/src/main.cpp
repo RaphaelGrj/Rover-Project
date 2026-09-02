@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include "board_config.h"
 #include "motion_config.h"
 #include "sensors_config.h"
@@ -119,6 +120,47 @@ void onFrame(const RoverFrame& frame) {
         } else if (strcmp(action, "reset_ticks") == 0) {
             drive.resetRawTicks();
             protocol.send("STATE", "raw_ticks_left=0 raw_ticks_right=0");
+        } else if (strcmp(action, "i2c_scan") == 0) {
+            // Bring-up only: lists every address that ACKs a zero-length
+            // transaction (same check as I2CProbe.h's i2cDevicePresent),
+            // so a sensor's real address can be found directly instead of
+            // guessing from datasheet/library defaults one at a time.
+            char fields[128];
+            int len = snprintf(fields, sizeof(fields), "i2c_found=");
+            bool any = false;
+            for (uint8_t addr = 0x03; addr <= 0x77 && len < (int)sizeof(fields) - 6; addr++) {
+                Wire.beginTransmission(addr);
+                if (Wire.endTransmission() == 0) {
+                    len += snprintf(fields + len, sizeof(fields) - len, "%s0x%02X", any ? "," : "", addr);
+                    any = true;
+                }
+            }
+            if (!any) snprintf(fields + len, sizeof(fields) - len, "none");
+            protocol.send("STATE", fields);
+        } else if (strcmp(action, "bme_chip_id") == 0) {
+            // Bring-up only: reads the raw chip-id register (0xD0) the
+            // BME68x driver itself checks against 0x61 before accepting
+            // the sensor -- narrows "begin() fails" down to "wrong chip
+            // id" (clone/different part) vs. "register read itself
+            // failed" (bus/timing) vs. "soft-reset write failed" (can't
+            // tell apart from this alone, but chip_id=0xFF/no ACK here
+            // points at a bus-level problem beyond the simple probe).
+            Wire.beginTransmission(ROVER_ENV_SENSOR_ADDRESS);
+            Wire.write((uint8_t)0xD0);
+            uint8_t err = Wire.endTransmission(false);
+            char fields[48];
+            if (err != 0) {
+                snprintf(fields, sizeof(fields), "bme_chip_id_error=%d", err);
+            } else {
+                Wire.requestFrom((uint8_t)ROVER_ENV_SENSOR_ADDRESS, (uint8_t)1);
+                if (Wire.available()) {
+                    uint8_t id = Wire.read();
+                    snprintf(fields, sizeof(fields), "bme_chip_id=0x%02X", id);
+                } else {
+                    snprintf(fields, sizeof(fields), "bme_chip_id=no_response");
+                }
+            }
+            protocol.send("STATE", fields);
         }
         return;
     }

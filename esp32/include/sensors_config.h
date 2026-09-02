@@ -24,10 +24,15 @@ constexpr int ROVER_PIN_TOF_RIGHT_XSHUT = 4;
 constexpr uint8_t ROVER_TOF_DEFAULT_ADDRESS = 0x29;
 constexpr uint8_t ROVER_TOF_LEFT_ADDRESS = 0x30;
 
-// Library default for the BME680-compatible core registers; not yet
-// confirmed against the real board's SDO wiring (0x76 if SDO is tied
-// low instead) -- adjust here once the real BME688 is tested.
-constexpr uint8_t ROVER_BME688_ADDRESS = 0x77;
+// I2C address shared by the BME280 currently wired and a future BME688
+// swap-in (EnvironmentSensor auto-detects which one via chip-id, see
+// EnvironmentSensor.h). 2026-09-02: current board has no SDO pin,
+// address fixed on the board at 0x76 (confirmed via the purchase link
+// after chip-id 0x60 turned up instead of the BME688's 0x61) -- if a
+// future BME688 lands on 0x77 instead (SDO tied high), this needs
+// updating too, chip-id detection alone won't find it at the wrong
+// address.
+constexpr uint8_t ROVER_ENV_SENSOR_ADDRESS = 0x76;
 
 // MPU6050 factory default (AD0 pin low); adjust if the real wiring ties
 // AD0 high instead (0x69).
