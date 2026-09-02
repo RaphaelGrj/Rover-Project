@@ -121,9 +121,24 @@
    mais pas encore testés sur matériel réel, et leur alimentation
    (partager le rail moteurs, pas l'ESP32) reste à ajouter à `WIRING.md`.
 7. Capteurs Phase 4 : MPU6050 et BME280 câblés et validés (2026-09-02,
-   voir ci-dessus) --- **VL53L0X gauche/droite restent à câbler**
-   (attention à la séquence `XSHUT` pour le ré-adressage I2C, voir
-   `WIRING.md`).
+   voir ci-dessus) --- **VL53L0X gauche/droite restent à câbler, prévu
+   pour la prochaine session.** Câblage à faire (les deux **ensemble**,
+   pas un par un --- le firmware réadresse le gauche via `XSHUT` au boot,
+   il attend les deux) :
+   - `VCC`/`GND` des deux → 3V3/GND commun.
+   - `SDA`/`SCL` des deux → GPIO21/GPIO22 (bus I2C partagé avec
+     MPU6050/BME280, déjà câblés).
+   - `XSHUT` gauche → GPIO0 ; `XSHUT` droite → GPIO4.
+   - Placement physique décidé : **côte à côte en façade avant** (pas
+     un devant/un derrière --- le code `distance_left`/`distance_right`
+     et le réflexe d'arrêt obstacle du Pi supposent les deux tournés vers
+     l'avant).
+   - Une fois câblés : `SYSTEM action=i2c_scan` pour vérifier qu'ils
+     répondent (`0x29` avant réadressage), puis `move_diagnostic.py`
+     pour voir `distance_left`/`distance_right` en tandem avec
+     `SYSTEM action=bme_chip_id`-style outillage déjà en place si un
+     capteur pose souci (voir outillage ajouté ce soir : `i2c_scan`
+     réutilisable directement).
 8. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
    Raspberry Pi physique, caméra, MQTT contre un vrai broker, buzzer
    audible, VPN en conditions réelles.
@@ -132,6 +147,18 @@
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-02** --- Erreur de mapping fil→fonction encodeur trouvée et
+  corrigée (silkscreen PCB) ; asymétrie moteur/canal B diagnostiquée
+  (multimètre) puis vraie cause trouvée : sens de comptage encodeur
+  opposé au sens moteur sur les deux roues, corrigé en firmware
+  (`tickSign`) ; PID + géométrie roue première passe (ticks/tour mesuré
+  à 1073, gains 180/300/0 caractérisés 0.05-0.25, pas de roue montée
+  donc à refaire plus tard) ; MPU6050 et BME280 câblés et validés (le
+  BME688 prévu s'est avéré être un BME280, détection auto par chip-id
+  ajoutée pour un futur remplacement plug-and-play) ; outillage bring-up
+  I2C ajouté (`i2c_scan`, `bme_chip_id`, `raw_ticks`/`reset_ticks`) ;
+  VL53L0X pas encore câblés, plan de câblage documenté pour la prochaine
+  session (voir "Prochaines étapes" ci-dessus).
 - **2026-09-01 (aujourd'hui)** --- Bring-up moteurs résolu (9V) ; LED
   encodeur d'une roue trouvée éteinte puis rallumée en rebranchant les
   câbles (mauvais contact, pas un capteur mort --- correction en cours de
