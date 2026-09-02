@@ -12,22 +12,43 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
-- **Moteurs** : les 2 tournent ensemble (résolu 2026-09-01 --- marge de
-  tension/courant insuffisante à 6V sous charge combinée, réglé en
-  passant à 9V). À revalider vers 6-7V une fois les connexions soudées,
-  pour ne pas faire tourner les N20 en surrégime en continu.
-- **Encodeurs** : **aucun des deux n'est défectueux** --- correction par
-  rapport à la conclusion précédente (LED éteinte malgré 3.3V présents,
-  qui s'est avérée être un mauvais contact, pas un capteur mort). Chaque
-  encodeur s'allume normalement testé seul. **Problème restant, non
-  résolu à la pause** : les deux ne s'allument jamais ensemble, même
-  câblés sur deux fils 3V3 distincts --- c'est toujours le côté OUT3/OUT4
-  qui gagne, l'autre reste éteint dès que les deux sont branchés.
-  Suspecté : rail 3V3 de la breadboard dégradé à un endroit précis,
-  jamais confirmé. Prochaine session : tester en inversant l'ordre de
-  branchement, sinon déplacer sur un point neuf du rail, sinon souder.
-  Une fois réglé, reconfirmer avec `move_diagnostic.py --move` que
-  `left_speed`/`right_speed` sont comparables.
+- **Moteurs** : **mouvement stable et symétrique obtenu (2026-09-02)** ---
+  `left_speed`/`right_speed` convergent tous les deux proprement sur la
+  cible (0.15) et y restent, testé sur 12s sans oscillation ni dérive.
+  Chemin parcouru ce soir (résumé, détail dans `PROGRESS_ARCHIVE.md`) :
+  asymétrie initiale entre canaux (`right_speed` très en retard, cf.
+  historique canal B DRV8833 faible 2026-09-01, confirmé au multimètre :
+  `OUT3`/`OUT4` livre ~1V de moins que `OUT1`/`OUT2` pour un `VCC` stable
+  à 6V --- faiblesse électrique réelle mais pas la cause principale du
+  comportement erratique) ; fils jaune/vert (`C1`/`C2`) trouvés inversés
+  entre les deux moteurs, corrigés ; puis les deux roues sont parties en
+  saturation (feedback positif au lieu de négatif --- mesure encodeur qui
+  s'aggrave au lieu de converger). **Cause retenue** : sens de comptage
+  encodeur opposé au sens réel d'entraînement moteur sur ce matériel, sur
+  les deux roues. **Corrigé en firmware** (pas en recâblant encore une
+  fois) : `DriveController.cpp`, `tickSign = -1.0f` passé aux deux appels
+  `updateWheel()` --- flashé et vérifié sur matériel réel (`esp32_wroom`,
+  COM10). À revalider si le câblage encodeur est retouché plus tard (le
+  fix logiciel suppose la config actuelle ; repasser `tickSign` à `1.0f`
+  si une future correction matérielle du sens rend le flip logiciel
+  redondant). À revalider aussi vers 6-7V une fois les connexions soudées
+  (actuellement 9V), pour ne pas faire tourner les N20 en surrégime en
+  continu --- la faiblesse ~1V du canal B reste présente et à surveiller
+  même si elle n'empêche plus un mouvement stable.
+- **Encodeurs** : **résolu (2026-09-02)** --- la vraie cause n'était pas
+  le rail 3V3 de la breadboard mais un mauvais mapping fil→fonction :
+  le silkscreen du PCB encodeur donne Blanc=`M1`/Rouge=`M2` (moteur) et
+  Noir=`VCC`/Bleu=`GND` (encodeur), alors qu'on avait câblé en supposant
+  Rouge/Noir = fils moteur. Résultat : Blanc (en fait une borne moteur)
+  était posé en direct sur le rail 3V3 ESP32, et Noir (en fait le VCC
+  encodeur) recevait le PWM moteur pulsé jusqu'à 9V au lieu d'un 3.3V
+  stable --- ça perturbait le rail dès que les deux encodeurs étaient
+  branchés ensemble. Recâblé selon le marquage PCB (voir `WIRING.md`) :
+  **les deux LED s'allument ensemble**. Pas encore vérifié : dommage
+  éventuel sur l'encodeur qui a reçu le 9V pulsé, ou sur le régulateur
+  3V3 ESP32 --- à surveiller en test. Prochaine étape : confirmer par
+  télémétrie (`move_diagnostic.py --move`) que `left_speed`/`right_speed`
+  sont comparables une fois en mouvement.
 - Breadboard peu fiable sur les manipulations longues (plusieurs faux
   positifs aujourd'hui à cause de contacts qui bougent) --- souder les
   points qui ont posé problème (jumpers GPIO↔driver, VCC/GND/signal
@@ -35,25 +56,28 @@
 
 ## Prochaines étapes
 
-1. Résoudre le partage du rail 3V3 entre les 2 encodeurs (voir ci-dessus
-   --- ordre de branchement, point neuf, ou soudure).
-2. Confirmer par télémétrie (`move_diagnostic.py --move`) que les deux
-   vitesses sont comparables une fois les deux LED allumées ensemble.
-3. Souder les connexions instables identifiées aujourd'hui (jumpers
-   GPIO↔driver, VCC/GND/signal encodeur).
-4. Revalider à une tension proche du nominal (6-7V) une fois soudé.
-5. Calibrer PID + géométrie roue une fois le mouvement stable des deux
-   côtés.
-6. Commande AliExpress en cours (nouveaux moteurs N20 --- pas strictement
+1. Vérifier que rien n'a été endommagé par l'ancien mauvais câblage
+   (encodeur exposé au PWM 9V sur son VCC, régulateur 3V3 ESP32 avec une
+   borne moteur en direct dessus) --- pas de symptôme attendu si tout est
+   sain, mais à garder en tête si un comportement bizarre réapparaît.
+2. Souder les connexions instables identifiées le 2026-09-01 (jumpers
+   GPIO↔driver, VCC/GND/signal encodeur) --- d'autant plus important
+   maintenant que le comportement correct dépend d'une config de câblage
+   précise (voir note `tickSign` ci-dessus, à ne pas perturber en soudant
+   sans y repenser).
+3. Revalider à une tension proche du nominal (6-7V) une fois soudé.
+4. Calibrer PID + géométrie roue --- mouvement stable des deux côtés
+   maintenant acquis, cette étape est débloquée.
+5. Commande AliExpress en cours (nouveaux moteurs N20 --- pas strictement
    nécessaire, les actuels ne sont pas défectueux --- + système
    d'alimentation : 2×18650 en série (7.4V), BMS 2S avec charge USB-C
    intégrée, buck converters servos/logique). Reste à trancher : le
    Raspberry Pi tournera-t-il sur ce même pack ou une alim séparée ---
    ça dimensionne le BMS/buck à choisir.
-7. Servos tête : câblage signal documenté (`WIRING.md`/`head_config.h`),
+6. Servos tête : câblage signal documenté (`WIRING.md`/`head_config.h`),
    mais pas encore testés sur matériel réel, et leur alimentation
    (partager le rail moteurs, pas l'ESP32) reste à ajouter à `WIRING.md`.
-8. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
+7. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
    VL53L0X/MPU6050/BME688, Raspberry Pi physique, caméra, MQTT contre un
    vrai broker, buzzer audible, VPN en conditions réelles.
 

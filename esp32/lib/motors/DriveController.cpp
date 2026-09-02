@@ -48,9 +48,10 @@ void DriveController::stop() {
 }
 
 void DriveController::updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
-                                   float targetMps, float dtSeconds, float& measuredOut) {
+                                   float targetMps, float dtSeconds, float& measuredOut,
+                                   float tickSign) {
     long ticks = encoder.readAndResetTicks();
-    measuredOut = ticksToMps(ticks, dtSeconds);
+    measuredOut = ticksToMps(ticks, dtSeconds) * tickSign;
     int16_t pwm = pid.update(targetMps, measuredOut, dtSeconds);
     motor.setSpeed(pwm);
 }
@@ -67,8 +68,16 @@ void DriveController::update() {
     float targetLeft = _targetVelocity - _targetRotation * halfTrack;
     float targetRight = _targetVelocity + _targetRotation * halfTrack;
 
-    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps);
-    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps);
+    // Bring-up finding (2026-09-02): both wheels settle into a stable,
+    // reproducible runaway (large negative measured speed while PID
+    // saturates output) once commanded forward -- positive rather than
+    // negative feedback, consistent with the encoder's counting direction
+    // being opposite to the motor's actual drive direction on this
+    // hardware. Flipped in software rather than re-swapping C1/C2 again on
+    // the breadboard; revert (tickSign = 1.0f) once re-verified on the
+    // final soldered wiring.
+    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps, -1.0f);
+    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps, -1.0f);
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {

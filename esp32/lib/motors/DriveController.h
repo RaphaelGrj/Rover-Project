@@ -46,7 +46,7 @@ public:
 
 private:
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
-                      float targetMps, float dtSeconds, float& measuredOut);
+                      float targetMps, float dtSeconds, float& measuredOut, float tickSign);
 
     MotorDriver _motorL, _motorR;
     Encoder _encL, _encR;

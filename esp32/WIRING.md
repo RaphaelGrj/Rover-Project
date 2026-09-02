@@ -78,31 +78,41 @@ sur 0x29 (implémenté en Phase 4, `esp32/lib/sensors/DistanceSensor.cpp`).
 
 Chaque moteur N20 utilisé a 6 fils : 2 pour la puissance (vers le driver,
 voir tableau ci-dessus), 4 pour l'encodeur magnétique intégré. Code
-couleur utilisé (convention la plus courante pour ce type de moteur,
-tension VCC/GND vérifiée au multimètre sur le matériel réel du robot ---
-l'assignation exacte canal A/canal B entre jaune/vert n'a pas de
-conséquence si elle est inversée, ça inverse juste le signe du comptage) :
+couleur **confirmé sur le silkscreen du PCB encodeur lui-même**
+(2026-09-02) --- l'assignation exacte canal A/canal B entre C1/C2 n'a pas
+de conséquence si elle est inversée, ça inverse juste le signe du
+comptage :
 
-| Fil    | Fonction          | Destination |
-|--------|-------------------|-------------|
-| Rouge  | Moteur +          | `OUT1`/`OUT3` du driver (selon le moteur) |
-| Noir   | Moteur −          | `OUT2`/`OUT4` du driver |
-| Blanc  | Encodeur VCC      | **3V3 ESP32** (pas le VCC 6V du driver --- les GPIO ne tolèrent pas le 5-6V) |
-| Bleu   | Encodeur GND      | GND commun (ESP32/driver/batterie) |
-| Jaune  | Encodeur canal A  | GPIO34 (gauche) / GPIO36 = `VP` (droit) |
-| Vert   | Encodeur canal B  | GPIO35 (gauche) / GPIO39 = `VN` (droit) |
+| Fil    | Marquage PCB | Fonction          | Destination |
+|--------|--------------|-------------------|-------------|
+| Blanc  | `M1`         | Moteur +/−        | `OUT1`/`OUT3` du driver (selon le moteur) |
+| Rouge  | `M2`         | Moteur −/+        | `OUT2`/`OUT4` du driver |
+| Noir   | `VCC`        | Encodeur VCC      | **3V3 ESP32** (pas le VCC 6-9V du driver --- les GPIO ne tolèrent pas cette tension) |
+| Bleu   | `GND`        | Encodeur GND      | GND commun (ESP32/driver/batterie) |
+| Vert   | `C1`         | Encodeur canal A  | GPIO34 (gauche) / GPIO36 = `VP` (droit) |
+| Jaune  | `C2`         | Encodeur canal B  | GPIO35 (gauche) / GPIO39 = `VN` (droit) |
 
-⚠ **Pull-up externe probablement requise sur les 4 fils de signal
-(jaune/vert des deux moteurs).** Observé en test matériel (2026-09-01) :
-avec VCC (3V3)/GND encodeur vérifiés corrects au multimètre et les
-moteurs confirmés tournants physiquement, les deux encodeurs restaient
-muets (0 tick compté) --- hypothèse retenue : GPIO34/35/36/39 (entrée
-seule, aucun pull interne sur l'ESP32) et la carte encodeur de ce modèle
-probablement en sortie collecteur ouvert plutôt que push-pull. Correctif
-proposé, **pas encore vérifié comme ayant résolu le problème** : une
-résistance de **10 kΩ entre chaque fil de signal et le 3V3** (en
-parallèle du fil existant vers le GPIO, pas en série) --- 4 résistances
-au total. À mettre à jour dès confirmation.
+⚠ **Erreur de câblage corrigée le 2026-09-02** : la table précédente
+partait d'une convention de couleur générique (rouge/noir = fils moteur)
+qui ne correspond **pas** à ce modèle de carte encodeur. En réalité
+Blanc/Rouge sont les fils moteur (`M1`/`M2`) et Noir est le VCC encodeur
+--- Blanc avait donc été câblé sur le rail 3V3 ESP32 en pensant que
+c'était le VCC encodeur (en réalité une borne moteur posée en direct sur
+le rail logique), et Noir avait été câblé sur une sortie driver en
+pensant que c'était Moteur − (en réalité le VCC encodeur, exposé au PWM
+moteur pulsé jusqu'à 9V au lieu d'un 3.3V stable). C'est très
+probablement la cause réelle du symptôme "les deux encodeurs ne
+s'allument jamais ensemble" (le fil moteur sur le rail 3V3 le
+perturbait dès que le driver PWMait cette phase) --- pas un rail de
+breadboard dégradé comme suspecté initialement. Recâblé selon le
+marquage PCB ci-dessus le 2026-09-02 : **les deux LED encodeur
+s'allument ensemble**, correction confirmée.
+
+Note pull-up : une résistance de 10 kΩ entre chaque fil de signal et le
+3V3 avait été envisagée en 2026-09-01 pour un souci de canaux muets
+(hypothèse sortie collecteur ouvert) --- à revalider séparément une fois
+que la télémétrie confirme ou non des ticks côté encodeur avec le bon
+câblage ci-dessus.
 
 Adresses I2C par défaut des autres capteurs Phase 4 (non confirmées sur
 le matériel réel, valeurs des bibliothèques utilisées) : MPU6050 = 0x68
