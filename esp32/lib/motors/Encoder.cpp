@@ -18,7 +18,9 @@ void IRAM_ATTR Encoder::onPinAChange(void* arg) {
     bool b = digitalRead(self->_pinB);
     // A leads B for one direction of rotation, lags for the other.
     portENTER_CRITICAL_ISR(&self->_mux);
-    self->_ticks += (a == b) ? 1 : -1;
+    int8_t delta = (a == b) ? 1 : -1;
+    self->_ticks += delta;
+    self->_totalTicks += delta;
     portEXIT_CRITICAL_ISR(&self->_mux);
 }
 
@@ -28,4 +30,17 @@ long Encoder::readAndResetTicks() {
     _ticks = 0;
     portEXIT_CRITICAL(&_mux);
     return ticks;
+}
+
+long Encoder::totalTicks() {
+    portENTER_CRITICAL(&_mux);
+    long total = _totalTicks;
+    portEXIT_CRITICAL(&_mux);
+    return total;
+}
+
+void Encoder::resetTotal() {
+    portENTER_CRITICAL(&_mux);
+    _totalTicks = 0;
+    portEXIT_CRITICAL(&_mux);
 }

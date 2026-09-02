@@ -47,14 +47,20 @@ constexpr int ROVER_PWM_FREQ_HZ = 20000;      // above audible range
 constexpr int ROVER_PWM_RESOLUTION_BITS = 8;  // duty cycle 0..255
 
 // --- Robot geometry / encoder specs ---
-// TODO(hardware): replace with the real values once the exact N20+encoder
-// variant/gear ratio is confirmed and measured. These are only
-// placeholders so the PID loop has a plausible order of magnitude to
-// work with in simulation -- N20 encoder ticks/rev varies a lot by gear
-// ratio (common values range from a few hundred to a few thousand).
+// TODO(hardware): ROVER_WHEEL_DIAMETER_M is still a placeholder -- the
+// wheel CAD isn't finalized, so bring-up so far only spins the bare motor
+// shaft (measured 6.82mm, that's the D-shaft, not a wheel) with no wheel
+// mounted and no ground load. Replace once a real wheel exists; until
+// then, MOVE's "m/s" target is not a physically meaningful real-world
+// speed, and PID gains tuned now are against an unloaded shaft -- expect
+// to retune once a wheel with real inertia/friction is attached.
 constexpr float ROVER_WHEEL_DIAMETER_M = 0.065f;
 constexpr float ROVER_WHEEL_BASE_M = 0.15f;
-constexpr float ROVER_ENCODER_TICKS_PER_REV = 700.0f;
+// Measured 2026-09-02 (SYSTEM action=raw_ticks, bare shaft, 1 hand-counted
+// revolution) -- was 700 (placeholder). Single-turn measurement, decent
+// but not high-precision; revisit with a multi-turn measurement once a
+// real wheel is mounted if odometry accuracy matters later.
+constexpr float ROVER_ENCODER_TICKS_PER_REV = 1073.0f;
 constexpr float ROVER_MAX_WHEEL_SPEED_MPS = 0.3f;
 // Sanity cap on MOVE's rotation field, independent of velocity -- keeps a
 // malformed/unexpectedly large command from commanding an unbounded spin

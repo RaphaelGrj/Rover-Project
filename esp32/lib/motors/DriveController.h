@@ -44,6 +44,16 @@ public:
     float pidKi() const { return _pidL.ki(); }
     float pidKd() const { return _pidL.kd(); }
 
+    // Raw, unconverted tick counters for wheel geometry calibration (see
+    // SYSTEM action=raw_ticks/reset_ticks) -- independent of the PID
+    // loop's own 20ms-reset counters in updateWheel().
+    long rawTicksLeft() { return _encL.totalTicks(); }
+    long rawTicksRight() { return _encR.totalTicks(); }
+    void resetRawTicks() {
+        _encL.resetTotal();
+        _encR.resetTotal();
+    }
+
 private:
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
                       float targetMps, float dtSeconds, float& measuredOut, float tickSign);

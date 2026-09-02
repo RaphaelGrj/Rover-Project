@@ -106,6 +106,19 @@ void onFrame(const RoverFrame& frame) {
             snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
                      ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
             protocol.send("STATE", fields2);
+        } else if (strcmp(action, "raw_ticks") == 0) {
+            // Bring-up only: raw cumulative encoder counts, untouched by
+            // the PID loop's 20ms readAndResetTicks() -- lets a hand
+            // rotation of a known number of turns be counted precisely,
+            // to measure the real ROVER_ENCODER_TICKS_PER_REV instead of
+            // the motion_config.h placeholder. See action=reset_ticks.
+            char fields2[64];
+            snprintf(fields2, sizeof(fields2), "raw_ticks_left=%ld raw_ticks_right=%ld",
+                     drive.rawTicksLeft(), drive.rawTicksRight());
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "reset_ticks") == 0) {
+            drive.resetRawTicks();
+            protocol.send("STATE", "raw_ticks_left=0 raw_ticks_right=0");
         }
         return;
     }

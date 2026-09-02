@@ -53,6 +53,29 @@
   positifs aujourd'hui à cause de contacts qui bougent) --- souder les
   points qui ont posé problème (jumpers GPIO↔driver, VCC/GND/signal
   encodeur) est recommandé avant la prochaine session de bring-up.
+- **Calibration PID (2026-09-02)** : géométrie roue mesurée en partie ---
+  `ROVER_ENCODER_TICKS_PER_REV` mis à jour à 1073 (mesuré via le nouveau
+  `SYSTEM action=raw_ticks`/`reset_ticks`, 1 tour compté à l'œil pendant
+  une rotation lente motorisée --- pas de rotation à la main possible,
+  le réducteur N20 est trop dur). `ROVER_WHEEL_DIAMETER_M` **reste un
+  placeholder** : pas de roue montée, la CAO n'est pas finalisée, seul
+  l'axe moteur nu (6.82mm, mesuré) tourne pour l'instant --- donc les
+  cibles `MOVE` en "m/s" ne correspondent pas encore à une vitesse
+  réelle, et tout ce qui suit a été testé **sans charge mécanique**
+  (pas de frottement sol, pas d'inertie de roue réelle).
+  Caractérisation des gains par défaut (180/300/0) sur la plage de
+  cibles : **0.05 → ne bouge jamais** (frottement statique jamais vaincu,
+  le terme P seul est trop faible et l'intégral met ~20s à saturer à
+  cette erreur) ; **0.15 → converge en ~2-3s avec un léger dépassement à
+  0.20 puis stable** ; **0.25 → montée douce en ~5-6s sans dépassement,
+  stable ~0.24-0.25**. Gains gardés tels quels (pas de changement dans
+  `motion_config.h`) --- bonne base sur la plage utile, mais **la vraie
+  calibration (géométrie + gains) sera à refaire une fois une roue
+  réelle montée** (dynamique moteur différente sous charge, le point de
+  décrochage en basse vitesse va changer). Correctif possible pour la
+  limite basse vitesse si besoin plus tard : terme feedforward (PWM
+  minimum ajouté quand la cible n'est pas nulle) plutôt que remonter
+  `Ki` (risque de dépassement ailleurs sur la plage).
 
 ## Prochaines étapes
 
@@ -66,8 +89,10 @@
    précise (voir note `tickSign` ci-dessus, à ne pas perturber en soudant
    sans y repenser).
 3. Revalider à une tension proche du nominal (6-7V) une fois soudé.
-4. Calibrer PID + géométrie roue --- mouvement stable des deux côtés
-   maintenant acquis, cette étape est débloquée.
+4. Calibrer PID + géométrie roue --- **première passe faite (2026-09-02,
+   voir ci-dessus)**, ticks/tour mesuré, gains caractérisés sur la plage
+   utile. À refaire une fois une roue réelle montée (diamètre + retuning
+   sous charge).
 5. Commande AliExpress en cours (nouveaux moteurs N20 --- pas strictement
    nécessaire, les actuels ne sont pas défectueux --- + système
    d'alimentation : 2×18650 en série (7.4V), BMS 2S avec charge USB-C
