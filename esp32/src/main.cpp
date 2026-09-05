@@ -15,6 +15,8 @@
 #include "EStop.h"
 #include "BatteryMonitor.h"
 #include "RoverOTA.h"
+#include "RoverWifiProvisioning.h"
+#include "WifiCredentialsStore.h"
 #include "CalibrationStore.h"
 #include "Buzzer.h"
 
@@ -30,6 +32,7 @@ SensorHub sensors;
 EStop estop;
 BatteryMonitor battery;
 RoverOTA ota;
+RoverWifiProvisioning wifiProvisioning;
 Buzzer buzzer;
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
@@ -161,6 +164,35 @@ void onFrame(const RoverFrame& frame) {
                 }
             }
             protocol.send("STATE", fields);
+        } else if (strcmp(action, "wifi_setup") == 0) {
+            // Opens the on-demand config portal (RoverWifiProvisioning.h)
+            // -- a temporary AP any PC/phone can join to enter the real
+            // WiFi/OTA credentials. Never automatic at boot, only via
+            // this explicit request (see that file's header comment for
+            // why). Interrupts any active OTA connection, since both
+            // share the same WiFi radio.
+            wifiProvisioning.start();
+            protocol.send("STATE", "wifi_mode=setup");
+        } else if (strcmp(action, "wifi_status") == 0) {
+            // 96, not 64: "wifi_mode=setup ap_ssid=Rover-Setup-XXXXXX
+            // ap_started=1 ap_ip=255.255.255.255" alone is ~75 bytes --
+            // a bring-up test on real hardware caught this being
+            // silently truncated mid-field by too small a buffer (same
+            // class of bug as the ERROR/STATE buffers in Phase 4).
+            char fields2[96];
+            if (wifiProvisioning.isActive()) {
+                wifiProvisioning.buildStatusFields(fields2, sizeof(fields2));
+            } else {
+                ota.buildStatusFields(fields2, sizeof(fields2));
+            }
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "wifi_forget") == 0) {
+            // Clears the stored home-network credentials (keeps the OTA
+            // password, see WifiCredentialsStore::forgetNetwork) so the
+            // next wifi_setup starts from a clean SSID field. Does not
+            // itself reboot or touch the current connection.
+            WifiCredentialsStore::forgetNetwork();
+            protocol.send("STATE", "wifi_mode=forgotten");
         }
         return;
     }
@@ -268,6 +300,7 @@ void loop() {
     estop.update();
     battery.update();
     ota.update();
+    wifiProvisioning.update();
     buzzer.update();
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {

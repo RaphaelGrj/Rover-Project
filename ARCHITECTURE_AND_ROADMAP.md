@@ -448,7 +448,8 @@ Raspberry Pi
 │   └── état global / orchestration
 │
 ├── rover-ai
-│   └── IA / raisonnement / personnalité
+│   └── IA / raisonnement / personnalité --- fournisseur API cloud ou
+│       LLM réseau local interchangeable (voir §17.1)
 │
 ├── rover-vision
 │   └── caméra / détection / reconnaissance
@@ -728,6 +729,92 @@ la conception finale.
 La règle reste :
 
 **la décision conversationnelle appartient au Pi.**
+
+------------------------------------------------------------------------
+
+## 17.1 Fournisseur IA (module `rover-ai`)
+
+**Statut (2026-09-05) : conçu ici, pas encore implémenté --- voir Phase 7.**
+
+Le "IA" de la chaîne ci-dessus (§17) n'est pas un fournisseur figé : Rover
+doit pouvoir utiliser, au choix de l'utilisateur et **modifiable à tout
+moment sans reflash ni redéploiement** :
+
+``` text
+                    rover-ai
+                       │
+           ┌───────────┴───────────┐
+           │                       │
+   Fournisseur API cloud    Fournisseur réseau local
+   (Gemini, ChatGPT,        (ex. un second Raspberry
+    Claude, ...)             Pi sur le même WiFi, Qwen
+                              2.5 via Ollama ou équivalent)
+```
+
+### Pourquoi ce choix appartient à l'utilisateur, pas au code
+
+- Une API cloud est simple et puissante, mais dépend d'Internet, d'une
+  clé payante, et envoie les conversations à un tiers.
+- Un LLM local (deuxième Raspberry Pi/PC dédié sur le réseau local,
+  servant par ex. Qwen 2.5 via Ollama) ne dépend d'aucun service
+  externe et garde tout en local, au prix de réponses plus lentes/moins
+  capables selon le matériel.
+
+Rover ne doit imposer ni l'un ni l'autre : les deux sont interchangeables
+derrière une interface commune, et **le choix se fait à l'usage**, pas au
+build.
+
+### Interface commune
+
+`rover-ai` définit une interface neutre (indépendante du fournisseur actif) :
+
+``` text
+rover-ai.ask(message, context) -> réponse
+```
+
+Deux implémentations :
+
+- **`CloudAIProvider`** --- appelle l'API du fournisseur choisi (Gemini,
+  ChatGPT/OpenAI, Claude, ...) avec la clé fournie par l'utilisateur.
+- **`LocalAIProvider`** --- appelle un serveur LLM sur le réseau local
+  (adresse IP/port fournis par l'utilisateur, ex. l'API compatible
+  OpenAI d'Ollama) --- aucune clé requise, juste une adresse réseau.
+
+Le reste de Rover (Rover Core, comportement, personnalité) n'a jamais
+besoin de savoir lequel des deux est actif.
+
+### Configuration : via le portail de pilotage, à tout moment
+
+Contrairement au portail WiFi/OTA de l'ESP32 (provisionnement ponctuel,
+un point d'accès temporaire), ce réglage doit rester accessible **en
+permanence** depuis l'interface web existante (`pi/rover_control`, celle
+qui pilote déjà Rover) --- un panneau "IA" protégé par le même jeton
+d'accès (`rover_control/auth.py`) que le reste du portail, où
+l'utilisateur peut à tout instant :
+
+- choisir "API cloud" ou "réseau local" ;
+- s'il choisit cloud : le fournisseur (Gemini/ChatGPT/Claude/...), le
+  modèle, et sa clé API ;
+- s'il choisit local : l'adresse (IP:port) du serveur LLM sur le réseau.
+
+### Stockage des identifiants
+
+Comme `ROVER_CONTROL_TOKEN` (`rover_control/auth.py`) et comme
+`config.py` le rappelle explicitement dans son propre docstring
+("Never put secrets here"), **la clé API ne doit jamais aller dans
+`config.json`**. Elle vit dans un fichier dédié, git-ignoré, permissions
+restreintes (lecture propriétaire seulement), écrit par le serveur quand
+l'utilisateur valide le formulaire --- même logique que
+`WifiCredentialsStore` côté ESP32 (`esp32/lib/network/`), transposée en
+Python sur le Pi.
+
+### Comportement en cas d'échec
+
+Un fournisseur IA indisponible (API cloud en panne/quota dépassé, second
+Pi local éteint ou injoignable) ne doit jamais faire planter Rover ni
+bloquer le reste du robot --- mode dégradé (§21) : Rover continue de
+fonctionner (mouvement, capteurs, télémétrie), signale juste
+l'indisponibilité de la conversation.
 
 ------------------------------------------------------------------------
 
@@ -1269,7 +1356,10 @@ Objectif : permettre l'interaction naturelle.
 -   [ ] Micro.
 -   [ ] Audio pipeline.
 -   [ ] Speech-to-Text.
--   [ ] IA conversationnelle.
+-   [ ] IA conversationnelle (`rover-ai`, voir §17.1) --- fournisseur API
+      cloud (Gemini/ChatGPT/Claude/...) ou LLM réseau local (ex. Qwen
+      2.5 sur un second Raspberry Pi via Ollama), interchangeable à tout
+      moment depuis le portail de pilotage (`pi/rover_control`).
 -   [ ] Text-to-Speech.
 -   [ ] Personality Engine.
 -   [ ] Machine à émotions.

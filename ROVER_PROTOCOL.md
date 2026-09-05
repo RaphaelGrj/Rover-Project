@@ -107,6 +107,9 @@ ne reçoivent pas d'ACK.
 | `set_pid`  | calibre les gains PID moteur à chaud, persistés en NVS (survit au reboot) : `SYSTEM action=set_pid kp=180 ki=300 kd=0` --- un champ omis garde sa valeur actuelle. Répond `STATE pid_kp=... pid_ki=... pid_kd=...`, ou `ERROR code=invalid_pid_gains` si une valeur est négative/NaN/infinie |
 | `get_pid`  | répond `STATE pid_kp=... pid_ki=... pid_kd=...` avec les gains actuellement actifs |
 | `reset_pid` | revient aux gains compilés par défaut (`motion_config.h`) et oublie la valeur sauvegardée en NVS |
+| `wifi_setup` | ouvre le portail de configuration WiFi/OTA (point d'accès temporaire `Rover-Setup-XXXX`, voir `esp32/OTA.md`) --- accessible depuis un PC ou un smartphone, se ferme seul après 10 min d'inactivité |
+| `wifi_status` | répond `STATE wifi_mode=...` : `setup` (portail ouvert), `wifi` avec `ip=...` (connecté au réseau, OTA pas encore configurée), `ota` avec `ip=...` (connecté, OTA active), ou `off` |
+| `wifi_forget` | efface le SSID/mot de passe WiFi enregistrés en NVS (garde le mot de passe OTA) |
 
 ------------------------------------------------------------------------
 

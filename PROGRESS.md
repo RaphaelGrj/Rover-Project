@@ -12,6 +12,123 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Raspberry Pi --- bring-up bloqué sur le WiFi (2026-09-05)** : début du
+  travail Phase 5 (`ARCHITECTURE_AND_ROADMAP.md`, case "OS" toujours
+  décochée) --- carte SD 8 Go, Raspberry Pi 3B+ physique en main.
+  Architecture d'abord posée avant le code : nouvelle section **§17.1
+  "Fournisseur IA (module `rover-ai`)"** ajoutée à
+  `ARCHITECTURE_AND_ROADMAP.md` --- conversation IA avec deux
+  fournisseurs interchangeables à tout moment (API cloud type
+  Gemini/ChatGPT/Claude avec clé utilisateur, ou LLM tournant sur un
+  second Raspberry Pi du même réseau local, ex. Qwen 2.5 via Ollama),
+  configurable depuis le même portail web que le pilotage
+  (`pi/rover_control`), identifiants jamais dans `config.json` (comme
+  `ROVER_CONTROL_TOKEN`) --- **conçu, pas encore implémenté**, Phase 7
+  mise à jour en conséquence. **Rien de tout ça codé encore** : le
+  blocage WiFi ci-dessous a pris toute la session.
+  Flashage Raspberry Pi Imager (Raspberry Pi OS Lite 64-bit, hostname
+  `rover`, SSH+utilisateur+WiFi configurés via l'écran de
+  personnalisation) : le Pi démarre, SSH tourne bien
+  (`systemctl status ssh` → active), mais **`wlan0` n'existe jamais**
+  (absent de `ip a`, `/sys/class/net/`, `nmcli device status` --- pas
+  juste "non connecté", l'interface n'est pas créée par le noyau) et
+  `dmesg | grep -i brcm` ne montre **aucune trace** du pilote WiFi
+  (`brcmfmac`), pas même une erreur. `rfkill` montrait le WiFi
+  soft-blocked (débloqué avec `rfkill unblock wifi` +
+  `raspi-config nonint do_wifi_country FR`) --- n'a rien changé, symptôme
+  identique après. Hypothèses écartées dans l'ordre :
+  1. Pays WiFi non configuré --- redébloqué/reconfiguré, aucun effet.
+  2. Carte Pi défectueuse --- testé sur une **deuxième carte 3B+
+     physique différente**, exactement le même symptôme.
+  3. Cache d'image Raspberry Pi Imager corrompu
+     (`%LOCALAPPDATA%\Raspberry Pi\Raspberry Pi Imager\cache\lastdownload.cache`,
+     ~525 Mo, supprimé pour forcer un retéléchargement) --- reflash
+     complet avec image fraîche, même symptôme.
+  4. Image/OS en cause plutôt que le matériel --- testé avec **DietPi**
+     (OS totalement différent) à la place de Raspberry Pi OS --- même
+     symptôme exact (`wlan0` absent, rien dans `dmesg`).
+  **Session arrêtée ici, non résolu.** Piste la plus probable restante :
+  panne matérielle réelle de la puce WiFi onboard (BCM43430, sur bus
+  SDIO) --- mais quatre combinaisons carte/image différentes montrant
+  exactement le même symptôme rend aussi une cause matérielle partagée
+  moins évidente à trancher à distance (alimentation insuffisante lors
+  de l'init WiFi ? --- pas vérifié). **Pas confirmé si le test DietPi a
+  été fait sur la première ou la deuxième carte** --- à clarifier à la
+  reprise. Piste pragmatique proposée mais pas encore essayée : un
+  dongle WiFi USB externe, pour contourner le problème sans continuer à
+  déboguer la puce onboard à l'aveugle.
+- **WiFi/OTA (2026-09-05)** : le canal OTA existant (`esp32/lib/ota/RoverOTA.h`,
+  identifiants fixés à la compilation via variables d'environnement,
+  voir historique 2026-08-31) est complété par un **portail de
+  configuration accessible depuis un PC ou un smartphone**, sans
+  reflash --- `esp32/lib/network/RoverWifiProvisioning.h` +
+  `WifiCredentialsStore.h` (nouveau dossier `esp32/lib/network/`).
+  Déclenché à la demande via `SYSTEM action=wifi_setup` (jamais
+  automatique au boot, pour ne pas laisser un point d'accès ouvert en
+  permanence) : l'ESP32 ouvre son propre point d'accès temporaire
+  (`Rover-Setup-XXXX`), sert une page web (formulaire SSID/mot de
+  passe/mot de passe OTA, `WebServer`+`DNSServer` du core Arduino ESP32,
+  aucune dépendance ajoutée) accessible depuis n'importe quel appareil
+  WiFi, enregistre en NVS puis redémarre. `RoverOTA` lit maintenant ces
+  identifiants NVS en priorité (fallback sur les variables
+  d'environnement existantes si NVS vide --- rien ne casse pour l'usage
+  précédent). Actions `wifi_status`/`wifi_forget` ajoutées en
+  complément. Voir `esp32/OTA.md` (réécrit pour couvrir les deux
+  méthodes) et `ROVER_PROTOCOL.md` §5.1. **Compile sur `esp32_wroom` et
+  `esp32_s3`** (929KB/889KB flash, marge suffisante), tests natifs
+  toujours au vert (16/16) --- **non testé sur matériel réel** (pas de
+  réseau WiFi disponible dans cette session de développement), à
+  valider au prochain accès au robot physique : portail effectivement
+  joignable depuis un téléphone, formulaire fonctionnel, reconnexion
+  après redémarrage, flash OTA réel une fois connecté.
+  **Mise à jour (même jour, testé en conditions réelles, COM10)** :
+  portail testé de bout en bout avec un vrai téléphone --- le point
+  d'accès `Rover-Setup-XXXXXX` n'apparaissait d'abord dans aucun scan
+  (ni téléphone ni PC), un cache de scan WiFi périmé (pas un bug
+  firmware : `SYSTEM action=wifi_status` confirmait déjà `ap_started=1`
+  pendant que rien n'était détecté) --- réapparu après un scan forcé.
+  Deux bugs réels trouvés et corrigés pendant ce test :
+  1. Buffer `wifi_status` trop court (64 octets) tronquait l'IP en
+     silence (`esp32/src/main.cpp`, même classe de bug que les buffers
+     ERROR/STATE de la Phase 4) --- passé à 96.
+  2. **Connexion WiFi et activation OTA étaient couplées à tort** :
+     `RoverOTA::begin()` refusait de rejoindre le réseau du tout tant
+     qu'aucun mot de passe OTA n'était enregistré, alors que l'objectif
+     explicite était de pouvoir faire les deux étapes séparément.
+     Découvert en soumettant le formulaire sans mot de passe OTA
+     (`wifi_mode=off` après redémarrage alors que le SSID/mot de passe
+     WiFi étaient bien enregistrés). Corrigé : la connexion WiFi ne
+     dépend plus que du SSID, seul `ArduinoOTA.begin()` reste
+     conditionné au mot de passe OTA (`esp32/lib/ota/RoverOTA.h`,
+     nouveaux modes `wifi_mode=wifi` vs `wifi_mode=ota`). Un mot de
+     passe WiFi laissé vide dans le formulaire de reconfiguration garde
+     désormais la valeur déjà enregistrée (même logique que le mot de
+     passe OTA), pour éviter d'écraser le vrai mot de passe en ne
+     voulant modifier que l'un des deux champs.
+  **Validé sur matériel réel** : `STATE wifi_mode=wifi ip=192.168.1.109`
+  obtenu après reflash, robot bien connecté au réseau domestique sans
+  mot de passe OTA. **Complété (même session)** : second passage par le
+  portail (SSID/mot de passe WiFi laissés vides, seul le mot de passe
+  OTA renseigné --- confirme que les champs vides gardent bien la valeur
+  déjà enregistrée) → `STATE wifi_mode=ota ip=192.168.1.109` après
+  redémarrage, `ArduinoOTA` active.
+  **Flash OTA réel testé (même session)** : a d'abord échoué trois fois
+  de suite. Deux causes côté PC (pas firmware) : un VPN actif bloquant
+  le trafic LAN (kill switch), puis le pare-feu Windows (réseau "Public"
+  par défaut) bloquant la connexion TCP entrante initiée par l'ESP32
+  vers l'outil de flash --- résolu en désactivant le VPN et en ajoutant
+  une règle pare-feu ciblée (IP source = celle du rover uniquement).
+  Une fois ça réglé, le transfert démarrait mais échouait systématiquement
+  vers ~15% : `ArduinoOTA.handle()` bloque en interne pendant l'écriture
+  flash sans jamais rendre la main à `loop()`, ce qui déclenchait le
+  watchdog matériel 3s (`Watchdog.h`) en plein transfert --- **vrai bug
+  firmware**, corrigé en nourrissant le watchdog depuis
+  `ArduinoOTA.onProgress()` (`esp32/lib/ota/RoverOTA.h`). **Flash OTA
+  réussi ensuite** (`Result: OK`), redémarrage propre confirmé après
+  coup. **Portail de configuration WiFi/OTA entièrement validé de bout
+  en bout sur matériel réel**, du premier contact (portail introuvable
+  au premier scan WiFi périmé, réapparu après rescan) jusqu'à un vrai
+  flash de firmware par WiFi.
 - **Capteurs Phase 4 (2026-09-02)** : premiers capteurs réels câblés et
   validés. **MPU6050** : répond à `0x68`, valeurs cohérentes
   (`accel_z≈-10.5`, proche de la gravité ; gyro quasi nul à l'arrêt).
@@ -97,6 +214,14 @@
 
 ## Prochaines étapes
 
+0. **Priorité immédiate à la reprise** : débloquer le WiFi Raspberry Pi
+   (voir "Raspberry Pi --- bring-up bloqué sur le WiFi" ci-dessus).
+   Clarifier d'abord si le test DietPi a été fait sur la première ou la
+   deuxième carte physique (pas noté cette session). Piste pragmatique
+   la plus rapide si pas déjà tentée : brancher un dongle WiFi USB pour
+   contourner la puce onboard plutôt que continuer à déboguer à
+   l'aveugle. Tout le travail `rover-ai` (voir §17.1) est bloqué
+   derrière ça.
 1. Vérifier que rien n'a été endommagé par l'ancien mauvais câblage
    (encodeur exposé au PWM 9V sur son VCC, régulateur 3V3 ESP32 avec une
    borne moteur en direct dessus) --- pas de symptôme attendu si tout est
@@ -142,11 +267,36 @@
 8. Reste identique par ailleurs (voir `ARCHITECTURE_AND_ROADMAP.md`) :
    Raspberry Pi physique, caméra, MQTT contre un vrai broker, buzzer
    audible, VPN en conditions réelles.
+9. Portail WiFi/OTA (2026-09-05, voir ci-dessus) : **entièrement validé
+   de bout en bout sur matériel réel, flash OTA réel inclus**. Rien de
+   plus à faire ici pour l'instant.
 
 ------------------------------------------------------------------------
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-05 (suite, Raspberry Pi)** --- Architecture `rover-ai`
+  conçue et documentée (§17.1, deux fournisseurs IA interchangeables :
+  API cloud ou LLM réseau local) ; début bring-up Raspberry Pi 3B+
+  (carte SD 8 Go) bloqué sur le WiFi --- `wlan0` n'existe jamais côté
+  noyau, testé sur deux cartes physiques, deux OS différents
+  (Raspberry Pi OS + DietPi) et après reflash complet (cache Imager
+  purgé), symptôme identique à chaque fois. Non résolu, session
+  arrêtée ici (voir "Prochaines étapes" point 0).
+- **2026-09-05** --- Portail de configuration WiFi accessible PC/smartphone
+  ajouté (`esp32/lib/network/`, `SYSTEM action=wifi_setup`), sans
+  reflash, identifiants persistés en NVS ; `RoverOTA` branché dessus
+  (fallback sur les variables d'environnement existantes). **Testé et
+  validé sur matériel réel (COM10)** : bug de buffer tronquant l'IP
+  corrigé, bug plus sérieux de couplage WiFi/OTA trouvé et corrigé
+  (connexion WiFi dépendait à tort d'un mot de passe OTA déjà défini) ;
+  connexion au réseau domestique confirmée (`wifi_mode=wifi`), puis OTA
+  activée en un second passage par le portail (`wifi_mode=ota`). **Flash
+  OTA réel ensuite testé et réussi** après avoir écarté un VPN/pare-feu
+  PC bloquant le trafic, puis corrigé un vrai bug firmware (watchdog 3s
+  qui se déclenchait en plein transfert, `ArduinoOTA.onProgress` ajouté
+  pour le nourrir) --- portail WiFi/OTA entièrement validé de bout en
+  bout.
 - **2026-09-02** --- Erreur de mapping fil→fonction encodeur trouvée et
   corrigée (silkscreen PCB) ; asymétrie moteur/canal B diagnostiquée
   (multimètre) puis vraie cause trouvée : sens de comptage encodeur
