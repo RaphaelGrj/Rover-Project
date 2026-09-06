@@ -70,6 +70,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mqtt-port", type=int, default=None)
     parser.add_argument("--mqtt-topic-prefix", default=None)
+    parser.add_argument(
+        "--camera-url",
+        default=None,
+        help="MJPEG stream URL served by the ESP32-CAM, e.g. "
+        '"http://rovercam.local:81/stream" -- see ARCHITECTURE_AND_ROADMAP.md §4.3. '
+        "Unset by default (no video, /video reports 503 unavailable).",
+    )
     return parser.parse_args()
 
 
@@ -92,6 +99,7 @@ def resolve_settings(args: argparse.Namespace) -> dict:
         "mqtt_port": args.mqtt_port or config["mqtt_port"],
         "mqtt_topic_prefix": args.mqtt_topic_prefix or config["mqtt_topic_prefix"],
         "mqtt_publish_period_s": config["mqtt_publish_period_s"],
+        "camera_url": args.camera_url or config["camera_url"],
     }
 
 
@@ -151,7 +159,7 @@ async def async_main(settings: dict) -> None:
     logger.info("connected to ESP32 on %s @ %d baud", settings["port"], settings["baudrate"])
 
     token = resolve_token()
-    camera = CameraStream()
+    camera = CameraStream(settings["camera_url"])
     app = create_app(core, token, camera)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -179,6 +187,7 @@ async def async_main(settings: dict) -> None:
         if mqtt_task is not None:
             mqtt_task.cancel()
         mqtt.close()
+        await camera.close()
         await runner.cleanup()
         link.stop()
 

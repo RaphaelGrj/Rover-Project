@@ -12,6 +12,54 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Caméra --- décision ESP32-CAM (2026-09-06)** : la caméra ne sera
+  **pas** rattachée au Raspberry Pi --- pas la place en CAO dans la tête
+  pour un module Pi Camera, même déporté par nappe. Un module
+  **ESP32-CAM** (déjà en main, avec sa propre caméra intégrée) filme et
+  sert le flux en WiFi, indépendamment de l'ESP32 principal ; le Pi
+  récupère ce flux sur le réseau et l'analyse (« l'ESP32-CAM filme, le
+  Pi analyse »). Voir `ARCHITECTURE_AND_ROADMAP.md` §4.3 (nouvelle
+  section) et `BOM.md`.
+  **Code écrit (2026-09-06, jour suivant)** --- pas de câblage ce
+  jour-là (prévu pour la session d'après), session 100% code :
+  - **Firmware `esp32-cam/`** (nouveau projet PlatformIO, séparé de
+    `esp32/`, voir §4.3) : board AI-Thinker ESP32-CAM confirmé avec
+    l'utilisateur. `src/main.cpp` --- connexion WiFi (mêmes
+    `ROVER_WIFI_SSID`/`ROVER_WIFI_PASSWORD` que le firmware principal,
+    voir `esp32/OTA.md`), init caméra (`esp_camera_init`, VGA/qualité
+    12, PSRAM si détectée sinon repli QVGA une seule frame buffer),
+    mDNS (`rovercam.local`), serveur MJPEG (`esp_http_server`, port 81,
+    `/stream`, boundary `roverframe`). Aucune authentification sur ce
+    flux --- volontaire, réseau local de confiance uniquement (voir
+    `esp32-cam/WIRING.md` "Sécurité"), c'est le Pi qui authentifie vers
+    l'extérieur. **Compile proprement** (`pio run`, testé sur ce PC de
+    dev : RAM 15.2%, Flash 27.5%, avec et sans
+    `ROVER_WIFI_SSID`/`PASSWORD` définies comme en CI) --- **jamais
+    flashé sur le module physique**, câblage vers un adaptateur
+    FTDI/USB-TTL prévu pour la prochaine session (procédure détaillée
+    dans `esp32-cam/WIRING.md`, y compris l'avertissement
+    sous-alimentation classique de cette carte).
+  - **`pi/rover_control/camera.py` réécrit** : ne dépend plus de
+    `picamera2`, relaie maintenant (reverse proxy `aiohttp.ClientSession`)
+    le flux MJPEG de l'ESP32-CAM à travers `/video`, en reprenant tel
+    quel le `Content-Type`/boundary envoyé par l'ESP32-CAM plutôt que de
+    ré-encoder les frames. Nouveau réglage `camera_url`
+    (`--camera-url` CLI, ou clé `camera.json`/`config.example.json`),
+    `None` par défaut (vidéo désactivée, `503`). `CameraStream.close()`
+    ajouté et appelé à l'arrêt (`main.py`).
+  - **Validé avec un faux serveur MJPEG** (script de fumée, pas de
+    matériel ESP32-CAM disponible ce jour) : les trois cas --- pas
+    configuré → indisponible, upstream valide → `200` avec le bon
+    `Content-Type` et les bons octets relayés, upstream injoignable →
+    `503` sans crash --- passent tous. **Toujours pas testé contre le
+    vrai module** (pas encore flashé). Suite de tests `pi/` toujours au
+    vert (37/37) --- aucune régression, pas de nouveau fichier de test
+    committé pour `camera.py` (même choix que l'ancienne version
+    `picamera2`, jamais testée non plus --- cohérent avec le reste du
+    projet qui ne teste pas la couche serveur web elle-même).
+  - CI (`.github/workflows/esp32-build.yml`) étendue : nouveau job
+    `build-esp32-cam` (déclenché sur `esp32-cam/**`), en plus de la
+    matrice `esp32_wroom`/`esp32_s3` existante.
 - **Raspberry Pi --- bring-up bloqué sur le WiFi (2026-09-05)** : début du
   travail Phase 5 (`ARCHITECTURE_AND_ROADMAP.md`, case "OS" toujours
   décochée) --- carte SD 8 Go, Raspberry Pi 3B+ physique en main.
@@ -47,16 +95,52 @@
   4. Image/OS en cause plutôt que le matériel --- testé avec **DietPi**
      (OS totalement différent) à la place de Raspberry Pi OS --- même
      symptôme exact (`wlan0` absent, rien dans `dmesg`).
-  **Session arrêtée ici, non résolu.** Piste la plus probable restante :
-  panne matérielle réelle de la puce WiFi onboard (BCM43430, sur bus
-  SDIO) --- mais quatre combinaisons carte/image différentes montrant
-  exactement le même symptôme rend aussi une cause matérielle partagée
-  moins évidente à trancher à distance (alimentation insuffisante lors
-  de l'init WiFi ? --- pas vérifié). **Pas confirmé si le test DietPi a
-  été fait sur la première ou la deuxième carte** --- à clarifier à la
-  reprise. Piste pragmatique proposée mais pas encore essayée : un
-  dongle WiFi USB externe, pour contourner le problème sans continuer à
-  déboguer la puce onboard à l'aveugle.
+  **Résolu (2026-09-06)** : confirmé matériel --- puce WiFi onboard
+  endommagée sur la première carte 3B+. DietPi installé sur une carte
+  physique différente : WiFi fonctionnel directement, aucun contournement
+  (dongle USB) nécessaire. Pi retrouvé sur le réseau local via
+  `nmap -sn 192.168.1.0/24` --- **`rover.lan` / `192.168.1.187`**
+  (hostname `rover` déjà annoncé au routeur), port 22 (SSH) ouvert.
+  Résolution `.local` (mDNS) pas testée avec succès directement depuis ce
+  PC dev (`avahi-resolve` présent mais pas essayé, `ping rover.local` a
+  timeout --- probablement juste `nss-mdns` non configuré côté client,
+  pas un problème du Pi). **Configuration logicielle faite (2026-09-06,
+  même session)** : connecté en SSH (login système `dietpi`, pas
+  `rover` --- `rover` est le mot de passe/hostname, pas l'utilisateur),
+  `python3`/`git` installés (absents par défaut sur cette image DietPi
+  minimale), dépôt cloné (`~/Rover-Project`, depuis GitHub), venv créé et
+  `requirements-dev.txt` installé --- **37/37 tests passent sur le
+  matériel réel** (aarch64, Debian 13 trixie, DietPi 10.6.2). Utilisateur
+  `dietpi` ajouté au groupe `dialout` par anticipation (nécessaire pour
+  `/dev/ttyUSB0` une fois l'ESP32 branché --- pas encore le cas, aucun
+  port série présent pour l'instant). `pi/rover.env` créé avec un token
+  `ROVER_CONTROL_TOKEN` généré aléatoirement (fichier git-ignored, pas
+  dans le dépôt).
+  **ESP32 branché en USB au Pi (même session)** : détecté en
+  `/dev/ttyUSB0` (CP2102), `dietpi` avait déjà été ajouté au groupe
+  `dialout` par anticipation --- accès immédiat sans reconfiguration.
+  `rover_core.main` lancé manuellement contre le port réel : trames
+  `STATE` bien décodées (IMU/environnement cohérents, distance à `9999`
+  --- VL53L0X toujours pas câblés, attendu). **Pilotage validé de bout en
+  bout sur le robot réel, en conditions WiFi normales** : page de
+  contrôle ouverte depuis un téléphone sur le même réseau
+  (`http://192.168.1.187:8080/?token=...`), joystick tactile testé, les
+  moteurs répondent. Token d'accès vérifié (`403` sans, `200` avec).
+  Petite anomalie cosmétique observée et pas encore creusée : à chaque
+  connexion série fraîche, une salve d'environ 1s de warnings `checksum
+  mismatch` pour un fragment tronqué identique (`...as_kohm=0.0 *XX`)
+  avant que le flux `STATE` ne se stabilise normalement --- reproductible
+  à chaque lancement, mais sans impact fonctionnel observé une fois
+  stabilisé (le pilotage n'a pas été perturbé). Piste pas creusée :
+  `pi/rover_esp32/link.py` (`_LineHandler`/`ReaderThread` de pyserial)
+  ou un reset ESP32 déclenché par l'ouverture du port (DTR/RTS).
+  **Service systemd installé et activé (même session)** : copie de
+  `pi/rover-core.service` adaptée (`User=dietpi`,
+  `/home/dietpi/Rover-Project/...` au lieu des placeholders `pi`) dans
+  `/etc/systemd/system/`, `enable --now` --- démarre au boot, et
+  redémarrage automatique confirmé après un `SIGKILL` forcé (repart en
+  moins de 7s, même token, page de contrôle de nouveau joignable).
+  Rover tourne maintenant en service permanent sur le Pi.
 - **WiFi/OTA (2026-09-05)** : le canal OTA existant (`esp32/lib/ota/RoverOTA.h`,
   identifiants fixés à la compilation via variables d'environnement,
   voir historique 2026-08-31) est complété par un **portail de
@@ -214,14 +298,11 @@
 
 ## Prochaines étapes
 
-0. **Priorité immédiate à la reprise** : débloquer le WiFi Raspberry Pi
-   (voir "Raspberry Pi --- bring-up bloqué sur le WiFi" ci-dessus).
-   Clarifier d'abord si le test DietPi a été fait sur la première ou la
-   deuxième carte physique (pas noté cette session). Piste pragmatique
-   la plus rapide si pas déjà tentée : brancher un dongle WiFi USB pour
-   contourner la puce onboard plutôt que continuer à déboguer à
-   l'aveugle. Tout le travail `rover-ai` (voir §17.1) est bloqué
-   derrière ça.
+0. **Bring-up Pi terminé** (2026-09-06) : ESP32 branché, pilotage validé
+   de bout en bout sur le robot réel, service systemd installé/activé
+   (démarrage auto + redémarrage sur crash confirmé). Voir ci-dessus.
+   Tout le travail `rover-ai` (voir §17.1) est débloqué mais pas
+   commencé --- prochaine grosse brique côté Pi.
 1. Vérifier que rien n'a été endommagé par l'ancien mauvais câblage
    (encodeur exposé au PWM 9V sur son VCC, régulateur 3V3 ESP32 avec une
    borne moteur en direct dessus) --- pas de symptôme attendu si tout est
@@ -275,6 +356,31 @@
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-06** --- Blocage WiFi résolu : puce onboard endommagée sur la
+  1ère carte 3B+, DietPi sur une carte différente fonctionne directement.
+  Pi retrouvé sur le réseau (`rover.lan`, 192.168.1.187, SSH ouvert),
+  environnement logiciel mis en place (python3/git installés, dépôt
+  cloné, venv, 37/37 tests passent sur le matériel réel, token de
+  contrôle généré). ESP32 principal branché en USB au Pi (même
+  session) : **pilotage complet validé de bout en bout sur le robot
+  réel** --- joystick tactile depuis un téléphone → Pi (WiFi) → ESP32 →
+  moteurs, token d'authentification vérifié. Service systemd installé et
+  activé (`rover-core`, démarrage auto au boot, redémarrage confirmé
+  après un `SIGKILL` forcé). Décision d'architecture
+  caméra : ESP32-CAM déporté et indépendant à la place d'une caméra
+  Raspberry Pi (contrainte CAO tête), voir `ARCHITECTURE_AND_ROADMAP.md`
+  §4.3 --- pas encore implémenté.
+- **2026-09-06 (suite, code uniquement, pas de câblage)** --- Firmware
+  `esp32-cam/` écrit (nouveau projet PlatformIO, AI-Thinker ESP32-CAM
+  confirmé) : WiFi, init caméra, mDNS `rovercam.local`, serveur MJPEG
+  `esp_http_server` port 81 `/stream`. Compile proprement (RAM 15.2%,
+  Flash 27.5%) --- pas encore flashé (câblage FTDI prévu la prochaine
+  session, voir `esp32-cam/WIRING.md`). `pi/rover_control/camera.py`
+  réécrit en reverse proxy `aiohttp` vers ce flux (`camera_url`
+  configurable, `503` si absent/injoignable) --- validé avec un faux
+  serveur MJPEG (pas le vrai module), 37/37 tests `pi/` toujours au
+  vert. CI étendue pour compiler `esp32-cam/` en plus de
+  `esp32_wroom`/`esp32_s3`.
 - **2026-09-05 (suite, Raspberry Pi)** --- Architecture `rover-ai`
   conçue et documentée (§17.1, deux fournisseurs IA interchangeables :
   API cloud ou LLM réseau local) ; début bring-up Raspberry Pi 3B+

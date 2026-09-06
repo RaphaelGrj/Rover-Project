@@ -31,3 +31,5 @@ pi/wireguard/client.conf
 # out of habit from another project.
 esp32/**/wifi_credentials*
 esp32/**/*secrets*
+esp32-cam/**/wifi_credentials*
+esp32-cam/**/*secrets*

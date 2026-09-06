@@ -16,9 +16,10 @@
 | Composant | Qté | Statut | Utilité | Notes |
 |---|---|---|---|---|
 | ESP32 WROOM (devkit 30 broches) | 1 | ✅ | Contrôleur temps réel (moteurs, servos, écran, capteurs, sécurité) | Firmware compatible ESP32-S3 pour évolution future, voir `CLAUDE.md` |
-| Raspberry Pi 3B+ (ou plus récent) | 1 | ❓ | "Cerveau" --- IA, réseau, contrôle distant, futur : caméra/vision/HA | Cible architecturale (§4.1) ; pas confirmé reçu à ce jour, le code Pi n'a été testé que sur machine de dev (voir `pi/README.md`) |
-| Carte microSD (16-32 Go, classe 10+) | 1 | 🛒 | Stockage OS + code du Raspberry Pi | Nécessaire dès que le Pi est disponible |
+| Raspberry Pi 3B+ (ou plus récent) | 1 | ✅ | "Cerveau" --- IA, réseau, contrôle distant, futur : vision/HA | Cible architecturale (§4.1) ; **reçu, DietPi flashé et trouvé sur le réseau (2026-09-06, `rover.lan`)** --- 1ère carte avait la puce WiFi endommagée (remplacée) |
+| Carte microSD (16-32 Go, classe 10+) | 1 | ✅ | Stockage OS + code du Raspberry Pi | 8 Go, DietPi flashé dessus (2026-09-06) |
 | Câble USB (ESP32 ↔ Pi ou PC) | 1 | ✅ (via PC dev) | Flash + alimentation ESP32 en test | Pour le robot final, liaison UART directe Pi↔ESP32 envisagée (voir `WIRING.md` §UART2), pas de composant supplémentaire nécessaire (les deux cartes sont en logique 3,3V) |
+| Module ESP32-CAM (avec caméra intégrée) | 1 | ✅ | Caméra déportée, indépendante --- filme et sert le flux au Pi en WiFi (voir `ARCHITECTURE_AND_ROADMAP.md` §4.3) | Choisi à la place d'une caméra Raspberry Pi, faute de place en CAO dans la tête ; pas encore câblé/flashé |
 
 ------------------------------------------------------------------------
 
@@ -128,12 +129,6 @@ Sources consultées pour les modules BMS/charge USB-C 2S :
 Ne pas commander maintenant --- listé pour mémoire, phases pas encore
 commencées :
 
-- Caméra (Phase 6) --- module Pi Camera ou webcam USB, non décidé.
-  Piste envisagée : mini-module type Arducam "spy camera" (capteur
-  OV5647, ~6mm de large, câble plat déporté) pour le contraste de place
-  dans la tête (voir PROGRESS.md 2026-08-31). Logiciel déjà prêt côté
-  Pi (`pi/rover_control/camera.py`, via `picamera2`) --- s'active tout
-  seul dès qu'un module est branché, aucun changement de code attendu.
 - Micro/haut-parleur (Phase 7, audio) --- non décidé.
 - Tout composant Home Assistant/domotique (Phase 10).
 

@@ -10,5 +10,6 @@
   "mqtt_host": null,
   "mqtt_port": 1883,
   "mqtt_topic_prefix": "rover",
-  "mqtt_publish_period_s": 10.0
+  "mqtt_publish_period_s": 10.0,
+  "camera_url": null
 }

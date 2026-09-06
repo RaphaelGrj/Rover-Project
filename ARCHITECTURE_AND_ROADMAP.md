@@ -72,7 +72,7 @@ L'architecture est divisée en deux niveaux :
     navigation                servos
     personnalité              capteurs
     Home Assistant            écran
-    caméra                    sécurité
+    vision (ESP32-CAM)        sécurité
 ```
 
 ------------------------------------------------------------------------
@@ -133,8 +133,8 @@ Le Raspberry Pi est l'ordinateur de bord.
 Responsabilités :
 
 -   IA ;
--   vision ;
--   caméra ;
+-   vision (réception et analyse du flux vidéo --- caméra déportée sur
+    ESP32-CAM, voir §4.3) ;
 -   reconnaissance ;
 -   logique comportementale ;
 -   personnalité ;
@@ -176,6 +176,49 @@ ou temporairement indisponible.
 
 ------------------------------------------------------------------------
 
+## 4.3 ESP32-CAM (caméra déportée)
+
+Décision (2026-09-06) : la caméra n'est **pas** rattachée au Raspberry
+Pi ni à l'ESP32 principal, mais portée par un **module ESP32-CAM**
+indépendant, avec sa propre caméra intégrée.
+
+Raison : contrainte CAO --- la tête de Rover n'a pas la place pour un
+module caméra Raspberry Pi (même déporté par nappe CSI). Un module
+ESP32-CAM autonome, alimenté et connecté en WiFi seul (pas de nappe à
+faire tenir dans la tête), contourne le problème d'encombrement sans
+changer de plateforme matérielle pour le reste du robot.
+
+Rôle --- volontairement minimal, aucune logique de vision dessus :
+
+``` text
+L'ESP32-CAM filme.
+Le Raspberry Pi analyse.
+```
+
+Conséquences architecturales :
+
+-   L'ESP32-CAM est **indépendant de l'ESP32 principal** --- aucun lien
+    avec le Rover Protocol (UART/USB) ni le reste de la table §5. Sa
+    seule liaison est le WiFi, directement vers le Raspberry Pi.
+-   Le Raspberry Pi **récupère le flux vidéo sur le réseau** plutôt que
+    de dépendre d'une caméra locale : `pi/rover_control/camera.py` a été
+    réécrit (2026-09-06) --- il ne dépend plus de `picamera2`, il relaie
+    (reverse proxy `aiohttp`) le flux MJPEG exposé par le firmware
+    ESP32-CAM (endpoint HTTP `/stream`, port 81) à travers le même
+    endpoint `/video` authentifié déjà en place côté Pi, plutôt que
+    d'exposer l'ESP32-CAM directement et sans authentification sur le
+    réseau local. Testé avec un faux serveur MJPEG (pas encore
+    l'ESP32-CAM réel, voir PROGRESS.md).
+-   Le firmware de l'ESP32-CAM (capture + serveur MJPEG) est un projet
+    séparé du firmware `esp32/` principal de ce dépôt --- pas de
+    portabilité WROOM/S3 à respecter dessus, c'est un module caméra
+    dédié. Écrit et compile (2026-09-06, `esp32-cam/`, board AI-Thinker
+    ESP32-CAM) --- **pas encore flashé/testé sur le module physique**
+    (câblage vers un adaptateur FTDI/USB-TTL prévu pour une prochaine
+    session, voir `esp32-cam/WIRING.md`).
+
+------------------------------------------------------------------------
+
 # 5. Périphériques et propriétaire matériel
 
 Chaque périphérique doit avoir un propriétaire clair.
@@ -193,7 +236,8 @@ Chaque périphérique doit avoir un propriétaire clair.
   VL53L0X gauche      ESP32          distance
   VL53L0X droite      ESP32          distance
   BME688              ESP32          environnement
-  Caméra              Raspberry Pi   vision
+  Caméra (capture)    ESP32-CAM      filme (flux MJPEG WiFi, §4.3)
+  Vision (analyse)    Raspberry Pi   interprétation du flux vidéo
   IA                  Raspberry Pi   raisonnement
   Réseau              Raspberry Pi   Wi-Fi / services
   Home Assistant      Raspberry Pi   domotique
@@ -592,13 +636,15 @@ comment faire tourner les moteurs pour y aller
 
 # 14. Vision
 
-La caméra appartient au Raspberry Pi.
+La capture vidéo appartient à l'ESP32-CAM, module déporté indépendant
+(voir §4.3) --- l'analyse (vision) reste du ressort du Raspberry Pi, qui
+récupère le flux sur le réseau.
 
 Chaîne cible :
 
 ``` text
-Caméra
-  ↓
+ESP32-CAM (filme)
+  ↓ flux MJPEG, WiFi
 Raspberry Pi
   ↓
 Vision
@@ -1276,17 +1322,25 @@ l'orchestrateur complet décrit ici.
 
 Objectif : voir et piloter Rover.
 
--   [ ] Caméra --- aucune choisie/reçue (`BOM.md`).
--   [x] Flux vidéo local --- infrastructure logicielle prête
-      (`pi/rover_control/camera.py`, MJPEG via `picamera2`, protégée par
-      le même token que le reste) et branchée dans l'UI, mais répond
-      `503 unavailable` tant qu'aucune caméra n'est choisie/branchée ---
-      s'active automatiquement dès qu'une l'est, sans changement de
-      code. Voir PROGRESS.md 2026-08-31.
+-   [x] Caméra --- **décidée (2026-09-06)** : module **ESP32-CAM**
+      déporté et indépendant plutôt qu'une caméra Raspberry Pi (pas de
+      place en CAO dans la tête), voir §4.3. Matériel disponible, pas
+      encore câblé/flashé.
+-   [x] Flux vidéo --- `pi/rover_control/camera.py` réécrit (2026-09-06,
+      voir §4.3) : relaie (reverse proxy `aiohttp`) le flux MJPEG de
+      l'ESP32-CAM à travers `/video`, authentifié comme le reste.
+      Configurable via `--camera-url`/`camera_url`. Logique validée
+      avec un faux serveur MJPEG (upstream/dead-upstream/pas-configuré,
+      voir PROGRESS.md) --- **pas encore testé contre le vrai
+      ESP32-CAM**, pas encore flashé/câblé. Répond `503 unavailable`
+      tant que `camera_url` n'est pas configuré ou que l'ESP32-CAM est
+      injoignable.
 -   [x] Interface de contrôle (`pi/rover_control/`, page web
       autonome, pas de build).
--   [x] Commandes MOVE (validé de bout en bout en simulation, voir
-      PROGRESS.md : navigateur → WebSocket → Rover Protocol → ESP32).
+-   [x] Commandes MOVE --- validé de bout en bout **sur le robot réel**
+      (2026-09-06) : téléphone → Pi (WiFi) → Rover Protocol (série USB) →
+      ESP32 → moteurs. Joystick tactile confirmé fonctionnel, les roues
+      tournent. Voir PROGRESS.md.
 -   [x] Commandes HEAD --- la Phase 3 (servos tête) est terminée côté
       ESP32 depuis une session précédente, ce point n'avait juste
       jamais été branché côté interface : deuxième pad tactile (regard)
@@ -1303,21 +1357,21 @@ Objectif : voir et piloter Rover.
       MOVING/ERROR/...) et un bandeau d'alerte obstacle basé sur
       `distance_left`/`distance_right` (même seuil que l'`EVENT
       obstacle_detected` de l'ESP32). Voir PROGRESS.md 2026-08-31.
--   [x] Contrôle smartphone (joystick tactile, Pointer Events) --- code
-      écrit, backend validé ; reste à valider au toucher sur un vrai
-      téléphone.
--   [x] Support manette / gamepad (Gamepad API) --- idem, code écrit,
-      reste à valider avec une manette physique branchée.
+-   [x] Contrôle smartphone (joystick tactile, Pointer Events) ---
+      **validé au toucher sur un vrai téléphone (2026-09-06)** : les
+      roues répondent bien au joystick, sur le robot réel.
+-   [x] Support manette / gamepad (Gamepad API) --- code écrit, reste à
+      valider avec une manette physique branchée (le joystick tactile,
+      lui, est validé).
 -   [x] Accès distant sécurisé (VPN) --- guide complet WireGuard
       auto-hébergé (`pi/VPN.md`), templates de config commités
       (`pi/wireguard/*.example.conf`, jamais de vraie clé committée),
       un seul port UDP à exposer sur la box (jamais le port HTTP/HTTPS
       de `rover_control` directement). Le token d'accès reste
       obligatoire une fois connecté au VPN --- défense en profondeur,
-      pas un remplacement. **Non testé en conditions réelles** (pas de
-      Raspberry Pi ni de box/routeur disponibles pour ça cette
-      session) --- documentation et templates de configuration
-      seulement, à vérifier une fois le Pi physique en place.
+      pas un remplacement. **Toujours pas testé en conditions réelles**
+      --- Pi désormais disponible (voir PROGRESS.md 2026-09-06), mais
+      pas encore essayé à travers la box/routeur.
 -   [x] Authentification --- token d'accès obligatoire sur toutes les
       routes (page, WebSocket, vidéo), généré aléatoirement à chaque
       démarrage si `ROVER_CONTROL_TOKEN` n'est pas fixé par
@@ -1331,12 +1385,14 @@ Objectif : voir et piloter Rover.
 Résultat :
 
 Rover peut être piloté à distance (smartphone ou manette) avec retour
-vidéo, y compris hors du réseau local via VPN. **Atteint au niveau
-logiciel** : pilotage MOVE/HEAD fonctionnel et authentifié, chiffrement
-TLS/WSS disponible en option, guide VPN complet ; **caméra toujours
-absente** (aucun matériel choisi/reçu, `BOM.md`) et VPN non testé en
-conditions réelles faute de Raspberry Pi/routeur disponibles (voir
-PROGRESS.md pour l'état détaillé).
+vidéo, y compris hors du réseau local via VPN. **Pilotage validé sur le
+robot réel (2026-09-06)** : joystick tactile → Pi (WiFi) → ESP32 →
+moteurs, de bout en bout, token d'authentification vérifié (`403` sans,
+`200` avec) ; **caméra ESP32-CAM (§4.3) : firmware écrit et compile,
+relais vidéo Pi réécrit et validé en isolation (faux serveur MJPEG),
+mais rien encore testé sur le module physique** (pas flashé/câblé) ; VPN
+toujours pas testé en conditions réelles (voir PROGRESS.md pour l'état
+détaillé).
 
 Cas d'usage prioritaire : surveillance de la maison à distance
 (déplacement + vidéo en temps réel) en complément du pilotage.
@@ -1748,20 +1804,20 @@ Raspberry Pi
                      IA / API / HA
                             │
                             ▼
-                ┌─────────────────────┐
-                │    RASPBERRY PI     │
-                │                     │
-                │    ROVER CORE       │
-                │         │           │
-                │  ┌──────┼───────┐   │
-                │  │      │       │   │
-                │ AI    Vision   Nav  │
-                │  │      │       │   │
-                │ Audio   Caméra   │   │
-                │  │              │   │
-                │ Home Assistant  │   │
-                └─────────┬───────────┘
-                          │
+   ESP32-CAM (filme)               ┌─────────────────────┐
+        │                          │    RASPBERRY PI     │
+        │ WiFi, flux MJPEG,        │                     │
+        │ indépendant du reste     │    ROVER CORE       │
+        └────────────────────────▶ │         │           │
+                                    │  ┌──────┼───────┐   │
+                                    │  │      │       │   │
+                                    │ AI    Vision   Nav  │
+                                    │  │      │       │   │
+                                    │ Audio            │   │
+                                    │  │              │   │
+                                    │ Home Assistant  │   │
+                                    └─────────┬───────────┘
+                                              │
                     ROVER PROTOCOL
                        UART / USB
                           │

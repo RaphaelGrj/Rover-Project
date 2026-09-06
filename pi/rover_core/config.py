@@ -35,6 +35,10 @@ DEFAULTS: dict[str, Any] = {
     "mqtt_port": 1883,
     "mqtt_topic_prefix": "rover",
     "mqtt_publish_period_s": 10.0,
+    # None = video disabled (503 unavailable). Set to the ESP32-CAM's
+    # own MJPEG stream URL, e.g. "http://rovercam.local:81/stream" --
+    # see ARCHITECTURE_AND_ROADMAP.md §4.3 and esp32-cam/.
+    "camera_url": None,
 }
 
 

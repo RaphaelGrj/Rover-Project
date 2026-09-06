@@ -157,14 +157,25 @@ deux cas : `RoverLink` utilise `serial.serial_for_url()`, qui traite
 
 ## Vidéo
 
-`rover_control/camera.py` sert un flux MJPEG (`/video`, protégé par le
-même token) via `picamera2` --- **aucune caméra n'est encore choisie
-pour Rover** (voir `BOM.md`, Phase 6 toujours "hors périmètre"), donc en
-pratique `/video` répond `503 camera unavailable` pour l'instant, y
-compris sur un vrai Raspberry Pi sans caméra branchée. La page de
-contrôle affiche "Caméra indisponible" dans ce cas plutôt qu'une image
-cassée. Rien à faire de spécial une fois une caméra branchée --- ça
-s'active tout seul si `picamera2` peut l'initialiser.
+La caméra n'est **pas** locale au Pi --- c'est un module **ESP32-CAM**
+déporté et indépendant (voir `ARCHITECTURE_AND_ROADMAP.md` §4.3 et
+`esp32-cam/`), qui sert son propre flux MJPEG sur le réseau local
+(`http://rovercam.local:81/stream` par défaut). `rover_control/camera.py`
+**relaie** ce flux (reverse proxy, via `aiohttp`) à travers le même
+endpoint authentifié `/video` --- rien n'est jamais exposé directement
+et sans authentification.
+
+Configurer l'URL de l'ESP32-CAM (`--camera-url` ou `camera_url` dans
+`config.json`) :
+
+```bash
+python -m rover_core.main --port /dev/ttyUSB0 --camera-url http://rovercam.local:81/stream
+```
+
+Sans `camera_url` configuré, ou si l'ESP32-CAM est injoignable au
+moment d'une requête, `/video` répond `503 camera unavailable` --- la
+page de contrôle affiche "Caméra indisponible" dans ce cas plutôt
+qu'une image cassée, jamais un crash du reste du serveur.
 
 ## Structure
 

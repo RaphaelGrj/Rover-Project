@@ -12,11 +12,13 @@ on:
   push:
     paths:
       - "esp32/**"
+      - "esp32-cam/**"
       - "pi/**"
       - ".github/workflows/esp32-build.yml"
   pull_request:
     paths:
       - "esp32/**"
+      - "esp32-cam/**"
       - "pi/**"
       - ".github/workflows/esp32-build.yml"
   workflow_dispatch:
@@ -56,6 +58,32 @@ jobs:
       - name: Build ${{ matrix.environment }}
         working-directory: esp32
         run: pio run -e ${{ matrix.environment }}
+
+  build-esp32-cam:
+    # Separate, independent PlatformIO project (ARCHITECTURE_AND_ROADMAP.md
+    # §4.3) -- the deported camera module, not part of the esp32_wroom/
+    # esp32_s3 matrix above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO packages/toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+          key: platformio-esp32cam-${{ hashFiles('esp32-cam/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build esp32cam
+        working-directory: esp32-cam
+        run: pio run
 
   test:
     runs-on: ubuntu-latest

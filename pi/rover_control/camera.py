@@ -1,80 +1,93 @@
-"""MJPEG camera stream -- entirely optional, the same "hardware
-optional" principle used throughout this project (see
-esp32/lib/sensors/I2CProbe.h for the equivalent idea on the firmware
-side). No camera exists on Rover yet (BOM.md: Phase 6 is still "hors
-périmètre") -- this gives the control page somewhere to show a feed
-from once one does, without anything crashing or breaking in the
-meantime.
+"""MJPEG video -- reverse-proxies the stream served by the ESP32-CAM
+(a separate, deported camera module, see ARCHITECTURE_AND_ROADMAP.md
+§4.3: "the ESP32-CAM films, the Pi analyzes") through this server's own
+authenticated `/video` endpoint, instead of exposing the ESP32-CAM
+directly and unauthenticated on the local network.
 
-Uses picamera2 (the current, actively-maintained Raspberry Pi camera
-stack) if it's importable and a camera is actually present; otherwise
-`available` stays False and /video reports that plainly rather than
-taking down the rest of the control server over a missing camera.
+"Hardware optional" -- same principle used throughout this project
+(esp32/lib/sensors/I2CProbe.h is the equivalent idea on the firmware
+side): no `camera_url` configured, or the ESP32-CAM unreachable when a
+client asks for `/video`, both report `503 unavailable` rather than
+crashing or taking down the rest of the control server.
 
 MJPEG-over-HTTP (multipart/x-mixed-replace), not WebRTC: it needs no
 signaling server, no STUN/TURN, and displays in the browser with a
 plain <img> tag -- consistent with this project's "no heavy dependency
 when a simple one will do" rule (ARCHITECTURE_AND_ROADMAP.md §27.10).
+The exact multipart boundary is whatever the ESP32-CAM firmware used
+(esp32-cam/src/main.cpp) -- this module mirrors its Content-Type
+header verbatim rather than re-encoding frames itself.
 """
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 
+import aiohttp
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-_BOUNDARY = "roverframe"
-# ~10 fps: plenty for a control-page situational preview, not meant to
-# be a low-latency FPV feed.
-_FRAME_INTERVAL_S = 0.1
+# Connect fast-fails rather than hanging the requesting browser tab if
+# the ESP32-CAM is powered off/unreachable; sock_read is generous
+# because a slow but alive stream (Pi under load, weak WiFi) shouldn't
+# be mistaken for a dead one.
+_CONNECT_TIMEOUT_S = 5
+_READ_TIMEOUT_S = 15
 
 
 class CameraStream:
-    def __init__(self) -> None:
-        self._picam2 = None
-        self.available = False
-        try:
-            from picamera2 import Picamera2  # type: ignore[import-not-found]
+    def __init__(self, camera_url: str | None = None) -> None:
+        self._camera_url = camera_url or None
+        self.available = self._camera_url is not None
+        self._session: aiohttp.ClientSession | None = None
+        if not self.available:
+            logger.info("camera stream unavailable (no camera_url configured) -- /video will report unavailable")
 
-            self._picam2 = Picamera2()
-            self._picam2.configure(self._picam2.create_video_configuration(main={"size": (640, 480)}))
-            self._picam2.start()
-            self.available = True
-            logger.info("camera stream available (picamera2)")
-        except Exception as exc:  # noqa: BLE001 - deliberately broad, see module docstring
-            # Covers picamera2 not installed (ImportError -- the normal
-            # case on any machine that isn't the Pi itself, including
-            # this dev machine), no camera ribbon attached, permission
-            # issues, or the wrong platform entirely.
-            logger.info("camera stream unavailable (%s) -- /video will report unavailable", exc)
+    async def _get_session(self) -> aiohttp.ClientSession:
+        # Created lazily, inside the running event loop that will
+        # actually use it (aiohttp.ClientSession is unhappy about being
+        # constructed outside one) -- and reused across requests rather
+        # than opening a fresh TCP connection to the ESP32-CAM every
+        # time someone (re)loads the control page.
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(connect=_CONNECT_TIMEOUT_S, sock_read=_READ_TIMEOUT_S)
+            )
+        return self._session
 
-    def _capture_jpeg(self) -> bytes:
-        stream = io.BytesIO()
-        self._picam2.capture_file(stream, format="jpeg")
-        return stream.getvalue()
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
 
     async def mjpeg_response(self, request: web.Request) -> web.StreamResponse:
         if not self.available:
             return web.Response(status=503, text="camera unavailable")
 
-        response = web.StreamResponse(
-            status=200,
-            headers={"Content-Type": f"multipart/x-mixed-replace; boundary={_BOUNDARY}"},
-        )
+        session = await self._get_session()
+        try:
+            upstream = await session.get(self._camera_url)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("ESP32-CAM unreachable at %s: %s", self._camera_url, exc)
+            return web.Response(status=503, text="camera unavailable")
+
+        if upstream.status != 200:
+            upstream.release()
+            logger.warning("ESP32-CAM returned HTTP %d for %s", upstream.status, self._camera_url)
+            return web.Response(status=503, text="camera unavailable")
+
+        # Mirrored, not hardcoded: the real boundary lives in the
+        # ESP32-CAM firmware (esp32-cam/src/main.cpp) -- duplicating it
+        # here would be one more place to keep in sync if it ever
+        # changes.
+        content_type = upstream.headers.get("Content-Type", "multipart/x-mixed-replace")
+        response = web.StreamResponse(status=200, headers={"Content-Type": content_type})
         await response.prepare(request)
         try:
-            while True:
-                # capture_file() blocks on hardware I/O -- run it off the
-                # event loop so one video client can't stall everything
-                # else this server does (WebSocket control commands,
-                # other clients).
-                frame = await asyncio.to_thread(self._capture_jpeg)
-                header = f"--{_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(frame)}\r\n\r\n"
-                await response.write(header.encode("ascii") + frame + b"\r\n")
-                await asyncio.sleep(_FRAME_INTERVAL_S)
+            async for chunk in upstream.content.iter_any():
+                await response.write(chunk)
         except (ConnectionResetError, asyncio.CancelledError):
             pass  # client navigated away / disconnected -- not an error
+        finally:
+            upstream.release()
         return response
