@@ -21,6 +21,7 @@ import asyncio
 from aiohttp import web
 
 from rover_esp32.link import RoverLink
+from rover_control.ai_panel import AIPanel
 from rover_control.auth import resolve_token
 from rover_control.camera import CameraStream
 from rover_control.server import create_app
@@ -160,7 +161,8 @@ async def async_main(settings: dict) -> None:
 
     token = resolve_token()
     camera = CameraStream(settings["camera_url"])
-    app = create_app(core, token, camera)
+    ai_panel = AIPanel()
+    app = create_app(core, token, camera, ai_panel)
     runner = web.AppRunner(app)
     await runner.setup()
 
@@ -188,6 +190,7 @@ async def async_main(settings: dict) -> None:
             mqtt_task.cancel()
         mqtt.close()
         await camera.close()
+        await ai_panel.close()
         await runner.cleanup()
         link.stop()
 

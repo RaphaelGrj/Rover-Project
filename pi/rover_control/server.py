@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING
 
 from aiohttp import WSMsgType, web
 
+from rover_ai import AIProviderError
+
+from .ai_panel import AIPanel
 from .auth import token_matches
 from .camera import CameraStream
 
@@ -31,6 +34,10 @@ async def index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(STATIC_DIR / "index.html")
 
 
+async def ai_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(STATIC_DIR / "ai.html")
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
     """Applies to every route on this app (see create_app) -- a new
@@ -43,20 +50,73 @@ async def auth_middleware(request: web.Request, handler):
     return await handler(request)
 
 
-def create_app(core: "RoverCore", token: str, camera: CameraStream | None = None) -> web.Application:
+def create_app(
+    core: "RoverCore",
+    token: str,
+    camera: CameraStream | None = None,
+    ai_panel: AIPanel | None = None,
+) -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app["core"] = core
     app["token"] = token
     app["camera"] = camera or CameraStream()
+    app["ai_panel"] = ai_panel or AIPanel()
     app.router.add_get("/", index)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/video", video_handler)
+    app.router.add_get("/ai", ai_page)
+    app.router.add_get("/ai/config", ai_config_get)
+    app.router.add_post("/ai/config", ai_config_post)
+    app.router.add_post("/ai/ask", ai_ask_post)
     return app
 
 
 async def video_handler(request: web.Request) -> web.StreamResponse:
     camera: CameraStream = request.app["camera"]
     return await camera.mjpeg_response(request)
+
+
+async def ai_config_get(request: web.Request) -> web.Response:
+    panel: AIPanel = request.app["ai_panel"]
+    return web.json_response(panel.public_config())
+
+
+async def ai_config_post(request: web.Request) -> web.Response:
+    panel: AIPanel = request.app["ai_panel"]
+    try:
+        raw = await request.json()
+    except ValueError:
+        return web.json_response({"error": "invalid JSON body"}, status=400)
+    if not isinstance(raw, dict):
+        return web.json_response({"error": "expected a JSON object"}, status=400)
+
+    try:
+        await panel.update(raw)
+    except ValueError as exc:
+        # save_credentials() rejects an unknown key -- can't actually
+        # happen through this route (AIPanel.update() already filters
+        # to CONFIG_FIELDS first), kept as a guard rather than trusting
+        # that filtering silently forever.
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(panel.public_config())
+
+
+async def ai_ask_post(request: web.Request) -> web.Response:
+    panel: AIPanel = request.app["ai_panel"]
+    try:
+        raw = await request.json()
+        message = str(raw["message"])
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": 'expected a JSON body {"message": "..."}'}, status=400)
+
+    try:
+        reply = await panel.ask(message)
+    except AIProviderError as exc:
+        # Mirrors camera.py's "hardware/feature optional" 503, not a
+        # 500 -- an unconfigured or unreachable AI provider is an
+        # expected, recoverable state, not a server bug.
+        return web.json_response({"error": str(exc)}, status=503)
+    return web.json_response({"reply": reply})
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:

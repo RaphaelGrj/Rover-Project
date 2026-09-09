@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rover IA</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; min-height: 100%; background: #0b0f14; color: #e6edf3;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 1em 1em 3em; }
+  a.back { color: #7d8590; font-size: 0.85em; text-decoration: none; }
+  h1 { font-size: 1.2em; margin: 0.6em 0 0.2em; }
+  p.hint { color: #7d8590; font-size: 0.82em; margin-top: 0; }
+  fieldset {
+    border: 1px solid #30363d; border-radius: 8px; margin: 1em 0; padding: 0.8em 1em 1em;
+  }
+  legend { padding: 0 0.4em; color: #7d8590; font-size: 0.85em; }
+  label { display: block; font-size: 0.85em; margin: 0.7em 0 0.2em; color: #c9d1d9; }
+  input, select, textarea {
+    width: 100%; box-sizing: border-box; background: #161b22; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 6px; padding: 0.5em 0.6em; font-size: 0.95em;
+  }
+  select[multiple] { min-height: 6em; }
+  button {
+    margin-top: 0.9em; width: 100%; padding: 0.6em; border: none; border-radius: 6px;
+    background: #1f6feb; color: white; font-size: 0.95em; cursor: pointer;
+  }
+  button.secondary { background: #21262d; border: 1px solid #30363d; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #status-line { font-size: 0.85em; margin: 0.6em 0; min-height: 1.2em; }
+  #status-line.ok { color: #3fb950; }
+  #status-line.err { color: #f85149; }
+  #chat-log {
+    border: 1px solid #30363d; border-radius: 8px; padding: 0.6em;
+    min-height: 4em; max-height: 40vh; overflow-y: auto;
+    font-size: 0.9em; white-space: pre-wrap; margin-top: 0.8em;
+  }
+  #chat-log .you { color: #58a6ff; }
+  #chat-log .rover { color: #3fb950; }
+  #chat-log .err { color: #f85149; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" id="back-link" href="/">&larr; Retour au pilotage</a>
+  <h1>Fournisseur IA (rover-ai)</h1>
+  <p class="hint">
+    Choisir l'API cloud ou le LLM du réseau local que Rover utilisera pour
+    converser (ARCHITECTURE_AND_ROADMAP.md §17.1). Ce panneau ne remplace
+    pas le micro/STT/TTS (pas encore implémentés) --- juste de quoi
+    configurer et tester un échange texte dès maintenant.
+  </p>
+
+  <fieldset>
+    <legend>Fournisseur</legend>
+
+    <label for="provider-type">Type</label>
+    <select id="provider-type">
+      <option value="cloud">API cloud</option>
+      <option value="local">Réseau local</option>
+    </select>
+
+    <div id="cloud-fields">
+      <label for="cloud-vendor">Service</label>
+      <select id="cloud-vendor">
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="openai">OpenAI (ChatGPT)</option>
+        <option value="gemini">Google (Gemini)</option>
+        <option value="qwen">Qwen (Alibaba Cloud DashScope)</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="together">Together.ai</option>
+        <option value="fireworks">Fireworks.ai</option>
+        <option value="deepinfra">DeepInfra</option>
+      </select>
+
+      <label for="api-key">Clé API</label>
+      <input id="api-key" type="password" autocomplete="off" placeholder="laisser vide pour garder la clé actuelle">
+    </div>
+
+    <div id="local-fields" hidden>
+      <label for="local-url">Adresse du serveur local</label>
+      <input id="local-url" type="text" placeholder="http://192.168.1.50:11434/v1">
+    </div>
+
+    <label for="model">Modèle <span style="color:#7d8590">(vide = défaut du fournisseur)</span></label>
+    <input id="model" type="text" placeholder="ex: qwen2.5, claude-sonnet-4-5, gpt-4o-mini...">
+
+    <button id="save-btn">Enregistrer</button>
+    <div id="status-line"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tester une conversation</legend>
+    <label for="chat-input">Message</label>
+    <input id="chat-input" type="text" placeholder="Bonjour Rover !">
+    <button id="send-btn">Envoyer</button>
+    <div id="chat-log"></div>
+  </fieldset>
+</main>
+
+<script>
+"use strict";
+
+const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
+document.getElementById("back-link").href = "/?token=" + encodeURIComponent(ACCESS_TOKEN);
+
+function apiUrl(path) {
+  return path + "?token=" + encodeURIComponent(ACCESS_TOKEN);
+}
+
+const providerTypeEl = document.getElementById("provider-type");
+const cloudFieldsEl = document.getElementById("cloud-fields");
+const localFieldsEl = document.getElementById("local-fields");
+const cloudVendorEl = document.getElementById("cloud-vendor");
+const apiKeyEl = document.getElementById("api-key");
+const localUrlEl = document.getElementById("local-url");
+const modelEl = document.getElementById("model");
+const saveBtn = document.getElementById("save-btn");
+const statusLineEl = document.getElementById("status-line");
+const chatInputEl = document.getElementById("chat-input");
+const sendBtn = document.getElementById("send-btn");
+const chatLogEl = document.getElementById("chat-log");
+
+function updateFieldVisibility() {
+  const isCloud = providerTypeEl.value === "cloud";
+  cloudFieldsEl.hidden = !isCloud;
+  localFieldsEl.hidden = isCloud;
+}
+providerTypeEl.addEventListener("change", updateFieldVisibility);
+
+function showStatus(text, ok) {
+  statusLineEl.textContent = text;
+  statusLineEl.className = ok ? "ok" : "err";
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch(apiUrl("/ai/config"));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    providerTypeEl.value = data.provider || "cloud";
+    cloudVendorEl.value = data.cloud_vendor || "anthropic";
+    if (data.api_key) apiKeyEl.placeholder = "clé enregistrée -- laisser vide pour la garder";
+    localUrlEl.value = data.local_url || "";
+    modelEl.value = data.model || "";
+    updateFieldVisibility();
+    showStatus(data.available ? "Fournisseur configure et pret." : "Aucun fournisseur configure pour le moment.", data.available);
+  } catch (err) {
+    showStatus("Impossible de charger la configuration actuelle: " + err, false);
+  }
+}
+loadConfig();
+
+saveBtn.addEventListener("click", async () => {
+  saveBtn.disabled = true;
+  const isCloud = providerTypeEl.value === "cloud";
+  const body = {
+    provider: providerTypeEl.value,
+    cloud_vendor: isCloud ? cloudVendorEl.value : "",
+    api_key: isCloud ? apiKeyEl.value : "",
+    local_url: isCloud ? "" : localUrlEl.value,
+    model: modelEl.value,
+  };
+  try {
+    const res = await fetch(apiUrl("/ai/config"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    apiKeyEl.value = "";
+    if (data.api_key) apiKeyEl.placeholder = "clé enregistrée -- laisser vide pour la garder";
+    showStatus(data.available ? "Enregistre -- fournisseur pret." : "Enregistre, mais pas encore utilisable (verifier cle/adresse).", data.available);
+  } catch (err) {
+    showStatus("Echec de l'enregistrement: " + err, false);
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+function appendChatLine(cls, text) {
+  const line = document.createElement("div");
+  line.className = cls;
+  line.textContent = text;
+  chatLogEl.appendChild(line);
+  chatLogEl.scrollTop = chatLogEl.scrollHeight;
+}
+
+async function sendChat() {
+  const message = chatInputEl.value.trim();
+  if (!message) return;
+  appendChatLine("you", "Vous: " + message);
+  chatInputEl.value = "";
+  sendBtn.disabled = true;
+  try {
+    const res = await fetch(apiUrl("/ai/ask"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    appendChatLine("rover", "Rover: " + data.reply);
+  } catch (err) {
+    appendChatLine("err", "Erreur: " + err);
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+sendBtn.addEventListener("click", sendChat);
+chatInputEl.addEventListener("keydown", (evt) => { if (evt.key === "Enter") sendChat(); });
+</script>
+</body>
+</html>

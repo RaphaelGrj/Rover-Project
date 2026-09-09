@@ -780,7 +780,60 @@ La règle reste :
 
 ## 17.1 Fournisseur IA (module `rover-ai`)
 
-**Statut (2026-09-05) : conçu ici, pas encore implémenté --- voir Phase 7.**
+**Statut (2026-09-09) : backend écrit et testé (`pi/rover_ai/`), panneau
+web de configuration + test texte disponible (`/ai`, voir
+`pi/README.md` "rover-ai") --- toujours pas branché dans `RoverCore` ni
+dans un pipeline audio, voir Phase 7.** Conçu et documenté ci-dessous
+depuis le 2026-09-05.
+
+Interface commune (`AIProvider.ask`) implémentée, huit fournisseurs
+cloud et un fournisseur réseau local générique :
+- `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider` --- chacun son
+  propre format de requête/réponse.
+- `QwenCloudProvider` (Qwen officiel via Alibaba Cloud DashScope,
+  endpoint compatible OpenAI), `OpenRouterProvider`, `TogetherProvider`,
+  `FireworksProvider`, `DeepInfraProvider` --- cinq agrégateurs qui
+  parlent tous l'API compatible OpenAI, donc juste une URL/clé/modèle
+  par défaut, aucune logique de requête séparée. Demandés par
+  l'utilisateur (2026-09-09) comme alternative cloud à l'auto-hébergement
+  pour Qwen et des modèles communautaires non censurés (Dolphin,
+  variantes "abliterated", ...) --- catalogue de modèles à vérifier chez
+  chaque fournisseur avant de figer un `model` en prod, ça bouge, et
+  même un modèle "non censuré" hébergé chez un agrégateur peut rester
+  soumis à la propre modération du service (garantie totale seulement en
+  auto-hébergement local).
+- `LocalAIProvider` --- réseau local générique (API compatible OpenAI,
+  Ollama en référence). Confirmé (2026-09-09) : n'importe quel serveur
+  qui implémente `/chat/completions` et n'importe quel nom de modèle
+  qu'il reconnaît passent sans toucher au code, juste une valeur de
+  config différente (URL + nom de modèle) --- Qwen 2.5 ou un modèle non
+  censuré ne sont qu'un nom de modèle différent.
+
+Stockage des identifiants (`pi/ai_credentials.json`, git-ignoré,
+permissions `0600`) fait selon le même principe que
+`ROVER_CONTROL_TOKEN`/`WifiCredentialsStore.h`. Testé en isolation
+(`pi/tests/test_rover_ai.py`, requêtes/réponses de chaque fournisseur
+simulées, jamais de vrai réseau) --- **jamais appelé depuis
+`RoverCore`, aucune clé API réelle testée contre un vrai service**, ce
+sera fait avec le reste de la Phase 7 (micro/STT/TTS).
+
+**Panneau web (2026-09-09)** : ce réglage est désormais accessible
+depuis l'interface web existante, comme voulu par cette section ---
+`rover_control/ai_panel.py` (logique, testée
+`pi/tests/test_ai_panel.py`) + `rover_control/static/ai.html` (page),
+routes `/ai` (page), `/ai/config` (GET état actuel/clé redactée, POST
+mise à jour) et `/ai/ask` (POST, teste une conversation texte), toutes
+protégées par le même token que le reste de `rover_control`. Un champ
+clé API laissé vide au ré-enregistrement garde la valeur déjà stockée
+(même convention que le mot de passe OTA du portail WiFi ESP32). Testé
+manuellement de bout en bout (serveur en mémoire, pas encore sur le Pi
+réel) : page/config/ask répondent, token invalide rejeté (`403`),
+fournisseur injoignable rapporté proprement (`503`) plutôt qu'un crash.
+**Bug réel trouvé et corrigé pendant l'écriture des tests** : passer de
+"cloud" à "local" laissait la clé API cloud trainer dans le fichier
+stocké (la logique "champ vide = garder la clé actuelle" s'appliquait
+même quand le nouveau fournisseur n'utilise pas de clé du tout) ---
+corrigé, la clé n'est conservée que si le fournisseur reste "cloud".
 
 Le "IA" de la chaîne ci-dessus (§17) n'est pas un fournisseur figé : Rover
 doit pouvoir utiliser, au choix de l'utilisateur et **modifiable à tout

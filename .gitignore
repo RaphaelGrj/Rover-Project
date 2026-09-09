@@ -12,6 +12,12 @@ pi/__pycache__/
 pi/config.json
 pi/logs/
 
+# rover-ai credentials (API key or local LLM address, ARCHITECTURE_AND_ROADMAP.md
+# §17.1) -- pi/ai_credentials.example.json is the tracked template, never
+# the real file (same reasoning as pi/config.json above, but this one
+# can hold a real secret).
+pi/ai_credentials.json
+
 # TLS cert/key (pi/README.md "HTTPS/WSS") and the systemd env file
 # (pi/rover.env.example is the tracked template) -- generated/filled in
 # locally per deployment, never committed.

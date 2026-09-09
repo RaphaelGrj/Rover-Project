@@ -12,6 +12,99 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **`rover-ai` --- backend écrit et testé (2026-09-09)**, pendant que
+  l'utilisateur alimentait le Pi pour la suite du câblage (VL53L0X +
+  ESP32-CAM). Voir `ARCHITECTURE_AND_ROADMAP.md` §17.1 pour le détail
+  architectural, `pi/README.md` "rover-ai" pour l'usage. Nouveau paquet
+  `pi/rover_ai/` :
+  - `provider.py` --- interface `AIProvider.ask(message, context) -> str`
+    + `AIContext` (system/history) + `AIProviderError`.
+  - `cloud.py` --- trois fournisseurs choisis avec l'utilisateur
+    (Anthropic, OpenAI, Gemini), chacun son format de requête/réponse.
+  - `local.py` --- `LocalAIProvider`, un seul fournisseur générique pour
+    n'importe quel serveur compatible API OpenAI sur le réseau local
+    (Ollama en référence, §17.1). Qwen 2.5 et un modèle non censuré
+    demandés par l'utilisateur passent tous les deux par cette même
+    classe --- juste un nom de modèle différent, aucun code par modèle.
+  - `credentials.py` --- stockage `pi/ai_credentials.json` (git-ignoré,
+    `pi/ai_credentials.example.json` tracké comme gabarit), écriture
+    atomique, permissions `0600` posées dès la création (pas de fenêtre
+    où le fichier existe en lecture large). Jamais dans `config.json`
+    (même règle que `ROVER_CONTROL_TOKEN`).
+  - `factory.py` --- `create_provider(credentials)` choisit le
+    fournisseur actif ; type inconnu/absent → provider "non configuré"
+    (`available=False`, `ask()` lève `AIProviderError` plutôt que de
+    planter ou de renvoyer une réponse vide).
+  **Testé en isolation** (`pi/tests/test_rover_ai.py`, 6 nouveaux tests,
+  58/58 au total sur `pi/`) : session HTTP simulée pour chaque
+  fournisseur (requête bien formée, réponse bien parsée, erreur HTTP et
+  réponse malformée bien transformées en `AIProviderError`), aller-retour
+  du stockage des identifiants, permissions du fichier, clé inconnue
+  rejetée, JSON corrompu géré sans crash, sélection par la factory.
+  **Rien encore branché dans `RoverCore`/`rover_control`** (pas de
+  panneau web, pas d'appel réel avec une vraie clé API) --- prochaine
+  étape avec le reste de la Phase 7 (micro/STT/TTS).
+  **Suite (même session)** : cinq fournisseurs cloud supplémentaires
+  demandés par l'utilisateur --- `QwenCloudProvider` (Qwen officiel via
+  DashScope), `OpenRouterProvider`, `TogetherProvider`,
+  `FireworksProvider`, `DeepInfraProvider`. Les quatre derniers sont des
+  agrégateurs qui hébergent aussi bien Qwen que des modèles
+  communautaires non censurés (Dolphin, "abliterated", ...) --- comme
+  tous parlent l'API compatible OpenAI, chacun n'est qu'une URL de base
+  + un modèle par défaut réutilisant `_OpenAICompatibleProvider`, aucune
+  logique de requête nouvelle. Catalogues de modèles notés comme
+  mouvants (à vérifier chez chaque fournisseur avant prod) et précision
+  ajoutée : même un modèle "non censuré" chez un agrégateur reste sous
+  la propre modération de ce service, seule la voie locale
+  (`LocalAIProvider`) garantit une absence totale de filtre tiers.
+  Confirmé à l'utilisateur : `LocalAIProvider` est déjà générique --- vaut
+  pour n'importe quel serveur compatible API OpenAI et n'importe quel nom
+  de modèle, aucun code par modèle. 61/61 tests `pi/` (3 nouveaux).
+  **Suite (même session) : panneau web branché** --- `rover_control/ai_panel.py`
+  (logique) + `rover_control/static/ai.html` (page), routes `/ai`,
+  `/ai/config` (GET/POST), `/ai/ask` (POST) ajoutées à `server.py`,
+  toutes protégées par le token existant (`auth_middleware` s'applique
+  automatiquement à toute nouvelle route). `AIPanel` instancié dans
+  `rover_core/main.py`, fermé proprement à l'arrêt. Lien "IA" ajouté en
+  haut à droite de la page de pilotage (`index.html`). Un champ clé API
+  vide au ré-enregistrement garde la clé déjà stockée (même convention
+  que le mot de passe OTA du portail WiFi ESP32) --- **sauf en changeant
+  de type de fournisseur** : bug trouvé en écrivant les tests (passer de
+  "cloud" à "local" laissait la clé cloud trainer dans le fichier stocké
+  alors qu'elle n'est plus utilisée), corrigé avant que ça parte plus
+  loin. Testé manuellement de bout en bout avec un serveur aiohttp en
+  mémoire (page/config/ask répondent, token invalide → `403`,
+  fournisseur injoignable → `503` propre) --- **pas encore essayé sur le
+  Pi réel**. 72/72 tests `pi/` (11 nouveaux dans
+  `pi/tests/test_ai_panel.py`).
+  **Suite (même session) : revue de code sur tout ce qui précède**, 3
+  bugs réels trouvés et corrigés :
+  1. **Fuite de clé API entre fournisseurs cloud**
+     (`rover_control/ai_panel.py`) --- en changeant de fournisseur cloud
+     (ex. Anthropic → OpenAI) tout en laissant le champ clé vide, la
+     logique "champ vide = garder la clé actuelle" gardait l'ancienne
+     clé (Anthropic) et l'enregistrait comme clé du nouveau fournisseur
+     (OpenAI) --- le prochain `/ai/ask` aurait envoyé le secret Anthropic
+     comme jeton Bearer à `api.openai.com`. Corrigé : la clé n'est
+     conservée que si le fournisseur **et** le vendeur cloud restent
+     identiques ; sinon le champ vide efface vraiment la clé.
+  2. **Erreurs réseau pendant la lecture du corps de la réponse non
+     rattrapées** (`rover_ai/_http.py`) --- seule l'ouverture de la
+     requête était protégée ; une connexion qui tombe pendant la
+     lecture du corps (timeout `sock_read`) ou un JSON malformé sur un
+     `200` remontaient une exception `aiohttp`/`json` brute au lieu
+     d'`AIProviderError`, cassant le contrat `503` propre attendu par
+     `ai_ask_post`. Corrigé : la lecture du corps est protégée aussi.
+  3. **`TypeError` non rattrapé sur un `cloud_vendor` non-string**
+     (`rover_ai/factory.py`) --- un corps de requête `POST /ai/config`
+     malicieux/malformé avec `cloud_vendor` en liste/dict faisait
+     planter `dict.get()` (type non hashable) en `500` au lieu du
+     comportement "fournisseur inconnu → non configuré" prévu. Corrigé
+     avec une garde `isinstance(vendor, str)`.
+  6 tests de régression ajoutés (3 dans `test_rover_ai.py`, 1 dans
+  `test_ai_panel.py` + 1 test de non-régression pour vérifier qu'une
+  vraie nouvelle clé tapée n'est pas perdue au passage). **77/77 tests
+  `pi/`.**
 - **Caméra --- décision ESP32-CAM (2026-09-06)** : la caméra ne sera
   **pas** rattachée au Raspberry Pi --- pas la place en CAO dans la tête
   pour un module Pi Camera, même déporté par nappe. Un module
@@ -356,6 +449,14 @@
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-09** --- Backend `rover-ai` écrit et testé pendant que
+  l'ESP32-CAM/VL53L0X étaient préparés pour câblage : interface
+  `AIProvider` commune, trois fournisseurs cloud (Anthropic/OpenAI/
+  Gemini), un fournisseur local générique compatible OpenAI (Qwen 2.5 ou
+  modèle non censuré = juste un nom de modèle, même classe), stockage
+  des identifiants git-ignoré en `0600`, factory de sélection. 58/58
+  tests `pi/` passent (6 nouveaux). Rien encore branché dans
+  `RoverCore` ni de panneau web --- backend seul, voir §17.1.
 - **2026-09-06** --- Blocage WiFi résolu : puce onboard endommagée sur la
   1ère carte 3B+, DietPi sur une carte différente fonctionne directement.
   Pi retrouvé sur le réseau (`rover.lan`, 192.168.1.187, SSH ouvert),

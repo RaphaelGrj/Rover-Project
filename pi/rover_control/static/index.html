@@ -67,6 +67,12 @@
     position: fixed; bottom: 0.8em; left: 0; right: 0;
     text-align: center; font-size: 0.8em; color: #7d8590;
   }
+  #ai-link {
+    position: fixed; top: 0.6em; right: 0.6em; z-index: 1;
+    font-size: 0.75em; color: #7d8590; text-decoration: none;
+    background: #161b22; border: 1px solid #30363d; border-radius: 4px;
+    padding: 0.25em 0.5em;
+  }
   /* Video: a small corner panel, not a full-screen takeover -- the
      joystick underneath is still the primary control surface. */
   #video-panel {
@@ -100,6 +106,7 @@
 </head>
 <body>
 <div id="status" class="disconnected"><span id="status-text">Connexion...</span><span id="behavior-state"></span></div>
+<a id="ai-link" href="/ai">IA</a>
 <div id="telemetry">
   <div id="obstacle-line" class="obstacle"></div>
   <div id="state-line"></div>
@@ -156,6 +163,7 @@ const videoUnavailableEl = document.getElementById("video-unavailable");
 // video requests below, since each is its own HTTP request the
 // middleware checks independently.
 const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
+document.getElementById("ai-link").href = "/ai?token=" + encodeURIComponent(ACCESS_TOKEN);
 
 videoFeedEl.hidden = true;
 videoFeedEl.addEventListener("load", () => { videoFeedEl.hidden = false; videoUnavailableEl.hidden = true; });

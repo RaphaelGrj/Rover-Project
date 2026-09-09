@@ -177,6 +177,47 @@ moment d'une requête, `/video` répond `503 camera unavailable` --- la
 page de contrôle affiche "Caméra indisponible" dans ce cas plutôt
 qu'une image cassée, jamais un crash du reste du serveur.
 
+## rover-ai
+
+Fournisseur IA interchangeable (API cloud ou LLM sur le réseau local),
+voir `ARCHITECTURE_AND_ROADMAP.md` §17.1 pour l'architecture complète.
+**Panneau de configuration + test en texte disponibles à
+`http://<pi>:8080/ai?token=...`** (lien "IA" en haut à droite de la page
+de pilotage) : choisir le fournisseur, entrer la clé/l'adresse, tester
+une conversation directement dans le navigateur. **Toujours pas branché
+dans `RoverCore`** ni dans un pipeline audio (micro/STT/TTS, Phase 7 pas
+commencée) --- ce panneau permet de configurer/valider rover-ai
+indépendamment, avant que le reste de la Phase 7 existe.
+
+- `rover_ai.AIProvider` : interface commune, `async ask(message, context)
+  -> str`. `AIProviderError` en cas d'échec (réseau, HTTP, réponse
+  malformée, pas configuré) --- jamais d'exception silencieuse, jamais de
+  crash (§21 "mode dégradé").
+- Fournisseurs cloud (`rover_ai/cloud.py`) : `AnthropicProvider`,
+  `OpenAIProvider`, `GeminiProvider` --- chacun un format de requête
+  différent, une clé API différente. Plus cinq agrégateurs compatibles
+  API OpenAI (donc juste une URL/clé/modèle par défaut, aucune logique
+  de requête séparée) : `QwenCloudProvider` (Qwen officiel, cloud
+  Alibaba/DashScope), `OpenRouterProvider`, `TogetherProvider`,
+  `FireworksProvider`, `DeepInfraProvider` --- ces quatre derniers
+  hébergent aussi bien Qwen que des modèles communautaires non censurés
+  (Dolphin, variantes "abliterated", ...), catalogue à vérifier sur le
+  site du fournisseur avant de figer un `model` en prod (ça bouge).
+- Fournisseur local (`rover_ai/local.py`) : `LocalAIProvider`, n'importe
+  quel serveur compatible API OpenAI sur le réseau (Ollama est la
+  cible de référence citée par §17.1). Aucune clé requise, juste une
+  adresse (`http://<ip>:<port>/v1`). Qwen 2.5 (l'exemple du doc) ou un
+  modèle non censuré (ex. un tag "abliterated"/uncensored servi par
+  Ollama) passent par la même classe --- seul le nom du modèle change,
+  pas de code séparé par modèle.
+- `rover_ai.credentials` : stockage des identifiants dans
+  `pi/ai_credentials.json` (git-ignoré, permissions `0600`, jamais dans
+  `config.json` --- même logique que `ROVER_CONTROL_TOKEN`). Voir
+  `pi/ai_credentials.example.json` pour le gabarit des clés acceptées.
+- `rover_ai.create_provider(credentials)` : construit le fournisseur
+  actif à partir de ces identifiants -- le futur appelant (`RoverCore`)
+  n'a jamais besoin d'importer une classe de fournisseur en particulier.
+
 ## Structure
 
 - `rover_esp32/` : couche protocole pure (`protocol.py`, encode/decode
@@ -189,6 +230,9 @@ qu'une image cassée, jamais un crash du reste du serveur.
   `auth.py` (token d'accès) + `camera.py` (flux vidéo optionnel).
 - `rover_mqtt/` : `publisher.py`, publication MQTT optionnelle
   (`paho-mqtt`, extra séparé).
+- `rover_ai/` : fournisseur IA interchangeable (voir ci-dessus).
+  `rover_control/ai_panel.py` : logique du panneau web (config + test) ;
+  `rover_control/static/ai.html` : la page elle-même.
 
 ## Sécurité : ce qui est garanti où
 
@@ -216,6 +260,12 @@ modification liée à la sécurité comme un détail.**
 - **Identifiants WiFi/OTA** (`esp32/OTA.md`) : même principe, jamais
   commités, lus depuis des variables d'environnement au moment de la
   compilation du firmware.
+- **Clé API `rover-ai`** (`rover_ai/credentials.py`) : même principe
+  encore, `pi/ai_credentials.json` git-ignoré, permissions `0600`. Le
+  panneau web (`/ai`) ne réaffiche jamais la clé en clair une fois
+  enregistrée --- un placeholder redacté (`********`) est renvoyé à sa
+  place, laisser le champ vide au prochain enregistrement la conserve
+  telle quelle.
 - **Ne jamais exposer ce serveur directement sur Internet** (port
   forwarding, etc.) sans le VPN prévu en Phase 6 --- le token protège
   contre un accès depuis le réseau local, pas contre une attaque depuis
