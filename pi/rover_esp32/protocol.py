@@ -18,8 +18,16 @@ class FrameError(ValueError):
 
 
 def checksum(content: str) -> int:
+    # Noisy serial lines (electrical glitch, boot-time garbage) can carry
+    # bytes outside ASCII; treat that the same as any other malformed
+    # frame instead of letting UnicodeEncodeError escape and kill the
+    # caller's reader thread (see rover_esp32/link.py's ReaderThread).
+    try:
+        data = content.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise FrameError(f"non-ASCII content: {content!r}") from exc
     cs = 0
-    for byte in content.encode("ascii"):
+    for byte in data:
         cs ^= byte
     return cs
 

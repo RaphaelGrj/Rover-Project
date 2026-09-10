@@ -63,6 +63,23 @@ def test_decode_frame_rejects_empty_line():
         decode_frame("")
 
 
+def test_decode_frame_rejects_non_ascii_content_instead_of_crashing():
+    # Regression: a noisy serial line (electrical glitch) can carry bytes
+    # outside ASCII in the content, before the checksum marker. This used
+    # to raise UnicodeEncodeError out of checksum() instead of FrameError,
+    # which escaped link.py's `except FrameError` and killed the pyserial
+    # reader thread entirely (found 2026-09-10 while diagnosing a rover
+    # that wouldn't move -- the diagnostic tool crashed on the very first
+    # garbled line instead of dropping it and continuing).
+    with pytest.raises(FrameError):
+        decode_frame("MOVE vel\xe9ocity=0.25 rotation=-0.10 *00")
+
+
+def test_checksum_rejects_non_ascii_content():
+    with pytest.raises(FrameError):
+        checksum("MOVE vel\xe9ocity=0.25")
+
+
 def test_decode_frame_skips_malformed_field_silently():
     # A token with no "=" is dropped rather than erroring -- same
     # tolerance as the ESP32 parser (RoverProtocol.cpp).

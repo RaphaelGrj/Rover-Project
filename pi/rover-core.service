@@ -21,6 +21,14 @@ WorkingDirectory=/home/pi/Rover-Project/pi
 # start -- see `journalctl -u rover-core` in that case).
 EnvironmentFile=-/home/pi/Rover-Project/pi/rover.env
 
+# --port: prefer /dev/serial/by-id/usb-...-if00-port0 (list yours with
+# `ls -l /dev/serial/by-id/`) over a raw /dev/ttyUSBn -- the latter is
+# assigned by enumeration order and can silently change (eg. ttyUSB0 ->
+# ttyUSB1) after any unplug/replug, which this unit won't notice: it just
+# keeps writing to the stale device node and failing (PROGRESS.md,
+# 2026-09-10 session, `serial.serialutil.SerialException: write failed:
+# [Errno 5] Input/output error` in `journalctl -u rover-core`). The by-id
+# symlink stays stable across replugs on the same physical port.
 ExecStart=/home/pi/Rover-Project/pi/.venv/bin/python -m rover_core.main --port /dev/ttyUSB0 --log-dir /home/pi/Rover-Project/pi/logs
 
 Restart=on-failure

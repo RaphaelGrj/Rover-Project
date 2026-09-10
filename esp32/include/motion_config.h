@@ -47,14 +47,12 @@ constexpr int ROVER_PWM_FREQ_HZ = 20000;      // above audible range
 constexpr int ROVER_PWM_RESOLUTION_BITS = 8;  // duty cycle 0..255
 
 // --- Robot geometry / encoder specs ---
-// TODO(hardware): ROVER_WHEEL_DIAMETER_M is still a placeholder -- the
-// wheel CAD isn't finalized, so bring-up so far only spins the bare motor
-// shaft (measured 6.82mm, that's the D-shaft, not a wheel) with no wheel
-// mounted and no ground load. Replace once a real wheel exists; until
-// then, MOVE's "m/s" target is not a physically meaningful real-world
-// speed, and PID gains tuned now are against an unloaded shaft -- expect
-// to retune once a wheel with real inertia/friction is attached.
-constexpr float ROVER_WHEEL_DIAMETER_M = 0.065f;
+// Measured 2026-09-10 with the final wheels mounted on ROVER (replaces the
+// old 0.065m placeholder, which was sized off the bare 6.82mm D-shaft with
+// no wheel attached). PID gains (180/300/0) were still only characterized
+// unloaded/no wheel -- expect retuning once tested under real ground
+// load/friction.
+constexpr float ROVER_WHEEL_DIAMETER_M = 0.03183f;
 constexpr float ROVER_WHEEL_BASE_M = 0.15f;
 // Measured 2026-09-02 (SYSTEM action=raw_ticks, bare shaft, 1 hand-counted
 // revolution) -- was 700 (placeholder). Single-turn measurement, decent
@@ -67,6 +65,33 @@ constexpr float ROVER_MAX_WHEEL_SPEED_MPS = 0.3f;
 // (the per-wheel PID output is clamped anyway, but this keeps the target
 // itself meaningful). Not a measured limit, just a plausible ceiling.
 constexpr float ROVER_MAX_ROTATION_RAD_S = 4.0f;
+
+// --- Per-wheel encoder tick sign (DriveController.cpp) ---
+// Corrects a mismatch between encoder counting direction and actual motor
+// drive direction (positive-feedback runaway otherwise -- see
+// DriveController::update()'s comment). Originally one shared constant
+// (both wheels needed -1.0f on 2026-09-02). Split into two here
+// (2026-09-10) during a session where reconnects on the breadboard kept
+// flipping which side needed which sign -- verified on real hardware
+// (move_diagnostic.py, COM10) after each change rather than guessed:
+// - RIGHT: briefly needed 1.0f (right wheel runaway-spinning after an
+//   earlier reconnect that session), but a later reconnect put it back to
+//   needing -1.0f, confirmed by a clean convergence to the commanded
+//   speed (no saturation).
+// - LEFT: stayed at -1.0f through all of that, but then needed 1.0f after
+//   the left motor's power leads were resoldered to the driver (reversed
+//   its polarity). NOTE: only one of {this sign, the L_IN1/L_IN2 pin
+//   assignment} should ever be flipped to compensate a polarity
+//   reversal, never both -- flipping both is a no-op for the closed loop
+//   (confirmed by measurement: doing both by mistake here reproduced the
+//   exact same "stable but backwards" numbers as flipping neither).
+// Net lesson: don't trust either constant across a session where the
+// wiring gets touched -- re-verify with move_diagnostic.py (clean
+// convergence near the commanded speed = correct; saturating at the
+// speed cap = wrong sign) any time a motor/encoder connection is
+// disturbed, rather than assuming last session's values still hold.
+constexpr float ROVER_TICK_SIGN_LEFT = 1.0f;
+constexpr float ROVER_TICK_SIGN_RIGHT = -1.0f;
 
 // --- Per-wheel PID gains ---
 // TODO(hardware): retune once real motors/encoders are available; these

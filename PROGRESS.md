@@ -365,6 +365,122 @@
   positifs aujourd'hui à cause de contacts qui bougent) --- souder les
   points qui ont posé problème (jumpers GPIO↔driver, VCC/GND/signal
   encodeur) est recommandé avant la prochaine session de bring-up.
+- **Roues définitives montées sur ROVER (2026-09-10)** : diamètre réel
+  mesuré à **31.83mm**, `ROVER_WHEEL_DIAMETER_M` mis à jour dans
+  `esp32/include/motion_config.h` (remplace le placeholder 0.065m posé
+  quand seul l'axe moteur nu tournait sans roue). **Flashé sur le
+  matériel réel (2026-09-10, COM10, `esp32_wroom`)** : build local OK
+  (RAM 16.2%, Flash 71.0%), upload `SUCCESS` en 34s, reset matériel
+  automatique. La cible `MOVE` en "m/s" correspond maintenant à la vraie
+  géométrie de roue. Test qualitatif au joystick prévu ensuite, robot
+  surélevé (roues dans le vide) --- vérifie que les deux roues tournent
+  bien, même sens, sans frottement mécanique nouveau ; la calibration
+  PID sous charge réelle (item 4 "Prochaines étapes" ci-dessous) reste à
+  refaire séparément une fois le robot posé au sol.
+- **Premier test roues définitives, robot surélevé (2026-09-10)** :
+  session interrompue en cours de diagnostic, à reprendre.
+  - **Faux problème trouvé et résolu en cours de route** : à la mise sous
+    tension, bip continu dès l'alimentation (avant toute commande
+    joystick) + moteur droit ne répondant pas du tout. Diagnostic par
+    `sudo journalctl -u rover-core -n 80` : trames `STATE` parfaitement
+    normales en continu (`left_speed`/`right_speed` à `0.00`, pas de
+    reset, aucun `EVENT estop_pressed`) --- écarte un bug firmware
+    (reset en boucle par brownout, buzzer déclenché par le code,
+    E-stop électriquement bruité). Pointait donc vers un problème
+    physique côté câblage plutôt que logiciel. **Résolu en rebranchant**
+    (mauvais contact --- cohérent avec l'avertissement du 2026-09-01/02
+    jamais traité : jumpers GPIO↔driver et connexions moteur/encodeur
+    toujours pas soudés, voir "Prochaines étapes" ci-dessous). Pas de
+    cause précise isolée (quel connecteur exactement) --- si ça revient,
+    regarder en premier le canal B du DRV8833 (moteur droit, déjà connu
+    plus faible électriquement) et son câblage vers l'ESP32.
+  - **Nouveau point bloquant, plus important** : une fois le contact
+    retrouvé, **les deux moteurs tournent mais ne sont pas synchronisés**
+    (pas de mesure chiffrée prise avant l'arrêt de session). Testé roues
+    dans le vide (surélevé), donc ce n'est pas un problème de charge
+    sol/friction asymétrique --- pointe vers PID/calibration par roue,
+    ou un résidu du canal B faible, ou un effet du nouveau diamètre de
+    roue (31.83mm, flashé cette session, jamais testé en mouvement réel
+    avant cette coupure).
+  - **Suite (même jour, reprise de session) : bug logiciel réel trouvé et
+    corrigé en cours de diagnostic** --- `pi/rover_esp32/protocol.py`,
+    `checksum()` faisait `content.encode("ascii")` sans filet ; une trame
+    bruitée (bruit série connu au boot, cf. anomalie cosmétique du
+    2026-09-06) contenant des octets non-ASCII levait `UnicodeEncodeError`
+    au lieu de `FrameError`, ce qui échappait au `except FrameError` de
+    `link.py` et **tuait tout le thread de lecture pyserial en silence**
+    --- explique pourquoi le premier essai de diagnostic isolé
+    (`move_diagnostic.py`) ne recevait plus aucune trame ensuite. Corrigé
+    (converti en `FrameError`, donc juste droppé avec un warning comme
+    n'importe quelle autre trame malformée) ; 2 tests de régression
+    ajoutés (`pi/tests/test_protocol.py`).
+  - **Cause réelle de la désynchronisation identifiée sur matériel réel**
+    (ESP32 débranché du Pi, branché en direct sur COM10 pour un accès
+    exclusif et rapide, `move_diagnostic.py --move`) : un emballement en
+    boucle positive (mesure encodeur de signe opposé à la direction
+    moteur réelle, PWM qui sature au lieu de converger --- même famille de
+    bug que le `tickSign` du 2026-09-02), mais cette fois **seulement sur
+    la roue droite**, apparu après un rebranchement en cours de session.
+    `ROVER_TICK_SIGN_LEFT`/`ROVER_TICK_SIGN_RIGHT` séparés en deux
+    constantes (`esp32/include/motion_config.h`, étaient une seule valeur
+    partagée) pour pouvoir corriger un côté sans toucher à l'autre.
+    Diagnostic non-trivial, deux fausses pistes en cours de route (les
+    deux vérifiées sur matériel réel, pas juste en théorie) :
+    1. Hypothèse initiale (signe droit inversé tout seul) testée par OTA
+       --- emballement toujours présent, juste dans l'autre sens : pas la
+       bonne piste, signe droit reremis à `-1.0f` (valeur d'origine).
+    2. **L'utilisateur a ressoudé les fils de puissance moteur (rouge/
+       blanc) au driver en cours de session**, ce qui a inversé la
+       polarité du moteur **gauche** cette fois (jusque-là correct). Une
+       première tentative de correction a inversé à la fois le mapping
+       GPIO IN1/IN2 gauche **et** `ROVER_TICK_SIGN_LEFT` --- erreur de
+       raisonnement corrigée en cours de route : inverser les deux en même
+       temps s'annule mathématiquement (confirmé par une mesure
+       identique au bit près à ne rien changer). Un seul des deux doit
+       être inversé à la fois. Correctif final : `ROVER_PIN_MOTOR_L_IN1`/
+       `IN2` laissés inchangés, seul `ROVER_TICK_SIGN_LEFT` passé à
+       `1.0f`.
+    **Validé à la fois par télémétrie et visuellement par l'utilisateur**
+    (sens de rotation confirmé correct à l'œil sur les deux roues,
+    `move_diagnostic.py --velocity 0.15 --duration 15` : `left_speed`/
+    `right_speed` convergent tous les deux vers ~0.15-0.16, écart résiduel
+    qui se résorbe avec le temps grâce au terme intégral --- pas un vrai
+    désaccord). **Leçon retenue pour la suite** (documentée dans le
+    commentaire de `motion_config.h`) : ne pas faire confiance aux valeurs
+    de tickSign d'une session à l'autre dès que le câblage moteur/encodeur
+    est retouché --- revérifier avec `move_diagnostic.py` (convergence
+    propre = bon signe ; saturation à la vitesse plafond = mauvais signe)
+    plutôt que de supposer que la dernière valeur connue tient encore.
+  - **Effet de bord découvert au rebranchement ESP32↔Pi** : `rover-core`
+    plantait en boucle (`SerialException: write failed: [Errno 5] Input/
+    output error`) --- le débranchement/rebranchement du câble USB a fait
+    réapparaître l'ESP32 en `/dev/ttyUSB1` au lieu de `/dev/ttyUSB0`
+    (renumérotation classique côté noyau Linux), alors que le service
+    systemd déployé pointait encore sur l'ancien chemin. Corrigé
+    durablement plutôt que juste renseigner `ttyUSB1` en dur (qui aurait
+    pu re-changer au prochain branchement) : `ExecStart` du service pointe
+    maintenant sur le lien stable `/dev/serial/by-id/usb-Silicon_Labs_
+    CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0`, qui ne bouge
+    pas d'un branchement à l'autre sur le même port physique. Gabarit
+    `pi/rover-core.service` mis à jour avec un commentaire expliquant
+    pourquoi préférer `by-id` à `/dev/ttyUSBn`, pour que ça ne piège pas
+    une future réinstallation.
+  - **Point restant, pour la prochaine session** : au pilotage joystick
+    réel (une fois tout rebranché), la roue droite démarre avec **~1s de
+    retard** par rapport à la gauche et les vitesses ne sont pas
+    identiques tout de suite. Cohérent avec une limitation déjà connue et
+    caractérisée (2026-09-02) plutôt qu'un nouveau bug de câblage : le
+    canal B du DRV8833 (droit) est électriquement plus faible depuis le
+    tout début du bring-up, et le terme intégral du PID met du temps à
+    vaincre le frottement statique à basse vitesse sur ce canal --- voir
+    "Calibration PID" ci-dessous, qui documente déjà ce comportement et
+    propose un terme feedforward comme piste. **Décision prise avec
+    l'utilisateur : ne pas retoucher le PID ce soir** (câblage pas encore
+    soudé partout, tension pas encore validée à 6-7V --- retoucher les
+    gains maintenant risquerait de re-régler sur une config pas
+    définitive). À reprendre en priorité la prochaine session, avec le
+    reste de la calibration PID/géométrie déjà prévue au point 4 de
+    "Prochaines étapes".
 - **Calibration PID (2026-09-02)** : géométrie roue mesurée en partie ---
   `ROVER_ENCODER_TICKS_PER_REV` mis à jour à 1073 (mesuré via le nouveau
   `SYSTEM action=raw_ticks`/`reset_ticks`, 1 tour compté à l'œil pendant
@@ -390,6 +506,29 @@
   `Ki` (risque de dépassement ailleurs sur la plage).
 
 ## Prochaines étapes
+
+**PRIORITÉ ABSOLUE pour la prochaine session** : la désynchronisation
+dangereuse (emballement/sens inversé) trouvée le 2026-09-10 est
+**résolue et validée sur matériel réel** (voir "État actuel" ci-dessus)
+--- mais il reste un résidu de réglage fin, volontairement pas traité ce
+soir-là :
+- Au pilotage joystick réel, la roue droite (canal B DRV8833, déjà connu
+  plus faible électriquement) démarre avec **~1s de retard** et les
+  vitesses ne s'égalisent pas tout de suite. Cohérent avec la limitation
+  PID basse-vitesse déjà caractérisée le 2026-09-02 (voir "Calibration
+  PID" ci-dessous), pas un nouveau bug de câblage.
+- Ne pas retoucher les gains PID avant d'avoir fait les points 2 et 3
+  ci-dessous (souder les connexions encore volantes, revalider la tension
+  à 6-7V) --- retoucher maintenant risquerait de re-régler sur une config
+  pas définitive. Une fois ça fait, reprendre la calibration complète
+  (point 4), en envisageant le terme feedforward déjà proposé pour la
+  limite basse vitesse.
+- Rappel méthode (leçon de la session du 2026-09-10) : après tout
+  rebranchement/ressoudage d'un moteur ou d'un encodeur, revérifier le
+  sens avec `move_diagnostic.py` avant de faire confiance aux constantes
+  `ROVER_TICK_SIGN_LEFT`/`RIGHT` de la session précédente --- une
+  convergence propre vers la cible = bon signe, une saturation à la
+  vitesse plafond = mauvais signe.
 
 0. **Bring-up Pi terminé** (2026-09-06) : ESP32 branché, pilotage validé
    de bout en bout sur le robot réel, service systemd installé/activé
@@ -449,6 +588,42 @@
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-10** --- Roues définitives montées sur ROVER, diamètre mesuré
+  (31.83mm), `ROVER_WHEEL_DIAMETER_M` mis à jour et flashé sur matériel
+  réel (COM10). Premier test au joystick robot surélevé : faux problème
+  (bip continu + moteur droit muet dès l'alimentation) diagnostiqué via
+  les logs `rover-core` (télémétrie parfaitement normale, donc pas un bug
+  firmware) puis résolu par un simple rebranchement --- mauvais contact,
+  cohérent avec les connexions jamais soudées. **Point bloquant restant,
+  prioritaire pour la suite : les deux moteurs tournent mais ne sont pas
+  synchronisés**, même roues dans le vide. Session interrompue ici avant
+  d'avoir pu mesurer/diagnostiquer plus loin --- voir "Prochaines étapes"
+  en tête de fichier.
+- **2026-09-10 (reprise même jour)** --- Désynchronisation diagnostiquée
+  et corrigée. Bug logiciel réel trouvé en route : `checksum()`
+  (`pi/rover_esp32/protocol.py`) plantait tout le thread de lecture
+  série sur une trame bruitée non-ASCII au lieu de la dropper --- corrigé
+  (`FrameError`), 2 tests de régression ajoutés. Cause de la
+  désynchronisation isolée sur matériel réel (ESP32 débranché du Pi,
+  branché en direct sur COM10) : emballement en boucle positive sur la
+  roue droite seule (signe encodeur, même famille que le bug `tickSign`
+  du 2026-09-02), compliqué par un ressoudage des fils moteur en cours de
+  session qui a inversé la polarité de la roue gauche entre-temps.
+  `ROVER_TICK_SIGN_LEFT`/`RIGHT` séparés en deux constantes
+  (`motion_config.h`) et calibrés empiriquement par mesure réelle
+  (`move_diagnostic.py`) + confirmation visuelle utilisateur du sens de
+  rotation --- une fausse piste en route (inverser broche moteur ET signe
+  encodeur ensemble s'annule mathématiquement, leçon notée dans le code).
+  Effet de bord trouvé au rebranchement ESP32↔Pi : `rover-core` plantait
+  en boucle sur `/dev/ttyUSB0` devenu `/dev/ttyUSB1` après le
+  débranchement --- corrigé durablement via le lien stable
+  `/dev/serial/by-id/...` (gabarit `pi/rover-core.service` mis à jour).
+  **Point bloquant dangereux résolu et validé.** Résidu restant (roue
+  droite ~1s de retard au démarrage, vitesses pas identiques tout de
+  suite) identifié comme la limitation PID basse-vitesse déjà connue
+  (2026-09-02, canal B faible) --- laissé pour la prochaine session
+  plutôt que retouché sur un câblage pas encore définitif (jumpers pas
+  soudés, tension pas encore à 6-7V). Voir "Prochaines étapes".
 - **2026-09-09** --- Backend `rover-ai` écrit et testé pendant que
   l'ESP32-CAM/VL53L0X étaient préparés pour câblage : interface
   `AIProvider` commune, trois fournisseurs cloud (Anthropic/OpenAI/

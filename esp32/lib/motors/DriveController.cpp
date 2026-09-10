@@ -74,10 +74,12 @@ void DriveController::update() {
     // negative feedback, consistent with the encoder's counting direction
     // being opposite to the motor's actual drive direction on this
     // hardware. Flipped in software rather than re-swapping C1/C2 again on
-    // the breadboard; revert (tickSign = 1.0f) once re-verified on the
-    // final soldered wiring.
-    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps, -1.0f);
-    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps, -1.0f);
+    // the breadboard. Per-wheel signs (motion_config.h) since 2026-09-10:
+    // a reconnect during that session's bring-up made the right wheel
+    // alone runaway-spin, so its sign needed to move independently of the
+    // left one -- see motion_config.h's ROVER_TICK_SIGN_* comment.
+    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps, ROVER_TICK_SIGN_LEFT);
+    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps, ROVER_TICK_SIGN_RIGHT);
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
