@@ -90,6 +90,27 @@ def test_look_sends_head_command_without_touching_behavior_state():
     run(body())
 
 
+def test_set_emotion_sends_face_frame():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.set_emotion("curious")
+        assert ("FACE", {"emotion": "curious"}) in link.sent
+
+    run(body())
+
+
+def test_set_emotion_ignores_unknown_name():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        before = len(link.sent)
+        core.set_emotion("not-a-real-emotion")
+        assert len(link.sent) == before
+
+    run(body())
+
+
 def test_move_forward_is_clamped_when_obstacle_is_close():
     async def body():
         link = FakeLink()

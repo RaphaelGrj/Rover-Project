@@ -16,6 +16,7 @@ import logging
 from enum import Enum, auto
 from typing import Callable
 
+from rover_ai.personality import EMOTIONS
 from rover_esp32.link import RoverLink
 
 FrameListener = Callable[[str, dict[str, str]], None]
@@ -164,7 +165,7 @@ class RoverCore:
             if self._idle_sleepy_task is not None:
                 self._idle_sleepy_task.cancel()
                 self._idle_sleepy_task = None
-            self.link.send("FACE", {"emotion": "idle"})
+            self.set_emotion("idle")
         if new_state == RoverBehaviorState.IDLE:
             self._idle_sleepy_task = asyncio.create_task(self._go_idle_sleepy_after_delay())
 
@@ -180,7 +181,7 @@ class RoverCore:
     async def _go_idle_sleepy_after_delay(self) -> None:
         try:
             await asyncio.sleep(IDLE_SLEEPY_DELAY_S)
-            self.link.send("FACE", {"emotion": "sleepy"})
+            self.set_emotion("sleepy")
         except asyncio.CancelledError:
             pass
 
@@ -221,6 +222,20 @@ class RoverCore:
             self._set_state(RoverBehaviorState.MOVING)
         elif self._client_count > 0:
             self._set_state(RoverBehaviorState.INTERACTING)
+
+    def set_emotion(self, emotion: str) -> None:
+        """Sends FACE emotion=... (ARCHITECTURE_AND_ROADMAP.md §15) -- the
+        one place that actually talks to the ESP32 for this, so callers
+        (the AI panel's PersonalityEngine today, any future
+        personality-driven behavior) never build that frame themselves.
+        Silently ignores an unrecognized name rather than raising --
+        mirrors parseEmotion()'s own "unrecognized -> ignored" contract on
+        the ESP32 side (esp32/lib/emotion/Emotion.cpp) instead of
+        disagreeing with it."""
+        if emotion not in EMOTIONS:
+            logger.warning("ignoring unknown emotion %r", emotion)
+            return
+        self.link.send("FACE", {"emotion": emotion})
 
     def look(self, pitch_deg: float, yaw_deg: float) -> None:
         """HEAD pitch/yaw (esp32/lib/head/HeadController.h) -- purely a

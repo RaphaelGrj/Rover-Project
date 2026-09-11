@@ -11,7 +11,8 @@ from __future__ import annotations
 import asyncio
 
 import rover_control.ai_panel as ai_panel_module
-from rover_ai.provider import AIProvider, AIProviderError
+from rover_ai.personality import PersonalityEngine
+from rover_ai.provider import AIContext, AIProvider, AIProviderError
 from rover_control.ai_panel import AIPanel, REDACTED_API_KEY
 
 
@@ -25,9 +26,11 @@ class FakeProvider(AIProvider):
         self._reply = reply
         self.closed = False
         self.asked_with: str | None = None
+        self.asked_with_context: AIContext | None = None
 
     async def ask(self, message, context=None):
         self.asked_with = message
+        self.asked_with_context = context
         if not self.available:
             raise AIProviderError("not configured")
         return self._reply
@@ -249,5 +252,92 @@ def test_update_closes_the_previous_provider_before_building_the_new_one(tmp_pat
         panel = AIPanel(path)
         await panel.update({"provider": "local", "local_url": "http://x"})
         assert first.closed is True
+
+    run(body())
+
+
+def test_ask_passes_persona_and_history_to_provider(tmp_path, monkeypatch):
+    # AIPanel.ask() must route through PersonalityEngine rather than
+    # calling the provider bare -- otherwise every conversation stays a
+    # stateless one-shot despite AIContext already supporting system/
+    # history (ARCHITECTURE_AND_ROADMAP.md §15/§17.1).
+    fake = FakeProvider(reply="first reply")
+    _stub_create_provider(monkeypatch, factory=lambda creds: fake)
+    path = tmp_path / "ai_credentials.json"
+
+    async def body():
+        panel = AIPanel(path)
+        await panel.ask("bonjour")
+        assert fake.asked_with_context.system
+        assert fake.asked_with_context.history == []
+
+        await panel.ask("ca va ?")
+        assert fake.asked_with_context.history == [("user", "bonjour"), ("assistant", "first reply")]
+
+    run(body())
+
+
+def test_ask_triggers_emotion_reaction_via_wired_personality(tmp_path, monkeypatch):
+    fake = FakeProvider(reply="hello")
+    _stub_create_provider(monkeypatch, factory=lambda creds: fake)
+    path = tmp_path / "ai_credentials.json"
+    emotions: list[str] = []
+
+    async def body():
+        panel = AIPanel(path, personality=PersonalityEngine(emotion_sink=emotions.append))
+        await panel.ask("hi")
+
+    run(body())
+
+    assert emotions == ["curious", "happy"]
+
+
+def test_ask_error_still_triggers_confused_emotion(tmp_path, monkeypatch):
+    _stub_create_provider(monkeypatch, factory=lambda creds: FakeProvider(available=False))
+    path = tmp_path / "ai_credentials.json"
+    emotions: list[str] = []
+
+    async def body():
+        panel = AIPanel(path, personality=PersonalityEngine(emotion_sink=emotions.append))
+        try:
+            await panel.ask("hi")
+        except AIProviderError:
+            pass
+        else:
+            raise AssertionError("expected AIProviderError")
+
+    run(body())
+
+    assert emotions == ["curious", "confused"]
+
+
+def test_reset_conversation_clears_history(tmp_path, monkeypatch):
+    fake = FakeProvider(reply="reply")
+    _stub_create_provider(monkeypatch, factory=lambda creds: fake)
+    path = tmp_path / "ai_credentials.json"
+
+    async def body():
+        panel = AIPanel(path)
+        await panel.ask("bonjour")
+        panel.reset_conversation()
+        await panel.ask("nouvelle conversation ?")
+        assert fake.asked_with_context.history == []
+
+    run(body())
+
+
+def test_update_resets_conversation_history(tmp_path, monkeypatch):
+    # Switching provider/vendor must not silently carry conversation
+    # history built against the previous backend into the new one.
+    _stub_create_provider(monkeypatch)
+    path = tmp_path / "ai_credentials.json"
+
+    async def body():
+        panel = AIPanel(path)
+        await panel.ask("bonjour")
+        await panel.update({"provider": "local", "local_url": "http://x"})
+        fake_after = panel._provider
+        await panel.ask("encore la ?")
+        assert fake_after.asked_with_context.history == []
 
     run(body())

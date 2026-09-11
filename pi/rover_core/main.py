@@ -20,6 +20,7 @@ import asyncio
 
 from aiohttp import web
 
+from rover_ai.personality import PersonalityEngine
 from rover_esp32.link import RoverLink
 from rover_control.ai_panel import AIPanel
 from rover_control.auth import resolve_token
@@ -161,7 +162,8 @@ async def async_main(settings: dict) -> None:
 
     token = resolve_token()
     camera = CameraStream(settings["camera_url"])
-    ai_panel = AIPanel()
+    personality = PersonalityEngine(emotion_sink=core.set_emotion)
+    ai_panel = AIPanel(personality=personality)
     app = create_app(core, token, camera, ai_panel)
     runner = web.AppRunner(app)
     await runner.setup()

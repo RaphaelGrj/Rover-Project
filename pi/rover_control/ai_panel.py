@@ -19,6 +19,7 @@ from typing import Any
 
 from rover_ai import create_provider, load_credentials, save_credentials
 from rover_ai.credentials import DEFAULT_CREDENTIALS_PATH
+from rover_ai.personality import PersonalityEngine
 
 # The only fields a client is ever allowed to read or write -- anything
 # else in an incoming request body is silently dropped rather than
@@ -34,10 +35,20 @@ REDACTED_API_KEY = "********"
 
 
 class AIPanel:
-    def __init__(self, credentials_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        credentials_path: Path | None = None,
+        personality: PersonalityEngine | None = None,
+    ) -> None:
         self._path = credentials_path or DEFAULT_CREDENTIALS_PATH
         self._credentials = load_credentials(self._path)
         self._provider = create_provider(self._credentials)
+        # Optional: main.py wires this to RoverCore.set_emotion so a
+        # conversation turn also shows on Rover's face (§15). Defaults to
+        # a sink-less engine (still gives every conversation persona +
+        # history, just no emotion reaction) so tests/callers that don't
+        # care about RoverCore keep working unchanged.
+        self._personality = personality or PersonalityEngine()
 
     def public_config(self) -> dict[str, Any]:
         data = {k: v for k, v in self._credentials.items() if k in CONFIG_FIELDS}
@@ -89,9 +100,15 @@ class AIPanel:
         save_credentials(cleaned, self._path)
         self._credentials = cleaned
         self._provider = create_provider(cleaned)
+        # A reconfigured provider/vendor should not silently carry over
+        # history built against a different backend (§17.1).
+        self._personality.reset()
 
     async def ask(self, message: str) -> str:
-        return await self._provider.ask(message)
+        return await self._personality.converse(self._provider.ask, message)
+
+    def reset_conversation(self) -> None:
+        self._personality.reset()
 
     async def close(self) -> None:
         await self._provider.close()

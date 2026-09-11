@@ -68,6 +68,7 @@ def create_app(
     app.router.add_get("/ai/config", ai_config_get)
     app.router.add_post("/ai/config", ai_config_post)
     app.router.add_post("/ai/ask", ai_ask_post)
+    app.router.add_post("/ai/reset", ai_reset_post)
     return app
 
 
@@ -117,6 +118,14 @@ async def ai_ask_post(request: web.Request) -> web.Response:
         # expected, recoverable state, not a server bug.
         return web.json_response({"error": str(exc)}, status=503)
     return web.json_response({"reply": reply})
+
+
+async def ai_reset_post(request: web.Request) -> web.Response:
+    """Starts a fresh conversation (drops the PersonalityEngine's
+    history) -- the provider config/credentials are untouched."""
+    panel: AIPanel = request.app["ai_panel"]
+    panel.reset_conversation()
+    return web.json_response({"ok": True})
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:

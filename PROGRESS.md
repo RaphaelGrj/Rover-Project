@@ -12,6 +12,41 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Personality Engine --- écrit et testé (2026-09-11)**, session
+  100% code (utilisateur sans accès au robot physique). Nouveau
+  `pi/rover_ai/personality.py` (`PersonalityEngine`) branché dans
+  `AIPanel.ask()` (`pi/rover_control/ai_panel.py`) : chaque appel IA
+  construit maintenant un vrai `AIContext` (persona Rover + historique
+  de conversation borné à 10 échanges) au lieu d'un message "sec" sans
+  mémoire ni personnalité --- tous les fournisseurs (`cloud.py`,
+  `_openai_compatible.py`) savaient déjà lire `context.system`/
+  `context.history`, rien ne les alimentait jusqu'ici. Réaction
+  émotionnelle ajoutée sur l'échange : `RoverCore.set_emotion()`
+  (nouvelle méthode publique, remplace les deux envois `FACE` en dur
+  déjà présents dans `core.py`) envoie `curious` pendant l'appel,
+  `happy` sur une réponse, `confused` sur une `AIProviderError` --- sans
+  jamais faire planter la conversation si l'envoi échoue (câble série
+  down, etc.). Câblé dans `rover_core/main.py`
+  (`PersonalityEngine(emotion_sink=core.set_emotion)`). Nouvelle route
+  `POST /ai/reset` (bouton "Nouvelle conversation" sur `/ai`) pour
+  repartir sans historique ; changer de fournisseur/vendeur via
+  `/ai/config` réinitialise aussi l'historique automatiquement (éviter
+  qu'une conversation construite contre un backend survive au
+  changement vers un autre). Voir `ARCHITECTURE_AND_ROADMAP.md` §17.1 et
+  Phase 7 pour le détail, `pi/README.md` "rover-ai" pour l'usage.
+  **93/93 tests `pi/` (16 nouveaux : `pi/tests/test_personality.py`
+  entièrement nouveau, plus des ajouts dans `test_ai_panel.py` et
+  `test_core.py`)** --- testé uniquement avec des fakes, comme le reste
+  de `rover-ai` jusqu'ici : **rien de tout ça essayé sur le Pi réel**
+  (pas de matériel disponible cette session).
+  Volontairement pas fait dans la foulée, pour rester dans le
+  périmètre "Personality Engine" et ne pas prendre de décision de
+  sécurité sans l'utilisateur : "Connexion aux commandes Rover" (l'IA
+  ne peut aujourd'hui que répondre en texte, pas déclencher un
+  `MOVE`/`HEAD` réel) et la partie "Machine à émotions" hors
+  conversation (humeur influencée par la batterie/l'heure/l'inactivité,
+  cf. README "Personnalité Dynamique") --- les deux restent à faire,
+  voir Phase 7 dans `ARCHITECTURE_AND_ROADMAP.md`.
 - **`rover-ai` --- backend écrit et testé (2026-09-09)**, pendant que
   l'utilisateur alimentait le Pi pour la suite du câblage (VL53L0X +
   ESP32-CAM). Voir `ARCHITECTURE_AND_ROADMAP.md` §17.1 pour le détail

@@ -185,9 +185,24 @@ voir `ARCHITECTURE_AND_ROADMAP.md` §17.1 pour l'architecture complète.
 `http://<pi>:8080/ai?token=...`** (lien "IA" en haut à droite de la page
 de pilotage) : choisir le fournisseur, entrer la clé/l'adresse, tester
 une conversation directement dans le navigateur. **Toujours pas branché
-dans `RoverCore`** ni dans un pipeline audio (micro/STT/TTS, Phase 7 pas
-commencée) --- ce panneau permet de configurer/valider rover-ai
-indépendamment, avant que le reste de la Phase 7 existe.
+dans un pipeline audio** (micro/STT/TTS, Phase 7 pas commencée) --- ce
+panneau permet de configurer/valider rover-ai indépendamment, avant que
+le reste de la Phase 7 existe.
+
+**Personality Engine (`rover_ai/personality.py`, §15/§17.1)** :
+`AIPanel.ask()` ne fait plus un appel "sec" au fournisseur --- chaque
+message passe par un `PersonalityEngine` qui construit l'`AIContext`
+(persona Rover + historique de la conversation en cours, borné à 10
+échanges) et réagit à l'échange en pilotant l'expression du visage
+(`RoverCore.set_emotion`, câblé dans `rover_core/main.py`) : `curious`
+pendant que Rover "réfléchit", `happy` une fois la réponse reçue,
+`confused` si le fournisseur échoue. Un fournisseur indisponible reste
+sans crash (§21) --- juste l'émotion qui change et l'erreur `503`
+habituelle. Nouvelle route `POST /ai/reset` (bouton "Nouvelle
+conversation" sur la page `/ai`) pour repartir sans historique sans
+toucher à la configuration du fournisseur ; changer de fournisseur/
+vendeur via `/ai/config` réinitialise aussi l'historique automatiquement
+(ne pas faire hériter une conversation d'un autre backend).
 
 - `rover_ai.AIProvider` : interface commune, `async ask(message, context)
   -> str`. `AIProviderError` en cas d'échec (réseau, HTTP, réponse

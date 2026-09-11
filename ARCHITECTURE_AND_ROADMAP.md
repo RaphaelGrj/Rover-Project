@@ -780,11 +780,16 @@ La règle reste :
 
 ## 17.1 Fournisseur IA (module `rover-ai`)
 
-**Statut (2026-09-09) : backend écrit et testé (`pi/rover_ai/`), panneau
+**Statut (2026-09-11) : backend écrit et testé (`pi/rover_ai/`), panneau
 web de configuration + test texte disponible (`/ai`, voir
-`pi/README.md` "rover-ai") --- toujours pas branché dans `RoverCore` ni
-dans un pipeline audio, voir Phase 7.** Conçu et documenté ci-dessous
-depuis le 2026-09-05.
+`pi/README.md` "rover-ai"), et maintenant branché dans `RoverCore` via un
+Personality Engine (`pi/rover_ai/personality.py`) : chaque échange passe
+par une persona + un historique de conversation (l'`AIContext` que les
+fournisseurs savaient déjà consommer, jamais alimenté jusqu'ici) et
+déclenche une émotion (`FACE emotion=...`) sur l'ESP32 --- `curious`
+pendant l'appel, `happy` sur une réponse, `confused` sur une erreur.
+Toujours pas branché dans un pipeline audio (micro/STT/TTS), voir Phase
+7.** Conçu et documenté ci-dessous depuis le 2026-09-05.
 
 Interface commune (`AIProvider.ask`) implémentée, huit fournisseurs
 cloud et un fournisseur réseau local générique :
@@ -1465,14 +1470,31 @@ Objectif : permettre l'interaction naturelle.
 -   [ ] Micro.
 -   [ ] Audio pipeline.
 -   [ ] Speech-to-Text.
--   [ ] IA conversationnelle (`rover-ai`, voir §17.1) --- fournisseur API
+-   [x] IA conversationnelle (`rover-ai`, voir §17.1) --- fournisseur API
       cloud (Gemini/ChatGPT/Claude/...) ou LLM réseau local (ex. Qwen
       2.5 sur un second Raspberry Pi via Ollama), interchangeable à tout
-      moment depuis le portail de pilotage (`pi/rover_control`).
+      moment depuis le portail de pilotage (`pi/rover_control`). Écrit,
+      testé (fakes, aucun vrai réseau), branché dans le panneau web ---
+      **jamais testé avec une vraie clé API sur le Pi réel** (pas de
+      Pi disponible pour l'instant, voir PROGRESS.md).
 -   [ ] Text-to-Speech.
--   [ ] Personality Engine.
--   [ ] Machine à émotions.
--   [ ] Connexion aux commandes Rover.
+-   [x] Personality Engine (`pi/rover_ai/personality.py`) --- persona +
+      historique de conversation (borné) injectés dans chaque appel
+      IA, réaction émotionnelle (`RoverCore.set_emotion`) sur les
+      échanges (`curious`/`happy`/`confused`). Ne couvre encore que la
+      réaction "je discute avec toi" --- pas le reste de "machine à
+      émotions" ci-dessous (contexte hors conversation : batterie,
+      heure, présence).
+-   [ ] Machine à émotions --- au-delà de la réaction liée à une
+      conversation IA (ci-dessus, déjà en place), reste à faire :
+      humeur influencée par le contexte hors conversation (niveau de
+      batterie, heure/inactivité, interactions récentes -- voir
+      README "Personnalité Dynamique").
+-   [ ] Connexion aux commandes Rover --- l'IA ne peut aujourd'hui que
+      parler (texte), pas encore déclencher un `MOVE`/`HEAD` réel ;
+      volontairement pas fait sans validation explicite du schéma de
+      sécurité (bornes, confirmation) puisqu'il s'agit de faire bouger
+      le robot physique.
 
 Résultat :
 

@@ -95,9 +95,15 @@
 
   <fieldset>
     <legend>Tester une conversation</legend>
+    <p class="hint">
+      Rover garde le fil de cette conversation (persona + historique,
+      ARCHITECTURE_AND_ROADMAP.md §15) tant que "Nouvelle conversation"
+      n'est pas utilisé.
+    </p>
     <label for="chat-input">Message</label>
     <input id="chat-input" type="text" placeholder="Bonjour Rover !">
     <button id="send-btn">Envoyer</button>
+    <button id="reset-btn" class="secondary">Nouvelle conversation</button>
     <div id="chat-log"></div>
   </fieldset>
 </main>
@@ -123,6 +129,7 @@ const saveBtn = document.getElementById("save-btn");
 const statusLineEl = document.getElementById("status-line");
 const chatInputEl = document.getElementById("chat-input");
 const sendBtn = document.getElementById("send-btn");
+const resetBtn = document.getElementById("reset-btn");
 const chatLogEl = document.getElementById("chat-log");
 
 function updateFieldVisibility() {
@@ -214,6 +221,19 @@ async function sendChat() {
 }
 sendBtn.addEventListener("click", sendChat);
 chatInputEl.addEventListener("keydown", (evt) => { if (evt.key === "Enter") sendChat(); });
+
+resetBtn.addEventListener("click", async () => {
+  resetBtn.disabled = true;
+  try {
+    const res = await fetch(apiUrl("/ai/reset"), { method: "POST" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    chatLogEl.innerHTML = "";
+  } catch (err) {
+    appendChatLine("err", "Echec de la reinitialisation: " + err);
+  } finally {
+    resetBtn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>
