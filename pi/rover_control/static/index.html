@@ -67,14 +67,18 @@
     position: fixed; bottom: 0.8em; left: 0; right: 0;
     text-align: center; font-size: 0.8em; color: #7d8590;
   }
-  #ai-link, #ar-link {
-    position: fixed; top: 0.6em; z-index: 1;
+  /* Single flex row for the top-right links -- avoids hand-guessing a
+     fixed "right: Nem" offset per link (fragile, drifts out of sync
+     the moment a label's width changes or a link is added/removed). */
+  #top-links {
+    position: fixed; top: 0.6em; right: 0.6em; z-index: 1;
+    display: flex; gap: 0.4em;
+  }
+  #top-links a {
     font-size: 0.75em; color: #7d8590; text-decoration: none;
     background: #161b22; border: 1px solid #30363d; border-radius: 4px;
     padding: 0.25em 0.5em;
   }
-  #ai-link { right: 0.6em; }
-  #ar-link { right: 3em; }
   /* Video: a small corner panel, not a full-screen takeover -- the
      joystick underneath is still the primary control surface. */
   #video-panel {
@@ -108,8 +112,11 @@
 </head>
 <body>
 <div id="status" class="disconnected"><span id="status-text">Connexion...</span><span id="behavior-state"></span></div>
-<a id="ar-link" href="/ar">RA</a>
-<a id="ai-link" href="/ai">IA</a>
+<div id="top-links">
+  <a id="ar-link" href="/ar">RA</a>
+  <a id="audio-link" href="/audio">Voix</a>
+  <a id="ai-link" href="/ai">IA</a>
+</div>
 <div id="telemetry">
   <div id="obstacle-line" class="obstacle"></div>
   <div id="state-line"></div>
@@ -168,6 +175,7 @@ const videoUnavailableEl = document.getElementById("video-unavailable");
 const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
 document.getElementById("ai-link").href = "/ai?token=" + encodeURIComponent(ACCESS_TOKEN);
 document.getElementById("ar-link").href = "/ar?token=" + encodeURIComponent(ACCESS_TOKEN);
+document.getElementById("audio-link").href = "/audio?token=" + encodeURIComponent(ACCESS_TOKEN);
 
 videoFeedEl.hidden = true;
 videoFeedEl.addEventListener("load", () => { videoFeedEl.hidden = false; videoUnavailableEl.hidden = true; });

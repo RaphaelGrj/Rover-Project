@@ -233,6 +233,41 @@ vendeur via `/ai/config` réinitialise aussi l'historique automatiquement
   actif à partir de ces identifiants -- le futur appelant (`RoverCore`)
   n'a jamais besoin d'importer une classe de fournisseur en particulier.
 
+## rover_audio (Speech-to-Text / Text-to-Speech)
+
+**Panneau de configuration + test disponible à
+`http://<pi>:8080/audio?token=...`** (lien "Voix" sur la page de
+pilotage), voir `ARCHITECTURE_AND_ROADMAP.md` §17.2. STT et TTS sont
+configurés indépendamment (fournisseur/vendeur/clé différents possibles
+pour chacun) : choisir cloud ou réseau local pour chacun, tester une
+transcription (uploader un fichier audio, obtenir le texte) et une
+synthèse (taper du texte, écouter l'audio généré) directement dans le
+navigateur --- utilisable dès maintenant, sans attendre le micro/
+haut-parleur du robot (Phase 7 "Micro"/"Audio pipeline", pas commencés).
+
+- `rover_audio.SpeechToTextProvider`/`TextToSpeechProvider` : interfaces
+  communes (`async transcribe(audio) -> str` / `async synthesize(texte)
+  -> bytes`), `AudioProviderError` en cas d'échec (réseau, HTTP, réponse
+  malformée, pas configuré) --- même contrat "jamais de crash, mode
+  dégradé" que `rover_ai.AIProviderError`.
+- Fournisseur cloud (`rover_audio/cloud.py`) : `OpenAIWhisperSTT`
+  (`/audio/transcriptions`) et `OpenAITTS` (`/audio/speech`) --- un seul
+  vendeur pour l'instant, même chemin de croissance que rover-ai (parti
+  de 3 fournisseurs, monté à 8 sur demande) si un autre vendeur s'avère
+  utile plus tard.
+- Fournisseur local (`rover_audio/local.py`) : `LocalSTT`/`LocalTTS`,
+  n'importe quel serveur auto-hébergé exposant une API compatible OpenAI
+  pour l'audio (ex. un whisper.cpp/faster-whisper wrappé, ou
+  openedai-speech pour la synthèse). Aucune clé requise.
+- `rover_audio.credentials` : stockage dans `pi/audio_credentials.json`
+  (git-ignoré, permissions `0600`, jamais dans `config.json`) --- même
+  logique que `pi/ai_credentials.json`. Voir
+  `pi/audio_credentials.example.json` pour le gabarit.
+- **Pas encore fait** : rien ne relie ce module à un vrai micro/
+  haut-parleur, ni à `rover_ai.personality.PersonalityEngine.converse()`
+  (§17.1) --- ce sera l'"Audio pipeline" de la Phase 7, une fois le
+  micro I2S (INMP441, BOM) câblé.
+
 ## Réalité augmentée (casque Meta Quest 3 / WebXR)
 
 **Page à `http://<pi>:8080/ar?token=...`** (lien "RA" en haut à droite de

@@ -18,6 +18,11 @@ pi/logs/
 # can hold a real secret).
 pi/ai_credentials.json
 
+# rover_audio (STT/TTS) credentials -- same reasoning as
+# pi/ai_credentials.json above, pi/audio_credentials.example.json is the
+# tracked template.
+pi/audio_credentials.json
+
 # TLS cert/key (pi/README.md "HTTPS/WSS") and the systemd env file
 # (pi/rover.env.example is the tracked template) -- generated/filled in
 # locally per deployment, never committed.

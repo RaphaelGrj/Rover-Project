@@ -23,6 +23,7 @@ from aiohttp import web
 from rover_ai.personality import PersonalityEngine
 from rover_esp32.link import RoverLink
 from rover_control.ai_panel import AIPanel
+from rover_control.audio_panel import AudioPanel
 from rover_control.auth import resolve_token
 from rover_control.camera import CameraStream
 from rover_control.server import create_app
@@ -164,7 +165,8 @@ async def async_main(settings: dict) -> None:
     camera = CameraStream(settings["camera_url"])
     personality = PersonalityEngine(emotion_sink=core.set_emotion)
     ai_panel = AIPanel(personality=personality)
-    app = create_app(core, token, camera, ai_panel)
+    audio_panel = AudioPanel()
+    app = create_app(core, token, camera, ai_panel, audio_panel)
     runner = web.AppRunner(app)
     await runner.setup()
 
@@ -193,6 +195,7 @@ async def async_main(settings: dict) -> None:
         mqtt.close()
         await camera.close()
         await ai_panel.close()
+        await audio_panel.close()
         await runner.cleanup()
         link.stop()
 

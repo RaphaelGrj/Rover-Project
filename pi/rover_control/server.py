@@ -18,8 +18,10 @@ from typing import TYPE_CHECKING
 from aiohttp import WSMsgType, web
 
 from rover_ai import AIProviderError
+from rover_audio import AudioProviderError
 
 from .ai_panel import AIPanel
+from .audio_panel import AudioPanel
 from .auth import token_matches
 from .camera import CameraStream
 
@@ -42,6 +44,10 @@ async def ar_page(request: web.Request) -> web.FileResponse:
     return web.FileResponse(STATIC_DIR / "ar-hud.html")
 
 
+async def audio_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(STATIC_DIR / "audio.html")
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
     """Applies to every route on this app (see create_app) -- a new
@@ -59,21 +65,28 @@ def create_app(
     token: str,
     camera: CameraStream | None = None,
     ai_panel: AIPanel | None = None,
+    audio_panel: AudioPanel | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app["core"] = core
     app["token"] = token
     app["camera"] = camera or CameraStream()
     app["ai_panel"] = ai_panel or AIPanel()
+    app["audio_panel"] = audio_panel or AudioPanel()
     app.router.add_get("/", index)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/video", video_handler)
     app.router.add_get("/ai", ai_page)
     app.router.add_get("/ar", ar_page)
+    app.router.add_get("/audio", audio_page)
     app.router.add_get("/ai/config", ai_config_get)
     app.router.add_post("/ai/config", ai_config_post)
     app.router.add_post("/ai/ask", ai_ask_post)
     app.router.add_post("/ai/reset", ai_reset_post)
+    app.router.add_get("/audio/config", audio_config_get)
+    app.router.add_post("/audio/config", audio_config_post)
+    app.router.add_post("/audio/transcribe", audio_transcribe_post)
+    app.router.add_post("/audio/speak", audio_speak_post)
     return app
 
 
@@ -131,6 +144,64 @@ async def ai_reset_post(request: web.Request) -> web.Response:
     panel: AIPanel = request.app["ai_panel"]
     panel.reset_conversation()
     return web.json_response({"ok": True})
+
+
+async def audio_config_get(request: web.Request) -> web.Response:
+    panel: AudioPanel = request.app["audio_panel"]
+    return web.json_response(panel.public_config())
+
+
+async def audio_config_post(request: web.Request) -> web.Response:
+    panel: AudioPanel = request.app["audio_panel"]
+    try:
+        raw = await request.json()
+    except ValueError:
+        return web.json_response({"error": "invalid JSON body"}, status=400)
+    if not isinstance(raw, dict):
+        return web.json_response({"error": "expected a JSON object"}, status=400)
+
+    try:
+        await panel.update(raw)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(panel.public_config())
+
+
+async def audio_transcribe_post(request: web.Request) -> web.Response:
+    """Body is the raw audio bytes (not JSON) -- a plain `fetch(url,
+    {body: file})` from audio.html sends a File/Blob straight through,
+    no multipart wrapping needed for a single clip."""
+    panel: AudioPanel = request.app["audio_panel"]
+    audio = await request.read()
+    if not audio:
+        return web.json_response({"error": "empty request body -- expected raw audio bytes"}, status=400)
+    mime_type = request.content_type or "audio/wav"
+
+    try:
+        text = await panel.transcribe(audio, mime_type=mime_type)
+    except AudioProviderError as exc:
+        return web.json_response({"error": str(exc)}, status=503)
+    return web.json_response({"text": text})
+
+
+async def audio_speak_post(request: web.Request) -> web.Response:
+    panel: AudioPanel = request.app["audio_panel"]
+    try:
+        raw = await request.json()
+        text = str(raw["text"])
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": 'expected a JSON body {"text": "..."}'}, status=400)
+
+    try:
+        audio = await panel.synthesize(text)
+    except AudioProviderError as exc:
+        return web.json_response({"error": str(exc)}, status=503)
+    # audio/mpeg matches what OpenAITTS actually returns (MP3); a local
+    # provider that returns a different encoding (eg. WAV) would be
+    # mislabeled here -- rover_audio.tts.TextToSpeechProvider doesn't
+    # report its own content type yet (see PROGRESS.md), good enough for
+    # this first increment where OpenAI is the only wired-up option.
+    return web.Response(body=audio, content_type="audio/mpeg")
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:

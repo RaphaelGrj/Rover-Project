@@ -982,6 +982,47 @@ l'indisponibilité de la conversation.
 
 ------------------------------------------------------------------------
 
+## 17.2 Speech-to-Text / Text-to-Speech (module `rover_audio`)
+
+**Statut (2026-09-11) : écrit et testé (`pi/rover_audio/`), panneau web
+de configuration + test disponible (`/audio`, voir `pi/README.md`
+"rover_audio") --- toujours pas branché à un micro/haut-parleur réel
+("Micro"/"Audio pipeline" ci-dessus, pas commencés).**
+
+Même principe interchangeable "cloud ou réseau local" que §17.1, appliqué
+aux deux bouts de la chaîne audio plutôt qu'à la conversation elle-même :
+
+-   `SpeechToTextProvider.transcribe(audio) -> texte` --- alimentera
+    `PersonalityEngine.converse()` (§17.1) exactement comme le fait déjà
+    le panneau `/ai` texte, une fois qu'un micro produit vraiment de
+    l'audio à transcrire.
+-   `TextToSpeechProvider.synthesize(texte) -> audio` --- consommera la
+    réponse que `PersonalityEngine.converse()` produit déjà.
+
+Un seul fournisseur cloud pour l'instant (`OpenAIWhisperSTT`/`OpenAITTS`,
+`pi/rover_audio/cloud.py`) --- rover-ai (§17.1) est parti de 3 fournisseurs
+cloud pour en arriver à 8 sur demande une fois la forme validée ; même
+chemin de croissance ouvert ici plutôt que d'en deviner d'autres à
+l'avance. Fournisseur réseau local générique (`LocalSTT`/`LocalTTS`,
+`pi/rover_audio/local.py`) pour tout serveur auto-hébergé exposant une
+API compatible OpenAI (`/audio/transcriptions`, `/audio/speech`) --- même
+raisonnement que `LocalAIProvider`, aucune clé requise.
+
+Identifiants stockés dans `pi/audio_credentials.json` (git-ignoré,
+permissions `0600`, jamais dans `config.json`) --- même logique que
+`pi/ai_credentials.json`. STT et TTS sont configurés indépendamment
+(fournisseur/vendeur différents possibles pour chacun) mais partagent ce
+même fichier, comme un futur panneau "Audio" unique le suggère déjà
+(`rover_control/audio_panel.py` + `/audio`).
+
+**Panneau web** : `/audio` permet de configurer STT et TTS séparément,
+de tester une transcription (fichier audio uploadé depuis le navigateur)
+et une synthèse (texte tapé, audio joué directement dans la page) --- le
+tout utilisable dès maintenant depuis n'importe quel appareil, sans
+attendre le micro/haut-parleur du robot.
+
+------------------------------------------------------------------------
+
 # 18. Home Assistant
 
 Home Assistant est une couche externe.
@@ -1527,9 +1568,17 @@ smartphone distant ou manette).
 
 Objectif : permettre l'interaction naturelle.
 
--   [ ] Micro.
--   [ ] Audio pipeline.
--   [ ] Speech-to-Text.
+-   [ ] Micro --- aucune capture audio réelle : dépend du matériel
+      (INMP441, BOM) pas encore câblé.
+-   [ ] Audio pipeline --- la chaîne micro→STT→IA→TTS→haut-parleur
+      n'est pas assemblée ; STT et TTS existent chacun séparément
+      (ci-dessous) mais rien ne les relie encore l'un à l'autre ni à
+      `PersonalityEngine.converse()` (§17.1).
+-   [x] Speech-to-Text (`pi/rover_audio/`, voir §17.2) --- écrit, testé
+      (fakes, aucun vrai réseau), panneau web `/audio` pour tester une
+      transcription dès maintenant (fichier audio uploadé) ---
+      **jamais testé avec une vraie clé API**, et rien n'alimente
+      encore ce provider avec de l'audio réel (pas de micro).
 -   [x] IA conversationnelle (`rover-ai`, voir §17.1) --- fournisseur API
       cloud (Gemini/ChatGPT/Claude/...) ou LLM réseau local (ex. Qwen
       2.5 sur un second Raspberry Pi via Ollama), interchangeable à tout
@@ -1537,7 +1586,11 @@ Objectif : permettre l'interaction naturelle.
       testé (fakes, aucun vrai réseau), branché dans le panneau web ---
       **jamais testé avec une vraie clé API sur le Pi réel** (pas de
       Pi disponible pour l'instant, voir PROGRESS.md).
--   [ ] Text-to-Speech.
+-   [x] Text-to-Speech (`pi/rover_audio/`, voir §17.2) --- écrit, testé
+      (fakes), panneau web `/audio` pour tester une synthèse (texte
+      tapé, audio joué dans le navigateur) --- **jamais testé avec une
+      vraie clé API**, et rien ne relie encore sa sortie à un
+      haut-parleur physique (pas câblé).
 -   [x] Personality Engine (`pi/rover_ai/personality.py`) --- persona +
       historique de conversation (borné) injectés dans chaque appel
       IA, réaction émotionnelle (`RoverCore.set_emotion`) sur les

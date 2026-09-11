@@ -12,6 +12,30 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Speech-to-Text / Text-to-Speech --- module `rover_audio` écrit
+  (2026-09-11)**, suite logique du Personality Engine du même jour :
+  `pi/rover_audio/` (interfaces `SpeechToTextProvider`/
+  `TextToSpeechProvider`, fournisseur cloud `OpenAIWhisperSTT`/
+  `OpenAITTS`, fournisseur réseau local générique `LocalSTT`/`LocalTTS`,
+  stockage d'identifiants dans `pi/audio_credentials.json` --- même
+  forme que `rover_ai` §17.1, voir `ARCHITECTURE_AND_ROADMAP.md` §17.2).
+  Panneau web `pi/rover_control/audio_panel.py` + page `/audio` +
+  routes `/audio/config` (GET/POST), `/audio/transcribe` (POST, upload
+  audio brut), `/audio/speak` (POST texte → audio) --- toutes protégées
+  par le token existant, câblées dans `rover_core/main.py`. Bug de fuite
+  de clé API entre fournisseurs (celui déjà trouvé et corrigé sur
+  `ai_panel.py` le 2026-09-09) anticipé cette fois dès l'écriture : STT
+  et TTS ont chacun leur propre garde "champ vide garde la clé, sauf en
+  changeant de fournisseur" (`rover_control/audio_panel.py`
+  `_merge_api_key`, testé explicitement --- la clé STT ne doit jamais
+  fuiter dans le champ TTS). **131/131 tests `pi/` (38 nouveaux :
+  `test_rover_audio.py` et `test_audio_panel.py` entièrement nouveaux)**,
+  routes `/audio/*` testées en isolation avec des fakes (200/400/503
+  vérifiés). **Rien de tout ça essayé avec une vraie clé API ni un vrai
+  micro/haut-parleur** --- pas de Pi disponible cette session, et le
+  micro (Phase 7 "Micro") n'est de toute façon pas câblé. Pas encore
+  relié à `PersonalityEngine.converse()` (§17.1) --- c'est l'"Audio
+  pipeline" de la Phase 7, prochaine étape une fois le micro I2S en main.
 - **HUD en réalité augmentée (Meta Quest 3 / WebXR) --- premier
   incrément écrit (2026-09-11)**, suite à une idée de l'utilisateur
   (coupler Rover à son casque Meta Quest 3, argument fort pour l'aspect

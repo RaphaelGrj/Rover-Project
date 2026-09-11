@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rover Voix</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; min-height: 100%; background: #0b0f14; color: #e6edf3;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 480px; margin: 0 auto; padding: 1em 1em 3em; }
+  a.back { color: #7d8590; font-size: 0.85em; text-decoration: none; }
+  h1 { font-size: 1.2em; margin: 0.6em 0 0.2em; }
+  h2 { font-size: 1em; margin: 1.2em 0 0.2em; }
+  p.hint { color: #7d8590; font-size: 0.82em; margin-top: 0; }
+  fieldset {
+    border: 1px solid #30363d; border-radius: 8px; margin: 1em 0; padding: 0.8em 1em 1em;
+  }
+  legend { padding: 0 0.4em; color: #7d8590; font-size: 0.85em; }
+  label { display: block; font-size: 0.85em; margin: 0.7em 0 0.2em; color: #c9d1d9; }
+  input, select {
+    width: 100%; box-sizing: border-box; background: #161b22; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 6px; padding: 0.5em 0.6em; font-size: 0.95em;
+  }
+  button {
+    margin-top: 0.9em; width: 100%; padding: 0.6em; border: none; border-radius: 6px;
+    background: #1f6feb; color: white; font-size: 0.95em; cursor: pointer;
+  }
+  button.secondary { background: #21262d; border: 1px solid #30363d; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #status-line { font-size: 0.85em; margin: 0.6em 0; min-height: 1.2em; }
+  #status-line.ok { color: #3fb950; }
+  #status-line.err { color: #f85149; }
+  .test-result {
+    border: 1px solid #30363d; border-radius: 8px; padding: 0.6em;
+    min-height: 2em; font-size: 0.9em; white-space: pre-wrap; margin-top: 0.8em;
+  }
+  .test-result.err { color: #f85149; }
+  audio { width: 100%; margin-top: 0.8em; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" id="back-link" href="/">&larr; Retour au pilotage</a>
+  <h1>Voix (Speech-to-Text / Text-to-Speech)</h1>
+  <p class="hint">
+    Configure et teste les fournisseurs Speech-to-Text et Text-to-Speech
+    de Rover (ARCHITECTURE_AND_ROADMAP.md, Phase 7) -- indépendants l'un
+    de l'autre. Ne remplace pas le micro/haut-parleur du robot (pas
+    encore câblés) : de quoi configurer et valider dès maintenant, depuis
+    n'importe quel navigateur.
+  </p>
+
+  <h2>Speech-to-Text</h2>
+  <fieldset>
+    <legend>Fournisseur</legend>
+    <label for="stt-provider-type">Type</label>
+    <select id="stt-provider-type">
+      <option value="cloud">API cloud</option>
+      <option value="local">Réseau local</option>
+    </select>
+
+    <div id="stt-cloud-fields">
+      <label for="stt-cloud-vendor">Service</label>
+      <select id="stt-cloud-vendor">
+        <option value="openai">OpenAI (Whisper)</option>
+      </select>
+      <label for="stt-api-key">Clé API</label>
+      <input id="stt-api-key" type="password" autocomplete="off" placeholder="laisser vide pour garder la clé actuelle">
+    </div>
+    <div id="stt-local-fields" hidden>
+      <label for="stt-local-url">Adresse du serveur local</label>
+      <input id="stt-local-url" type="text" placeholder="http://192.168.1.50:8000">
+    </div>
+    <label for="stt-model">Modèle <span style="color:#7d8590">(vide = défaut)</span></label>
+    <input id="stt-model" type="text" placeholder="ex: whisper-1">
+  </fieldset>
+
+  <h2>Text-to-Speech</h2>
+  <fieldset>
+    <legend>Fournisseur</legend>
+    <label for="tts-provider-type">Type</label>
+    <select id="tts-provider-type">
+      <option value="cloud">API cloud</option>
+      <option value="local">Réseau local</option>
+    </select>
+
+    <div id="tts-cloud-fields">
+      <label for="tts-cloud-vendor">Service</label>
+      <select id="tts-cloud-vendor">
+        <option value="openai">OpenAI</option>
+      </select>
+      <label for="tts-api-key">Clé API</label>
+      <input id="tts-api-key" type="password" autocomplete="off" placeholder="laisser vide pour garder la clé actuelle">
+    </div>
+    <div id="tts-local-fields" hidden>
+      <label for="tts-local-url">Adresse du serveur local</label>
+      <input id="tts-local-url" type="text" placeholder="http://192.168.1.51:8001">
+    </div>
+    <label for="tts-model">Modèle <span style="color:#7d8590">(vide = défaut)</span></label>
+    <input id="tts-model" type="text" placeholder="ex: tts-1">
+    <label for="tts-voice">Voix <span style="color:#7d8590">(vide = défaut)</span></label>
+    <input id="tts-voice" type="text" placeholder="ex: alloy">
+  </fieldset>
+
+  <button id="save-btn">Enregistrer</button>
+  <div id="status-line"></div>
+
+  <fieldset>
+    <legend>Tester la transcription (STT)</legend>
+    <label for="audio-file">Fichier audio</label>
+    <input id="audio-file" type="file" accept="audio/*">
+    <button id="transcribe-btn">Transcrire</button>
+    <div id="transcribe-result" class="test-result"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tester la synthèse (TTS)</legend>
+    <label for="speak-text">Texte</label>
+    <input id="speak-text" type="text" placeholder="Bonjour, je suis Rover.">
+    <button id="speak-btn">Écouter</button>
+    <div id="speak-status" class="test-result"></div>
+    <audio id="audio-player" controls hidden></audio>
+  </fieldset>
+</main>
+
+<script>
+"use strict";
+
+const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
+document.getElementById("back-link").href = "/?token=" + encodeURIComponent(ACCESS_TOKEN);
+
+function apiUrl(path) {
+  return path + "?token=" + encodeURIComponent(ACCESS_TOKEN);
+}
+
+const els = {};
+for (const id of [
+  "stt-provider-type", "stt-cloud-fields", "stt-local-fields", "stt-cloud-vendor",
+  "stt-api-key", "stt-local-url", "stt-model",
+  "tts-provider-type", "tts-cloud-fields", "tts-local-fields", "tts-cloud-vendor",
+  "tts-api-key", "tts-local-url", "tts-model", "tts-voice",
+  "save-btn", "status-line",
+  "audio-file", "transcribe-btn", "transcribe-result",
+  "speak-text", "speak-btn", "speak-status", "audio-player",
+]) {
+  els[id] = document.getElementById(id);
+}
+
+function updateFieldVisibility(prefix) {
+  const isCloud = els[prefix + "-provider-type"].value === "cloud";
+  els[prefix + "-cloud-fields"].hidden = !isCloud;
+  els[prefix + "-local-fields"].hidden = isCloud;
+}
+els["stt-provider-type"].addEventListener("change", () => updateFieldVisibility("stt"));
+els["tts-provider-type"].addEventListener("change", () => updateFieldVisibility("tts"));
+
+function showStatus(text, ok) {
+  els["status-line"].textContent = text;
+  els["status-line"].className = ok ? "ok" : "err";
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch(apiUrl("/audio/config"));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    els["stt-provider-type"].value = data.stt_provider || "cloud";
+    els["stt-cloud-vendor"].value = data.stt_cloud_vendor || "openai";
+    if (data.stt_api_key) els["stt-api-key"].placeholder = "clé enregistrée -- laisser vide pour la garder";
+    els["stt-local-url"].value = data.stt_local_url || "";
+    els["stt-model"].value = data.stt_model || "";
+
+    els["tts-provider-type"].value = data.tts_provider || "cloud";
+    els["tts-cloud-vendor"].value = data.tts_cloud_vendor || "openai";
+    if (data.tts_api_key) els["tts-api-key"].placeholder = "clé enregistrée -- laisser vide pour la garder";
+    els["tts-local-url"].value = data.tts_local_url || "";
+    els["tts-model"].value = data.tts_model || "";
+    els["tts-voice"].value = data.tts_voice || "";
+
+    updateFieldVisibility("stt");
+    updateFieldVisibility("tts");
+
+    const parts = [];
+    parts.push("STT " + (data.stt_available ? "prêt" : "non configuré"));
+    parts.push("TTS " + (data.tts_available ? "prêt" : "non configuré"));
+    showStatus(parts.join(" -- "), data.stt_available && data.tts_available);
+  } catch (err) {
+    showStatus("Impossible de charger la configuration actuelle: " + err, false);
+  }
+}
+loadConfig();
+
+els["save-btn"].addEventListener("click", async () => {
+  els["save-btn"].disabled = true;
+  const sttCloud = els["stt-provider-type"].value === "cloud";
+  const ttsCloud = els["tts-provider-type"].value === "cloud";
+  const body = {
+    stt_provider: els["stt-provider-type"].value,
+    stt_cloud_vendor: sttCloud ? els["stt-cloud-vendor"].value : "",
+    stt_api_key: sttCloud ? els["stt-api-key"].value : "",
+    stt_local_url: sttCloud ? "" : els["stt-local-url"].value,
+    stt_model: els["stt-model"].value,
+    tts_provider: els["tts-provider-type"].value,
+    tts_cloud_vendor: ttsCloud ? els["tts-cloud-vendor"].value : "",
+    tts_api_key: ttsCloud ? els["tts-api-key"].value : "",
+    tts_local_url: ttsCloud ? "" : els["tts-local-url"].value,
+    tts_model: els["tts-model"].value,
+    tts_voice: els["tts-voice"].value,
+  };
+  try {
+    const res = await fetch(apiUrl("/audio/config"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    els["stt-api-key"].value = "";
+    els["tts-api-key"].value = "";
+    if (data.stt_api_key) els["stt-api-key"].placeholder = "clé enregistrée -- laisser vide pour la garder";
+    if (data.tts_api_key) els["tts-api-key"].placeholder = "clé enregistrée -- laisser vide pour la garder";
+    const parts = [];
+    parts.push("STT " + (data.stt_available ? "prêt" : "non configuré"));
+    parts.push("TTS " + (data.tts_available ? "prêt" : "non configuré"));
+    showStatus("Enregistré -- " + parts.join(" -- "), data.stt_available && data.tts_available);
+  } catch (err) {
+    showStatus("Echec de l'enregistrement: " + err, false);
+  } finally {
+    els["save-btn"].disabled = false;
+  }
+});
+
+els["transcribe-btn"].addEventListener("click", async () => {
+  const file = els["audio-file"].files[0];
+  if (!file) { els["transcribe-result"].textContent = "Choisis un fichier audio d'abord."; return; }
+  els["transcribe-btn"].disabled = true;
+  els["transcribe-result"].className = "test-result";
+  els["transcribe-result"].textContent = "Transcription en cours...";
+  try {
+    const res = await fetch(apiUrl("/audio/transcribe"), {
+      method: "POST",
+      headers: { "Content-Type": file.type || "audio/wav" },
+      body: file,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    els["transcribe-result"].textContent = data.text;
+  } catch (err) {
+    els["transcribe-result"].className = "test-result err";
+    els["transcribe-result"].textContent = "Erreur: " + err;
+  } finally {
+    els["transcribe-btn"].disabled = false;
+  }
+});
+
+els["speak-btn"].addEventListener("click", async () => {
+  const text = els["speak-text"].value.trim();
+  if (!text) return;
+  els["speak-btn"].disabled = true;
+  els["speak-status"].className = "test-result";
+  els["speak-status"].textContent = "Synthèse en cours...";
+  try {
+    const res = await fetch(apiUrl("/audio/speak"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      let message = "HTTP " + res.status;
+      try { message = (await res.json()).error || message; } catch {}
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    els["audio-player"].src = url;
+    els["audio-player"].hidden = false;
+    els["speak-status"].textContent = "";
+    await els["audio-player"].play();
+  } catch (err) {
+    els["speak-status"].className = "test-result err";
+    els["speak-status"].textContent = "Erreur: " + err;
+  } finally {
+    els["speak-btn"].disabled = false;
+  }
+});
+</script>
+</body>
+</html>
