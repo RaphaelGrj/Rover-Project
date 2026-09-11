@@ -125,6 +125,20 @@
     <div id="speak-status" class="test-result"></div>
     <audio id="audio-player" controls hidden></audio>
   </fieldset>
+
+  <fieldset>
+    <legend>Pipeline complet (STT &rarr; IA &rarr; TTS)</legend>
+    <p class="hint">
+      Enchaîne les trois étapes sur un seul fichier audio : transcription,
+      passage par la conversation IA (même persona/historique que le
+      panneau "IA"), puis synthèse de la réponse.
+    </p>
+    <label for="converse-file">Fichier audio (une question)</label>
+    <input id="converse-file" type="file" accept="audio/*">
+    <button id="converse-btn">Envoyer</button>
+    <div id="converse-result" class="test-result"></div>
+    <audio id="converse-player" controls hidden></audio>
+  </fieldset>
 </main>
 
 <script>
@@ -146,6 +160,7 @@ for (const id of [
   "save-btn", "status-line",
   "audio-file", "transcribe-btn", "transcribe-result",
   "speak-text", "speak-btn", "speak-status", "audio-player",
+  "converse-file", "converse-btn", "converse-result", "converse-player",
 ]) {
   els[id] = document.getElementById(id);
 }
@@ -286,6 +301,38 @@ els["speak-btn"].addEventListener("click", async () => {
     els["speak-status"].textContent = "Erreur: " + err;
   } finally {
     els["speak-btn"].disabled = false;
+  }
+});
+
+function base64ToBlob(base64, mimeType) {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: mimeType });
+}
+
+els["converse-btn"].addEventListener("click", async () => {
+  const file = els["converse-file"].files[0];
+  if (!file) { els["converse-result"].textContent = "Choisis un fichier audio d'abord."; return; }
+  els["converse-btn"].disabled = true;
+  els["converse-result"].className = "test-result";
+  els["converse-result"].textContent = "Transcription, puis conversation IA, puis synthèse...";
+  try {
+    const res = await fetch(apiUrl("/audio/converse"), {
+      method: "POST",
+      headers: { "Content-Type": file.type || "audio/wav" },
+      body: file,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data.stage ? "[" + data.stage + "] " : "") + (data.error || ("HTTP " + res.status)));
+    els["converse-result"].textContent = "Entendu: " + data.heard_text + "\nRover: " + data.reply_text;
+    const blob = base64ToBlob(data.reply_audio_base64, "audio/mpeg");
+    els["converse-player"].src = URL.createObjectURL(blob);
+    els["converse-player"].hidden = false;
+    await els["converse-player"].play();
+  } catch (err) {
+    els["converse-result"].className = "test-result err";
+    els["converse-result"].textContent = "Erreur: " + err;
+  } finally {
+    els["converse-btn"].disabled = false;
   }
 });
 </script>

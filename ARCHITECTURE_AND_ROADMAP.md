@@ -986,17 +986,21 @@ l'indisponibilité de la conversation.
 
 **Statut (2026-09-11) : écrit et testé (`pi/rover_audio/`), panneau web
 de configuration + test disponible (`/audio`, voir `pi/README.md`
-"rover_audio") --- toujours pas branché à un micro/haut-parleur réel
-("Micro"/"Audio pipeline" ci-dessus, pas commencés).**
+"rover_audio"), et maintenant chaîné bout en bout côté logiciel ---
+`pi/rover_control/voice_panel.py` (`VoicePanel.converse`, route `POST
+/audio/converse`) enchaîne STT → `AIPanel.ask()` (persona/historique
+§17.1) → TTS en une seule requête, chaque étage identifié en cas
+d'échec. **Toujours pas branché à un micro/haut-parleur réel** ("Micro"
+ci-dessus, pas câblé) --- testable dès maintenant depuis `/audio` avec un
+fichier audio à la place d'un micro.**
 
 Même principe interchangeable "cloud ou réseau local" que §17.1, appliqué
 aux deux bouts de la chaîne audio plutôt qu'à la conversation elle-même :
 
--   `SpeechToTextProvider.transcribe(audio) -> texte` --- alimentera
-    `PersonalityEngine.converse()` (§17.1) exactement comme le fait déjà
-    le panneau `/ai` texte, une fois qu'un micro produit vraiment de
-    l'audio à transcrire.
--   `TextToSpeechProvider.synthesize(texte) -> audio` --- consommera la
+-   `SpeechToTextProvider.transcribe(audio) -> texte` --- alimente
+    `AIPanel.ask()` (donc `PersonalityEngine.converse()`, §17.1) via
+    `VoicePanel`, exactement comme le fait déjà le panneau `/ai` texte.
+-   `TextToSpeechProvider.synthesize(texte) -> audio` --- consomme la
     réponse que `PersonalityEngine.converse()` produit déjà.
 
 Un seul fournisseur cloud pour l'instant (`OpenAIWhisperSTT`/`OpenAITTS`,
@@ -1570,10 +1574,14 @@ Objectif : permettre l'interaction naturelle.
 
 -   [ ] Micro --- aucune capture audio réelle : dépend du matériel
       (INMP441, BOM) pas encore câblé.
--   [ ] Audio pipeline --- la chaîne micro→STT→IA→TTS→haut-parleur
-      n'est pas assemblée ; STT et TTS existent chacun séparément
-      (ci-dessous) mais rien ne les relie encore l'un à l'autre ni à
-      `PersonalityEngine.converse()` (§17.1).
+-   [x] Audio pipeline --- orchestration écrite et testée
+      (`pi/rover_control/voice_panel.py`, route `POST /audio/converse`) :
+      un audio → STT → `AIPanel.ask()` (persona/historique §17.1) →
+      TTS → audio réponse, chaque étage identifié en cas d'échec
+      (`VoiceTurnError.stage` = `stt`/`ai`/`tts`). **Seul maillon
+      manquant : aucun vrai micro/haut-parleur physique** (Micro
+      ci-dessus, pas câblé) --- utilisable dès maintenant depuis le
+      panneau `/audio` avec un fichier audio uploadé à la place.
 -   [x] Speech-to-Text (`pi/rover_audio/`, voir §17.2) --- écrit, testé
       (fakes, aucun vrai réseau), panneau web `/audio` pour tester une
       transcription dès maintenant (fichier audio uploadé) ---

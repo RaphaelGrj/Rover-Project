@@ -27,6 +27,7 @@ from rover_control.audio_panel import AudioPanel
 from rover_control.auth import resolve_token
 from rover_control.camera import CameraStream
 from rover_control.server import create_app
+from rover_control.voice_panel import VoicePanel
 from rover_mqtt.publisher import MqttPublisher
 
 from .config import load_config
@@ -166,7 +167,8 @@ async def async_main(settings: dict) -> None:
     personality = PersonalityEngine(emotion_sink=core.set_emotion)
     ai_panel = AIPanel(personality=personality)
     audio_panel = AudioPanel()
-    app = create_app(core, token, camera, ai_panel, audio_panel)
+    voice_panel = VoicePanel(audio_panel, ai_panel)
+    app = create_app(core, token, camera, ai_panel, audio_panel, voice_panel)
     runner = web.AppRunner(app)
     await runner.setup()
 

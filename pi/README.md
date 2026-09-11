@@ -263,10 +263,16 @@ haut-parleur du robot (Phase 7 "Micro"/"Audio pipeline", pas commencés).
   (git-ignoré, permissions `0600`, jamais dans `config.json`) --- même
   logique que `pi/ai_credentials.json`. Voir
   `pi/audio_credentials.example.json` pour le gabarit.
+- **Pipeline complet (`rover_control/voice_panel.py`)** : `POST
+  /audio/converse` enchaîne transcription → conversation IA (même
+  persona/historique que `/ai`, §17.1) → synthèse en une seule requête
+  --- section "Pipeline complet" sur `/audio` (uploader un fichier audio,
+  obtenir le texte entendu, la réponse de Rover, et l'écouter). Chaque
+  étage identifié en cas d'échec (`stt`/`ai`/`tts`).
 - **Pas encore fait** : rien ne relie ce module à un vrai micro/
-  haut-parleur, ni à `rover_ai.personality.PersonalityEngine.converse()`
-  (§17.1) --- ce sera l'"Audio pipeline" de la Phase 7, une fois le
-  micro I2S (INMP441, BOM) câblé.
+  haut-parleur physique --- ce sera fait une fois le micro I2S (INMP441,
+  BOM) câblé (Phase 7 "Micro"), l'orchestration logicielle elle-même est
+  déjà en place.
 
 ## Réalité augmentée (casque Meta Quest 3 / WebXR)
 

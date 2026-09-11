@@ -12,6 +12,24 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **Audio pipeline --- STT/IA/TTS enchaînés (2026-09-11)**, même
+  session que `rover_audio` ci-dessous : nouveau
+  `pi/rover_control/voice_panel.py` (`VoicePanel.converse`) enchaîne
+  transcription → `AIPanel.ask()` (persona/historique déjà en place,
+  §17.1) → synthèse en un seul appel, chaque étage (`stt`/`ai`/`tts`)
+  identifié séparément en cas d'échec (`VoiceTurnError.stage`) plutôt
+  qu'une erreur indifférenciée. Nouvelle route `POST /audio/converse`
+  (réponse JSON : texte entendu, texte de la réponse, audio en base64
+  --- choix délibéré plutôt qu'une réponse binaire avec le texte dans des
+  en-têtes HTTP, plus sûr avec de l'accentuation française) + section
+  "Pipeline complet" sur `/audio` (upload d'un fichier audio, affiche
+  l'échange, joue la réponse). **136/136 tests `pi/` (5 nouveaux,
+  `test_voice_panel.py`)**, testé de bout en bout en isolation avec des
+  fakes (STT/IA/TTS simulés) via un serveur aiohttp en mémoire.
+  Referme la boucle logicielle complète de la Phase 7 "Audio pipeline"
+  --- **seul maillon manquant : aucun vrai micro/haut-parleur** (pas
+  câblés, pas de Pi disponible cette session), donc rien de tout ça
+  essayé avec du son réel.
 - **Speech-to-Text / Text-to-Speech --- module `rover_audio` écrit
   (2026-09-11)**, suite logique du Personality Engine du même jour :
   `pi/rover_audio/` (interfaces `SpeechToTextProvider`/

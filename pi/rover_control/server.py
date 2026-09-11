@@ -10,6 +10,7 @@ there's a serial port and an ESP32 behind it.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from pathlib import Path
@@ -24,6 +25,7 @@ from .ai_panel import AIPanel
 from .audio_panel import AudioPanel
 from .auth import token_matches
 from .camera import CameraStream
+from .voice_panel import VoicePanel, VoiceTurnError
 
 if TYPE_CHECKING:
     from rover_core.core import RoverCore
@@ -66,6 +68,7 @@ def create_app(
     camera: CameraStream | None = None,
     ai_panel: AIPanel | None = None,
     audio_panel: AudioPanel | None = None,
+    voice_panel: VoicePanel | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app["core"] = core
@@ -73,6 +76,7 @@ def create_app(
     app["camera"] = camera or CameraStream()
     app["ai_panel"] = ai_panel or AIPanel()
     app["audio_panel"] = audio_panel or AudioPanel()
+    app["voice_panel"] = voice_panel or VoicePanel(app["audio_panel"], app["ai_panel"])
     app.router.add_get("/", index)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/video", video_handler)
@@ -87,6 +91,7 @@ def create_app(
     app.router.add_post("/audio/config", audio_config_post)
     app.router.add_post("/audio/transcribe", audio_transcribe_post)
     app.router.add_post("/audio/speak", audio_speak_post)
+    app.router.add_post("/audio/converse", audio_converse_post)
     return app
 
 
@@ -202,6 +207,32 @@ async def audio_speak_post(request: web.Request) -> web.Response:
     # report its own content type yet (see PROGRESS.md), good enough for
     # this first increment where OpenAI is the only wired-up option.
     return web.Response(body=audio, content_type="audio/mpeg")
+
+
+async def audio_converse_post(request: web.Request) -> web.Response:
+    """One full voice turn: STT -> rover-ai (persona + history, §17.1)
+    -> TTS (voice_panel.VoicePanel). Body is raw audio bytes, same shape
+    as /audio/transcribe. Reply audio comes back base64-encoded inside
+    JSON (alongside the heard/reply text) rather than as a raw binary
+    response -- simpler and safer than smuggling non-ASCII reply text
+    into HTTP headers, and the client needs the text anyway to display
+    the exchange."""
+    voice: VoicePanel = request.app["voice_panel"]
+    audio = await request.read()
+    if not audio:
+        return web.json_response({"error": "empty request body -- expected raw audio bytes"}, status=400)
+    mime_type = request.content_type or "audio/wav"
+
+    try:
+        heard_text, reply_text, reply_audio = await voice.converse(audio, mime_type=mime_type)
+    except VoiceTurnError as exc:
+        return web.json_response({"error": str(exc), "stage": exc.stage}, status=503)
+
+    return web.json_response({
+        "heard_text": heard_text,
+        "reply_text": reply_text,
+        "reply_audio_base64": base64.b64encode(reply_audio).decode("ascii"),
+    })
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
