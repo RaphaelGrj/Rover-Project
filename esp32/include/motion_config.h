@@ -90,6 +90,18 @@ constexpr float ROVER_MAX_ROTATION_RAD_S = 4.0f;
 // convergence near the commanded speed = correct; saturating at the
 // speed cap = wrong sign) any time a motor/encoder connection is
 // disturbed, rather than assuming last session's values still hold.
+// 2026-09-11 (driver board replaced): move_diagnostic.py showed a stable
+// NEGATIVE left_speed while commanded forward, PWM saturated at 255. Tried
+// both single-variable fixes in turn -- swapping ROVER_PIN_MOTOR_L_IN1/IN2,
+// then (reverted) flipping this sign instead -- and got the same negative
+// ~-0.04 result either way. That rules out a simple polarity/encoder-sign
+// swap as the explanation (one of the two should have flipped the sign to
+// positive) and points at the underlying weak/intermittent left-side
+// connection instead: PWM never stops saturating, so the loop likely isn't
+// seeing genuine controlled rotation at all, just noise (chassis vibration
+// from the right wheel, gear backlash). Left at the last confirmed-good
+// value (2026-09-10) rather than an unverified guess -- don't trust it
+// until the left-side wiring is solid enough to get a clean read.
 constexpr float ROVER_TICK_SIGN_LEFT = 1.0f;
 constexpr float ROVER_TICK_SIGN_RIGHT = -1.0f;
 

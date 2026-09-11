@@ -374,7 +374,7 @@ void loop() {
         unsigned long now = millis();
         if (now - lastTelemetryMs >= ROVER_DRIVE_TELEMETRY_PERIOD_MS) {
             lastTelemetryMs = now;
-            char fields[64];
+            char fields[96];
             drive.buildTelemetryFields(fields, sizeof(fields));
             protocol.send("STATE", fields);
         }

@@ -49,11 +49,12 @@ void DriveController::stop() {
 
 void DriveController::updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
                                    float targetMps, float dtSeconds, float& measuredOut,
-                                   float tickSign) {
+                                   float tickSign, int16_t& pwmOut) {
     long ticks = encoder.readAndResetTicks();
     measuredOut = ticksToMps(ticks, dtSeconds) * tickSign;
     int16_t pwm = pid.update(targetMps, measuredOut, dtSeconds);
     motor.setSpeed(pwm);
+    pwmOut = pwm;
 }
 
 void DriveController::update() {
@@ -78,11 +79,13 @@ void DriveController::update() {
     // a reconnect during that session's bring-up made the right wheel
     // alone runaway-spin, so its sign needed to move independently of the
     // left one -- see motion_config.h's ROVER_TICK_SIGN_* comment.
-    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps, ROVER_TICK_SIGN_LEFT);
-    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps, ROVER_TICK_SIGN_RIGHT);
+    updateWheel(_motorL, _encL, _pidL, targetLeft, dtSeconds, _measuredLeftMps,
+                ROVER_TICK_SIGN_LEFT, _lastPwmLeft);
+    updateWheel(_motorR, _encR, _pidR, targetRight, dtSeconds, _measuredRightMps,
+                ROVER_TICK_SIGN_RIGHT, _lastPwmRight);
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
-    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f",
-             _measuredLeftMps, _measuredRightMps);
+    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d",
+             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight);
 }

@@ -56,7 +56,8 @@ public:
 
 private:
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
-                      float targetMps, float dtSeconds, float& measuredOut, float tickSign);
+                      float targetMps, float dtSeconds, float& measuredOut,
+                      float tickSign, int16_t& pwmOut);
 
     MotorDriver _motorL, _motorR;
     Encoder _encL, _encR;
@@ -66,6 +67,14 @@ private:
     float _targetRotation = 0.0f;  // rad/s
     float _measuredLeftMps = 0.0f;
     float _measuredRightMps = 0.0f;
+    // Last PWM actually sent to each motor (motion_config.h: +/-255). Kept
+    // around purely for telemetry -- lets a bring-up session see whether
+    // the PID ever reaches full duty on a wheel that isn't moving, which
+    // tells apart "PID too weak to break static friction" from "full duty
+    // applied and the wheel still doesn't turn" (electrical/mechanical
+    // fault beyond what firmware can fix).
+    int16_t _lastPwmLeft = 0;
+    int16_t _lastPwmRight = 0;
 
     unsigned long _lastUpdateMs = 0;
 };

@@ -505,9 +505,141 @@
   minimum ajouté quand la cible n'est pas nulle) plutôt que remonter
   `Ki` (risque de dépassement ailleurs sur la plage).
 
+- **Nouveaux moteurs N20 définitifs reçus, suite : PWM télémétrie,
+  intermittence toujours pas résolue (2026-09-11)** : plusieurs essais
+  identiques (même commande, même firmware) donnant tantôt
+  `left_speed=0.00` tantôt `0.04`/`0.05` sans changement physique
+  rapporté entre les essais --- preuve d'un contact intermittent (le
+  firmware ne peut pas produire cette variance tout seul avec une
+  commande strictement identique), pas un moteur/canal mort. **Correction
+  : aucune soudure n'a été faite** --- l'essai qui a donné `0.05` stable
+  était juste une coïncidence de contact favorable ce lancement-là, pas
+  une réparation. Le résidu peut revenir à `0.00` à tout moment tant que
+  rien n'a été physiquement changé côté câblage gauche. Ajout (permanent,
+  utile au-delà de cette session) d'une télémétrie `left_pwm=`/
+  `right_pwm=` dans `STATE` (`DriveController.{h,cpp}`, buffer `main.cpp`
+  élargi à 96 octets) confirmant que le canal gauche pousse déjà à
+  `255/255` (pleine puissance) dès qu'il produit du mouvement, contre
+  `~220-229/255` côté droit pour une vitesse proche de la cible --- donc
+  même dans son meilleur cas observé, la gauche reste ~3x plus faible que
+  la droite à duty égal ou supérieur. Compile sur `esp32_wroom`/
+  `esp32_s3`, flashé et validé sur matériel réel (COM10). **Toujours pas
+  résolu** : souder les connexions côté gauche (jumpers GPIO↔driver,
+  moteur↔driver, jusque-là sur breadboard) reste à faire pour de vrai.
+  Une fois fait, tester si le résidu de faiblesse (~0.05 vs 0.15 à pleine
+  puissance) persiste malgré un contact fiable --- si oui, tester le
+  moteur gauche seul, débranché de la roue, à vide sous 6V, pour
+  distinguer moteur intrinsèquement faible/défectueux d'un frottement
+  mécanique côté accouplement roue/axe.
+- **Nouveaux moteurs N20 définitifs reçus, premier test (2026-09-11)** :
+  ESP32 branché en direct sur COM10 (comme le 2026-09-10), test
+  `move_diagnostic.py --move --velocity 0.15 --duration 12` roues en
+  l'air. **Roue droite saine** : `right_speed` converge normalement
+  (~0.14-0.17), `raw_ticks_right=-2726` sur 5s. **Roue gauche muette** :
+  `left_speed` reste à `0.00` tout du long malgré le PID qui pousse à
+  fond. Écarté un encodeur totalement mort par un test `raw_ticks`
+  dédié : `raw_ticks_left=117` sur les mêmes 5s (donc pas zéro) mais
+  ~23x moins que la droite. Observation physique utilisateur pendant le
+  test : moteur gauche **immobile et silencieux** (pas de bruit de
+  blocage/effort) --- les 117 ticks résiduels sont donc probablement du
+  bruit électrique/vibration parasite plutôt qu'un vrai mouvement, pas
+  contradictoire avec un moteur qui ne reçoit aucun courant utile.
+  **Diagnostic retenu : mauvais contact électrique côté moteur gauche
+  (canal A DRV8833, `ROVER_PIN_MOTOR_L_IN1`=GPIO27/`IN2`=GPIO26)**, pas
+  un bug logiciel --- le firmware n'a pas changé, seuls les moteurs ont
+  été remplacés, et ce pattern (une roue muette, l'autre saine) est déjà
+  celui vu le 2026-09-10 (moteur droit muet ce jour-là, résolu par un
+  simple rebranchement) --- cohérent avec les connexions moteur/driver
+  toujours pas soudées (voir "Prochaines étapes" point 2, non fait).
+  **Pas encore vérifié physiquement** (continuité des fils du nouveau
+  moteur gauche jusqu'au canal A, ou test du moteur isolé hors driver) ---
+  prochaine étape avant de relancer un test de convergence complet.
+  **Retesté deux fois de plus (même session, sans intervention physique
+  entre les essais)** : symptôme identique à chaque fois, avec une
+  nuance --- `left_speed` produit un très bref sursaut (0.01-0.04) au
+  tout début de la commande `MOVE` avant de retomber à `0.00` et d'y
+  rester pour le reste du test (12s). Cohérent avec un **contact
+  intermittent** plutôt qu'un circuit totalement coupé (un peu de
+  courant passe à la montée du PWM puis le contact se perd) --- pas
+  contradictoire avec le diagnostic "mauvais contact électrique"
+  ci-dessus, précise juste la nature (intermittent, pas franc).
+  Test décisif toujours en attente : échanger les fils moteur gauche/
+  droite sur le driver pour savoir si le défaut suit le moteur ou reste
+  sur le canal A --- pas encore fait à ce stade.
+  **Rebond (même session) : alimentation moteurs mesurée à 6V en sortie
+  côté gauche, confirmée présente par l'utilisateur.** Écarte
+  l'hypothèse "aucun courant n'arrive" (fil coupé) retenue plus haut ---
+  symptôme identique reconfirmé une 5e fois avec la tension présente
+  (`left_speed` sursaute à 0.01-0.02 puis retombe à `0.00` et y reste,
+  `right_speed` toujours sain à ~0.16-0.17). **Nouvelles hypothèses
+  principales** : (a) moteur gauche mécaniquement grippé/bloqué
+  (réducteur), le sursaut correspondant au tout petit mouvement avant
+  blocage --- à vérifier en tournant la roue à la main hors tension ; (b)
+  protection de surcourant du DRV8833 qui verrouille le canal A dès le
+  premier pic de courant au démarrage moteur, cohérent avec un plateau
+  identique à chaque essai (chaque test relance l'ESP32 par reset série,
+  donc redonne "une seule chance" avant verrouillage). **Test décisif
+  toujours en attente** : échange physique des deux moteurs entre les
+  canaux du driver, jamais réellement effectué jusqu'ici (seuls des
+  rebranchements au même endroit ont été tentés).
+- **Suite (même session) : nouveau driver DRV8833 installé, panne totale
+  puis résidu inversé (2026-09-11)** : après remplacement du driver
+  (l'utilisateur affirme qu'aucune soudure n'avait encore été faite au
+  moment du point précédent), premier retest --- **plus aucune roue ne
+  bouge**, `left_speed`/`right_speed` à `0.00` et `left_pwm`/`right_pwm`
+  saturés à `255/255` des deux côtés. Diagnostiqué via `WIRING.md` ligne
+  49 (point bloquant déjà documenté depuis 2026-09-01 sur ce type de
+  breakout DRV8833) : SLEEP non câblé au 3V3 désactive le driver en
+  permanence, 0A quoi qu'envoient IN1-4. **Confirmé par l'utilisateur :
+  SLEEP bien sur le 3V3**, donc pas la cause ici. Point suivant vérifié
+  (VM moteur + masse commune ESP32↔nouveau driver) --- après vérification,
+  **les deux roues bougent de nouveau**, mais `left_speed` ressort
+  **négatif et stable** (~-0.04 à -0.10) alors que la cible est positive
+  (+0.15) et que `left_pwm` reste saturé à `255` sans jamais converger ---
+  signature d'un problème de sens (moteur ou encodeur), pas d'absence de
+  courant. **Deux tests à une seule variable tentés à tour de rôle**
+  (jamais les deux en même temps, cf. leçon 2026-09-10 ci-dessus) :
+  1. Échange `ROVER_PIN_MOTOR_L_IN1`/`IN2` (26↔27, compile+flash sur
+     matériel réel COM10) --- signe resté négatif, écarte une inversion
+     de polarité moteur comme seule explication.
+  2. Reverti, puis `ROVER_TICK_SIGN_LEFT` passé à `-1.0f` seul (compile+
+     flash) --- signe resté négatif également, résultat quasi identique
+     au test précédent (`-0.04` dans les deux cas). Écarte aussi un
+     simple problème de signe d'encodeur isolé.
+  **Aucun des deux ne corrige le signe** --- conclusion retenue : le
+  résidu négatif n'est probablement pas un vrai problème de convention de
+  signe mais plutôt du bruit mécanique (vibration du châssis pendant que
+  la droite tourne fort, jeu de réducteur) lu comme un mouvement, cohérent
+  avec le fait que `left_pwm` ne cesse jamais de saturer (la boucle ne
+  voit jamais de convergence réelle). **Firmware remis à l'état d'origine**
+  (`ROVER_PIN_MOTOR_L_IN1=27`/`IN2=26`, `ROVER_TICK_SIGN_LEFT=1.0f`,
+  aucune des deux valeurs n'étant confirmée meilleure), recompilé et
+  reflashé sur COM10 avant la fin de session. **Session arrêtée ici** ---
+  le test qui reste le plus informant, jamais fait malgré plusieurs
+  relances : moteur gauche débranché de la roue, testé seul à vide sous
+  6V, pour savoir si le moteur lui-même est capable de tourner
+  normalement une fois isolé de tout ce bruit/confusion de signe.
+
 ## Prochaines étapes
 
-**PRIORITÉ ABSOLUE pour la prochaine session** : la désynchronisation
+**PRIORITÉ ABSOLUE pour la prochaine session** : moteur gauche toujours
+problématique avec les nouveaux moteurs + nouveau driver (2026-09-11, voir
+"État actuel" ci-dessus) --- saga de la session : muet, puis intermittent,
+puis (après remplacement du driver) totalement mort (SLEEP/VM/masse
+vérifiés OK), puis de nouveau mobile mais avec un `left_speed` négatif et
+un PWM qui sature en permanence sans jamais converger. Deux tentatives de
+correction de signe (IN1/IN2 puis tick sign, une seule variable à la fois)
+n'ont rien changé --- le firmware a été remis à son état d'origine, aucune
+des deux hypothèses de signe n'étant confirmée. **Premier test à faire,
+jamais réalisé malgré plusieurs relances** : moteur gauche débranché de la
+roue, testé seul à vide sous 6V --- tourne-t-il librement et vite comme le
+droit ? Coupe court à toute la confusion de signe/bruit en isolant le
+moteur de l'encodeur et du reste du bruit mécanique. Une fois ça clarifié,
+vérifier la continuité électrique jusqu'au canal A du nouveau driver, puis
+relancer `move_diagnostic.py --move --velocity 0.15` pour reconfirmer la
+convergence des deux côtés avant de reprendre le reste ci-dessous.
+
+**Point suivant, déjà en attente depuis le 2026-09-10** : la désynchronisation
 dangereuse (emballement/sens inversé) trouvée le 2026-09-10 est
 **résolue et validée sur matériel réel** (voir "État actuel" ci-dessus)
 --- mais il reste un résidu de réglage fin, volontairement pas traité ce
@@ -588,6 +720,31 @@ soir-là :
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-09-11** --- Session bring-up des moteurs N20 définitifs, non
+  résolue. Résumé : muet (contact intermittent, jamais soudé malgré une
+  fausse annonce en cours de session) → nouveau driver DRV8833 installé →
+  panne totale (SLEEP/VM/masse vérifiés OK, cause non identifiée) → de
+  nouveau mobile mais `left_speed` négatif avec PWM saturé en permanence.
+  Deux corrections de signe testées séparément (IN1/IN2, puis tick sign)
+  sans effet sur le résultat --- probablement du bruit mécanique plutôt
+  qu'un vrai problème de signe, vu que le PWM ne converge jamais. Firmware
+  remis à l'état d'origine. Ajout permanent utile : télémétrie
+  `left_pwm=`/`right_pwm=` dans `STATE` (`DriveController`, `main.cpp`) ---
+  a permis de prouver que le firmware pousse bien à pleine puissance sans
+  bug logiciel, isolant le problème côté matériel. Session arrêtée avant
+  le test le plus informant (moteur gauche seul, à vide, hors roue) ---
+  voir "Prochaines étapes".
+- **2026-09-11 (premier test, détail)** --- Nouveaux moteurs N20 définitifs reçus, premier test
+  (`move_diagnostic.py --move`, ESP32 en direct sur COM10, roues en
+  l'air) : roue droite saine (convergence PID normale), **roue gauche
+  muette** (immobile et silencieuse à l'observation, PID poussant à
+  fond sans effet) --- écarté un encodeur mort via `raw_ticks` (117
+  ticks non-nuls mais ~23x moins que la droite, probablement du bruit
+  parasite). Diagnostic retenu : mauvais contact électrique côté moteur
+  gauche plutôt qu'un bug logiciel (firmware inchangé, même pattern
+  qu'un incident similaire déjà vu le 2026-09-10 sur l'autre roue,
+  résolu par rebranchement). Vérification physique du câblage à faire
+  en priorité la prochaine session.
 - **2026-09-10** --- Roues définitives montées sur ROVER, diamètre mesuré
   (31.83mm), `ROVER_WHEEL_DIAMETER_M` mis à jour et flashé sur matériel
   réel (COM10). Premier test au joystick robot surélevé : faux problème
