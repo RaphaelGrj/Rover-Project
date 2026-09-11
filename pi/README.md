@@ -233,6 +233,30 @@ vendeur via `/ai/config` réinitialise aussi l'historique automatiquement
   actif à partir de ces identifiants -- le futur appelant (`RoverCore`)
   n'a jamais besoin d'importer une classe de fournisseur en particulier.
 
+## Réalité augmentée (casque Meta Quest 3 / WebXR)
+
+**Page à `http://<pi>:8080/ar?token=...`** (lien "RA" en haut à droite de
+la page de pilotage), voir `ARCHITECTURE_AND_ROADMAP.md` §13.1 pour
+l'architecture complète. Ouvre directement dans le navigateur du casque
+(Meta Quest Browser ou tout autre navigateur compatible WebXR) --- pas
+d'app à installer, pas de compte développeur Meta.
+
+**Premier incrément seulement** : un HUD de télémétrie (distance, IMU,
+environnement, batterie, état comportemental --- même flux `/ws` que la
+page de pilotage) superposé au passthrough caméra via la feature WebXR
+`dom-overlay`. Pas encore de carte 3D --- ça dépend de la Phase 9
+(Cartographie/Localisation), qui n'a pas commencé.
+
+Dégrade proprement sur un appareil sans WebXR AR (`immersive-ar` non
+supporté --- la plupart des navigateurs desktop et téléphones) : la même
+page retombe sur un affichage 2D classique, aucune fonctionnalité perdue
+à part la superposition en RA elle-même.
+
+**Jamais testé sur un vrai casque** (pas de Meta Quest 3 disponible
+cette session) --- écrit au plus près de la spec WebXR Device API +
+module `dom-overlay`, uniquement exercé ici via le chemin de repli 2D
+(qui partage le même code de rendu du HUD que le mode RA).
+
 ## Structure
 
 - `rover_esp32/` : couche protocole pure (`protocol.py`, encode/decode

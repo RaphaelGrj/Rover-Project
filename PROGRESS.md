@@ -12,6 +12,33 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **HUD en réalité augmentée (Meta Quest 3 / WebXR) --- premier
+  incrément écrit (2026-09-11)**, suite à une idée de l'utilisateur
+  (coupler Rover à son casque Meta Quest 3, argument fort pour l'aspect
+  open source du projet). Conçu d'abord (`ARCHITECTURE_AND_ROADMAP.md`
+  §13.1, nouvelle section) : WebXR plutôt qu'une app Quest native
+  (zéro installation, zéro compte développeur Meta, réutilise le
+  serveur/token/`/ws` déjà en place), deux incréments séparés
+  volontairement --- HUD télémétrie tout de suite (aucune nouvelle
+  donnée requise), superposition de carte plus tard (dépend de la
+  Phase 9, Cartographie/Localisation, pas commencée : rien à afficher
+  pour l'instant).
+  **Code écrit** : nouvelle page `pi/rover_control/static/ar-hud.html`
+  (session WebXR `immersive-ar` + feature `dom-overlay`, superpose le
+  panneau de télémétrie existant --- distance/IMU/environnement/
+  batterie/état --- sur le passthrough caméra ; fallback 2D propre si
+  `immersive-ar` n'est pas supporté), route `GET /ar`
+  (`rover_control/server.py`, protégée par le même token que le reste),
+  lien "RA" ajouté à côté de "IA" sur `index.html`.
+  **Testé** : syntaxe JS vérifiée (`node --check`), route `/ar` testée
+  en isolation (200 avec token valide, 403 sans --- même middleware
+  d'auth que le reste), 93/93 tests `pi/` toujours au vert (aucun test
+  dédié à cette page, même convention que `index.html`/`ai.html` : "la
+  logique métier est testée, la page web brute ne l'est pas"). **Jamais
+  testé sur un vrai casque** (pas de Meta Quest 3 disponible cette
+  session, écrit au plus près de la spec WebXR) --- seul le chemin de
+  repli 2D (qui partage le même code de rendu du HUD) a pu être vérifié
+  ici. Voir `pi/README.md` "Réalité augmentée" pour l'usage.
 - **Personality Engine --- écrit et testé (2026-09-11)**, session
   100% code (utilisateur sans accès au robot physique). Nouveau
   `pi/rover_ai/personality.py` (`PersonalityEngine`) branché dans

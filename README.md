@@ -25,6 +25,7 @@ Mise en place d’un systeme de mise a jour OTA
   Pilotage Manuel : Prise de contrôle à distance via smartphone ou télécommande (avec retour vidéo direct).
   
   -[À l'étude] Cartographie & Patrouille : Algorithme SLAM pour générer une carte de la maison, avec des rondes de sécurité programmables.-
+  -[À l'étude] Visualisation en réalité augmentée : la carte (et un premier HUD de télémétrie déjà en place) consultable en direct dans un casque compatible WebXR (ex. Meta Quest 3), en superposition sur la vraie pièce -- voir ARCHITECTURE_AND_ROADMAP.md §13.1.-
   
   👁️ Perception & VisionReconnaissance Visuelle : 
   Capacité à identifier son humain (reconnaissance faciale), à détecter des objets, des présences inconnues, ou même des animaux (idéal pour surveiller si votre compagnon fait des bêtises en votre absence).

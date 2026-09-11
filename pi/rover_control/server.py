@@ -38,6 +38,10 @@ async def ai_page(request: web.Request) -> web.FileResponse:
     return web.FileResponse(STATIC_DIR / "ai.html")
 
 
+async def ar_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(STATIC_DIR / "ar-hud.html")
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
     """Applies to every route on this app (see create_app) -- a new
@@ -65,6 +69,7 @@ def create_app(
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/video", video_handler)
     app.router.add_get("/ai", ai_page)
+    app.router.add_get("/ar", ar_page)
     app.router.add_get("/ai/config", ai_config_get)
     app.router.add_post("/ai/config", ai_config_post)
     app.router.add_post("/ai/ask", ai_ask_post)

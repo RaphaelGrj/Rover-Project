@@ -634,6 +634,66 @@ comment faire tourner les moteurs pour y aller
 
 ------------------------------------------------------------------------
 
+## 13.1 Visualisation AR (casque Meta Quest 3 / WebXR)
+
+**Idée de l'utilisateur (2026-09-11)** : coupler Rover à un casque
+AR/VR (Meta Quest 3 en main) pour visualiser la cartographie --- un
+argument fort pour un projet destiné à être partagé en open source
+(peu de robots domestiques grand public exposent leur carte en RA).
+
+### Choix technique : WebXR, pas une app Quest native
+
+Comme le reste de `pi/rover_control` (§27 règle 10, "ne pas ajouter une
+dépendance lourde lorsqu'une solution simple suffit") : une page web
+servie par le Pi, ouverte directement dans le navigateur du Quest 3
+(Meta Quest Browser, WebXR intégré), **pas** une app Unity/Meta SDK
+native. Raisons :
+
+-   **Zéro installation, zéro build** --- ouvrir une URL suffit, cohérent
+    avec `pi/rover_control/static/*.html` (page statique, pas de
+    framework, pas d'étape de build).
+-   **Zéro friction open source** --- n'importe qui avec un casque
+    compatible WebXR (Quest 3, Quest Pro, et au-delà de Meta) peut
+    utiliser ce que ce dépôt contient déjà, sans compte développeur
+    Meta ni passage par le store.
+-   **Réutilise l'infrastructure existante** --- même serveur
+    (`rover_control`), même authentification par token
+    (`rover_control/auth.py`), même flux `/ws` (STATE/EVENT/ERROR)
+    déjà utilisé par la page de pilotage.
+-   WebXR AR (mode `immersive-ar`) exige un contexte sécurisé (HTTPS) :
+    déjà supporté par ce projet (`--tls-cert`/`--tls-key`,
+    `rover_core/main.py`) --- rien à ajouter pour ça.
+
+### Deux incréments, volontairement séparés
+
+1. **HUD télémétrie en RA (buildable dès maintenant)** ---
+   `pi/rover_control/static/ar-hud.html` : superpose le panneau de
+   télémétrie déjà existant (distance/IMU/environnement/batterie/état
+   comportemental, mêmes champs `STATE`/`EVENT`/`ERROR` que
+   `index.html`) sur le passthrough caméra du casque, via la feature
+   WebXR `dom-overlay` (un simple overlay HTML/CSS pendant une session
+   `immersive-ar` --- pas de rendu 3D/WebGL nécessaire pour cette
+   première étape). Ne dépend d'aucune donnée qui n'existe pas encore :
+   c'est le même flux `/ws` que la page de pilotage, juste affiché
+   flottant dans la pièce plutôt que sur un écran de téléphone. Dégrade
+   proprement (§21) sur un appareil sans WebXR AR (desktop, la plupart
+   des téléphones) : la page retombe sur un affichage 2D classique.
+2. **Superposition de la carte (dépend de la Phase 9 : Cartographie/
+   Localisation ci-dessous)** --- une fois qu'une vraie carte
+   (occupancy grid ou nuage de points) et une pose (x, y, cap) existent
+   côté Pi, un rendu 3D (WebGL/Three.js cette fois, `dom-overlay` ne
+   suffit plus) ancre le plan de la maison dans la pièce réelle et
+   affiche la position de Rover en direct. **Conçu, pas encore
+   implémenté** --- il n'existe aujourd'hui aucune donnée de
+   cartographie à afficher (Phase 9 n'a pas commencé). Contrat de
+   données prévu, à respecter quand ce jour arrive : un instantané de
+   la grille (peu changeant, récupéré une fois) + un flux de pose
+   (fréquent, sur le même `/ws` ou un canal dédié) --- même séparation
+   "gros objet rarement mis à jour vs. petit état fréquent" que MQTT
+   (§18) applique déjà à l'état de Rover.
+
+------------------------------------------------------------------------
+
 # 14. Vision
 
 La capture vidéo appartient à l'ESP32-CAM, module déporté indépendant
@@ -1554,6 +1614,12 @@ Puis :
 -   [ ] Cartographie.
 -   [ ] Navigation autonome.
 -   [ ] Patrouilles.
+-   [x] Visualisation AR (casque Meta Quest 3 / WebXR, voir §13.1) ---
+      **premier incrément seulement** : HUD télémétrie temps réel
+      (`pi/rover_control/static/ar-hud.html`) superposé au passthrough
+      caméra. La superposition de la carte réelle attend Localisation/
+      Cartographie ci-dessus --- rien à afficher tant que ces cases ne
+      sont pas cochées.
 
 ROS 2 peut être introduit à ce stade si sa complexité apporte une vraie
 valeur.

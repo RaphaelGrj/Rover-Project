@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Rover AR</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; min-height: 100%; background: #0b0f14; color: #e6edf3;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  /* While an immersive-ar session with dom-overlay is active, the
+     browser composites this page over the camera passthrough -- an
+     opaque background would hide the real room, so it must go
+     transparent, and every panel needs its own dark backdrop instead
+     (see #hud-panel below) to stay readable over whatever is behind it. */
+  body.xr-active { background: transparent; }
+  main { max-width: 480px; margin: 0 auto; padding: 1em 1em 3em; }
+  main.hidden-in-xr { display: none; }
+  body.xr-active main.hidden-in-xr { display: none; }
+  a.back { color: #7d8590; font-size: 0.85em; text-decoration: none; }
+  h1 { font-size: 1.2em; margin: 0.6em 0 0.2em; }
+  p.hint { color: #7d8590; font-size: 0.82em; margin-top: 0; }
+  button {
+    margin-top: 0.6em; width: 100%; padding: 0.6em; border: none; border-radius: 6px;
+    background: #1f6feb; color: white; font-size: 0.95em; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #ar-status { font-size: 0.85em; margin: 0.6em 0; color: #7d8590; }
+  #ar-status.err { color: #f85149; }
+
+  /* --- HUD panel: shown both in the plain 2D fallback and, via
+     dom-overlay, floating over the AR passthrough. Each line gets its
+     own semi-opaque backdrop rather than relying on the page background
+     (which is transparent in AR, see body.xr-active above) so text
+     stays legible over a real, unpredictable background. */
+  #hud-panel {
+    position: fixed; top: 1em; left: 1em; right: 1em;
+    display: flex; flex-direction: column; gap: 0.4em;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.85em; pointer-events: none;
+  }
+  body.xr-active #hud-panel { top: env(safe-area-inset-top, 1em); }
+  .hud-line {
+    background: rgba(11, 15, 20, 0.72); border: 1px solid #30363d;
+    border-radius: 6px; padding: 0.35em 0.6em; color: #e6edf3;
+  }
+  .hud-line:empty { display: none; }
+  .hud-line.obstacle { color: #f85149; border-color: #f85149; }
+  .hud-line.event { color: #d29922; }
+  .hud-line.err { color: #f85149; }
+  .hud-line.disconnected { color: #f85149; }
+</style>
+</head>
+<body>
+<main id="setup-panel">
+  <a class="back" id="back-link" href="/">&larr; Retour au pilotage</a>
+  <h1>Rover en réalité augmentée</h1>
+  <p class="hint">
+    Superpose la télémétrie en direct de Rover (distance, IMU, environnement,
+    batterie, état) sur le passthrough caméra du casque --- même flux que la
+    page de pilotage (ARCHITECTURE_AND_ROADMAP.md §13.1). Premier incrément
+    seulement : pas encore de carte 3D (dépend de la Phase 9, Cartographie/
+    Localisation, pas encore commencée).
+  </p>
+  <button id="enter-ar-btn" disabled>Vérification du support WebXR...</button>
+  <div id="ar-status"></div>
+</main>
+
+<!-- Always present (not just once in AR) so the plain 2D fallback shows
+     the same content when WebXR AR isn't available on this device. -->
+<div id="hud-panel">
+  <div class="hud-line disconnected" id="hud-connection">Connexion...</div>
+  <div class="hud-line" id="hud-state"></div>
+  <div class="hud-line" id="hud-distance"></div>
+  <div class="hud-line" id="hud-imu"></div>
+  <div class="hud-line" id="hud-env"></div>
+  <div class="hud-line event" id="hud-event"></div>
+  <div class="hud-line err" id="hud-error"></div>
+</div>
+
+<script>
+"use strict";
+
+const ACCESS_TOKEN = new URLSearchParams(location.search).get("token") || "";
+document.getElementById("back-link").href = "/?token=" + encodeURIComponent(ACCESS_TOKEN);
+
+// Mirrors ROVER_PROTOCOL.md §9 / rover_control/static/index.html --
+// distance_left/right below this is what makes the ESP32 itself fire
+// EVENT name=obstacle_detected, kept in sync with that threshold rather
+// than inventing a second one here.
+const OBSTACLE_THRESHOLD_MM = 150;
+
+const BEHAVIOR_STATE_LABELS = {
+  IDLE: "idle", INTERACTING: "interaction", MOVING: "mouvement",
+  EXPLORING: "exploration", PATROLLING: "patrouille", FOLLOWING: "suivi",
+  CHARGING: "charge", SLEEPING: "sommeil", ERROR: "erreur",
+};
+
+const hudConnectionEl = document.getElementById("hud-connection");
+const hudStateEl = document.getElementById("hud-state");
+const hudDistanceEl = document.getElementById("hud-distance");
+const hudImuEl = document.getElementById("hud-imu");
+const hudEnvEl = document.getElementById("hud-env");
+const hudEventEl = document.getElementById("hud-event");
+const hudErrorEl = document.getElementById("hud-error");
+
+// --- WebSocket telemetry (same /ws endpoint and STATE-merging idea as
+// rover_control/static/index.html) ------------------------------------
+
+let mergedState = {};
+
+function renderState() {
+  const battery = mergedState.battery !== undefined ? `batterie ${mergedState.battery}%` : "";
+  const state = BEHAVIOR_STATE_LABELS[hudStateEl.dataset.behaviorState] || "";
+  hudStateEl.textContent = [state, battery].filter(Boolean).join(" -- ");
+
+  const left = Number(mergedState.distance_left);
+  const right = Number(mergedState.distance_right);
+  if (Number.isFinite(left) || Number.isFinite(right)) {
+    const closeLeft = left < OBSTACLE_THRESHOLD_MM;
+    const closeRight = right < OBSTACLE_THRESHOLD_MM;
+    hudDistanceEl.textContent = `distance G=${left || "?"}mm  D=${right || "?"}mm`;
+    hudDistanceEl.classList.toggle("obstacle", closeLeft || closeRight);
+  }
+
+  if (mergedState.accel_z !== undefined) {
+    hudImuEl.textContent =
+      `accel x=${mergedState.accel_x} y=${mergedState.accel_y} z=${mergedState.accel_z}`;
+  }
+
+  if (mergedState.temperature !== undefined) {
+    hudEnvEl.textContent =
+      `${mergedState.temperature}°C  ${mergedState.humidity}%HR  ${mergedState.pressure}hPa`;
+  }
+}
+
+function handleEsp32Message(data) {
+  if (data.type === "STATE") {
+    Object.assign(mergedState, data);
+    delete mergedState.type;
+    renderState();
+  } else if (data.type === "EVENT") {
+    hudEventEl.textContent = "EVENT " + (data.name || "");
+  } else if (data.type === "ERROR") {
+    hudErrorEl.textContent = "ERROR " + (data.message || data.code || "");
+  } else if (data.type === "ROVER_STATE") {
+    hudStateEl.dataset.behaviorState = data.state;
+    renderState();
+  }
+}
+
+let ws = null;
+let reconnectTimer = null;
+
+function connectWebSocket() {
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+    "/ws?token=" + encodeURIComponent(ACCESS_TOKEN);
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    hudConnectionEl.textContent = "";
+    hudConnectionEl.classList.remove("disconnected");
+  };
+  ws.onclose = ws.onerror = () => {
+    hudConnectionEl.textContent = "Rover déconnecté";
+    hudConnectionEl.classList.add("disconnected");
+    if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; connectWebSocket(); }, 1000);
+  };
+  ws.onmessage = (evt) => {
+    let data;
+    try { data = JSON.parse(evt.data); } catch { return; }
+    if (data && typeof data.type === "string") handleEsp32Message(data);
+  };
+}
+connectWebSocket();
+
+// --- WebXR (immersive-ar + dom-overlay) --------------------------------
+//
+// Deliberately dom-overlay only, no 3D scene of our own for this first
+// increment (§13.1): the overlay is plain HTML/CSS (#hud-panel above),
+// same content as the 2D fallback, just composited over the headset's
+// camera passthrough instead of a page background. A WebXR session still
+// requires a bound WebGL layer and an active render loop even when the
+// only thing drawn is "nothing" (a transparent clear) -- passthrough
+// otherwise does not render correctly on Quest's browser.
+//
+// NEVER VALIDATED ON REAL HARDWARE (no Quest 3 available this session)
+// -- see PROGRESS.md. Written to spec (WebXR Device API + the
+// dom-overlay module), exercised here only via the non-AR 2D fallback
+// path, which IS the same code that renders #hud-panel's content.
+
+const enterArBtn = document.getElementById("enter-ar-btn");
+const arStatusEl = document.getElementById("ar-status");
+const setupPanelEl = document.getElementById("setup-panel");
+
+let xrSession = null;
+let glCanvas = null;
+let gl = null;
+
+function showArStatus(text, isError) {
+  arStatusEl.textContent = text;
+  arStatusEl.classList.toggle("err", Boolean(isError));
+}
+
+async function checkArSupport() {
+  if (!("xr" in navigator)) {
+    enterArBtn.textContent = "RA non disponible sur ce navigateur";
+    showArStatus("Affichage 2D uniquement -- WebXR n'est pas exposé par ce navigateur.", false);
+    return;
+  }
+  try {
+    const supported = await navigator.xr.isSessionSupported("immersive-ar");
+    if (!supported) {
+      enterArBtn.textContent = "RA non disponible sur cet appareil";
+      showArStatus("Affichage 2D uniquement -- ce navigateur ne supporte pas le passthrough AR (immersive-ar).", false);
+      return;
+    }
+    enterArBtn.textContent = "Entrer en RA";
+    enterArBtn.disabled = false;
+  } catch (err) {
+    enterArBtn.textContent = "RA non disponible";
+    showArStatus("Vérification WebXR échouée: " + err, true);
+  }
+}
+checkArSupport();
+
+async function onXrFrame(time, frame) {
+  if (!xrSession) return;
+  const layer = xrSession.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  // Transparent clear: draws nothing of our own, so only the compositor
+  // (camera passthrough behind, #hud-panel's dom-overlay in front) shows.
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  xrSession.requestAnimationFrame(onXrFrame);
+}
+
+function onSessionEnd() {
+  xrSession = null;
+  document.body.classList.remove("xr-active");
+  setupPanelEl.classList.remove("hidden-in-xr");
+  enterArBtn.textContent = "Entrer en RA";
+  enterArBtn.disabled = false;
+}
+
+async function enterAr() {
+  enterArBtn.disabled = true;
+  try {
+    const session = await navigator.xr.requestSession("immersive-ar", {
+      optionalFeatures: ["dom-overlay"],
+      domOverlay: { root: document.getElementById("hud-panel") },
+    });
+    xrSession = session;
+
+    glCanvas = document.createElement("canvas");
+    gl = glCanvas.getContext("webgl", { xrCompatible: true });
+    if (gl.makeXRCompatible) await gl.makeXRCompatible();
+    session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+
+    session.addEventListener("end", onSessionEnd);
+    document.body.classList.add("xr-active");
+    setupPanelEl.classList.add("hidden-in-xr");
+    session.requestAnimationFrame(onXrFrame);
+  } catch (err) {
+    showArStatus("Impossible de démarrer la session RA: " + err, true);
+    enterArBtn.disabled = false;
+  }
+}
+
+enterArBtn.addEventListener("click", () => {
+  if (xrSession) { xrSession.end(); } else { enterAr(); }
+});
+</script>
+</body>
+</html>
