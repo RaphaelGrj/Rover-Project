@@ -40,15 +40,16 @@
 
 | Fonction                        | Pin ESP32 | Remarque |
 |----------------------------------|-----------|----------|
-| UART2 RX (← Pi TX)               | GPIO16    | Lien Rover Protocol, cf. `ROVER_PROTOCOL.md` §2 |
-| UART2 TX (→ Pi RX)               | GPIO17    | |
+| Ampli I2S (MAX98357A) BCLK        | GPIO16    | ⚠ Pin réaffectée le 2026-09-13 --- prévue à l'origine pour une UART2 vers le Pi (`ROVER_PROTOCOL.md` §2), jamais utilisée en pratique : le lien réel Pi↔ESP32 est le câble USB (`/dev/ttyUSB0`, UART0/GPIO1-3), confirmé lors du bring-up matériel. Récupérée pour l'ampli faute de GPIO libre restant |
+| Ampli I2S (MAX98357A) LRC (WS)    | GPIO17    | idem, voir remarque ci-dessus |
+| Ampli I2S (MAX98357A) DIN         | GPIO14    | ⚠ Pin réaffectée le 2026-09-13, récupérée sur le monitoring batterie (jamais câblé, désactivé par défaut --- voir note GPIO14 obsolète ci-dessous et `power_config.h`) |
 | Moteur gauche IN1 (avant)         | GPIO27    | DRV8833, PWM direct (pas de pin PWM séparée comme sur un TB6612FNG) |
 | Moteur gauche IN2 (arrière)       | GPIO26    | DRV8833, idem |
 | Moteur droit IN1 (avant)          | GPIO33    | DRV8833 |
 | Moteur droit IN2 (arrière)        | GPIO32    | DRV8833 |
 | DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard. ⚠ **Confirmé bloquant en test matériel (2026-09-01)** : sur le breakout utilisé (pins `SLEEP`/`FAULT`/`OUT1-4`/`IN1-4`/`VCC`/`GND`), `SLEEP` non câblé ne flotte pas vers un état actif par défaut --- le driver reste désactivé en permanence (0 A consommé, aucun moteur ne répond, quoi qu'envoient IN1-4) tant que cette broche n'est pas explicitement reliée au 3V3 |
 | Bouton E-stop                     | GPIO25    | `INPUT_PULLUP` (voir `esp32/lib/safety/EStop.h`) --- bouton entre cette broche et GND, pressé = LOW. **Non câblé pour l'instant** : la broche flotte HIGH (relâché) grâce au pull-up interne, le firmware fonctionne à l'identique avec ou sans bouton physique |
-| Diviseur de tension batterie (ADC) | GPIO14   | ⚠ Désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`) tant que le diviseur n'est pas câblé/calibré. GPIO14 est en ADC2, illisible pendant que le WiFi est actif (OTA) --- à reconsidérer si les deux fonctions sont utilisées en même temps |
+| Diviseur de tension batterie (ADC) | **libre / à réassigner** | ⚠ GPIO14 (utilisé jusqu'ici comme placeholder) a été réaffecté à l'ampli I2S le 2026-09-13 (voir tableau ci-dessus) --- monitoring toujours désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`), aucun diviseur câblé à ce jour. Si ce monitoring est remis en service plus tard, il faudra choisir un GPIO ADC1 libre (les ADC2 comme GPIO14 sont illisibles pendant le WiFi/OTA) --- aucun GPIO n'est actuellement libre sur le WROOM, il faudra en libérer un |
 | Buzzer (bip sonore)                | GPIO12    | ⚠ Strapping, voir "Pins évitées volontairement" ci-dessus --- `esp32/lib/sound/Buzzer.h`. Buzzer passif ou actif, les deux fonctionnent avec `tone()`/`noTone()` pour un simple signal on/off rythmé |
 | Encodeur gauche A                 | GPIO34    | entrée seule, pas de pull interne --- ⚠ pull-up externe **requise** (voir note ci-dessous) |
 | Encodeur gauche B                 | GPIO35    | entrée seule, idem |

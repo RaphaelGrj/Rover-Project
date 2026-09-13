@@ -13,14 +13,15 @@
 // constants below are measured/calibrated against it.
 constexpr bool ROVER_BATTERY_MONITORING_ENABLED = false;
 
-// GPIO14 (freed up alongside GPIO25, see motion_config.h's note on the
-// TB6612FNG->DRV8833 switch) -- it's an ADC2 pin, which the ESP32
-// cannot read while WiFi is active. That's a real conflict with OTA
-// (esp32/lib/ota, WiFi-based): if both battery monitoring and OTA end
-// up wanted at the same time, this needs to move to a free ADC1 pin
-// instead (GPIO32-39 are all already spoken for by motors/encoders
-// today, so that would mean freeing one up first).
-constexpr int ROVER_PIN_BATTERY_ADC = 14;
+// GPIO14 was the placeholder pin here, but it was reassigned to the I2S
+// audio amplifier's DIN line on 2026-09-13 (see sound_config.h,
+// WIRING.md) -- no divider was ever actually wired to it, so nothing
+// physical changes. Battery monitoring stays disabled below; if it's
+// ever revived, this needs a free ADC1 pin (ADC2 pins like GPIO14 can't
+// be read while WiFi is active, which conflicts with OTA anyway). No
+// GPIO is currently free on the WROOM -- one would need to be reclaimed
+// first, same situation the ampli was just in.
+constexpr int ROVER_PIN_BATTERY_ADC = -1;  // unassigned
 
 // TODO(hardware): measure against the real divider once it exists --
 // these are placeholders, not derived from any actual resistor values.

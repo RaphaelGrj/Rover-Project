@@ -10,3 +10,13 @@
 // matter in practice -- watch the boot log after wiring this for real,
 // this pin is the first suspect if boot ever looks wrong.
 constexpr int ROVER_PIN_BUZZER = 12;
+
+// I2S audio amplifier (MAX98357A). Pins confirmed with the user on
+// 2026-09-13 -- see WIRING.md for why GPIO16/17 (originally reserved
+// for a UART2 link to the Pi, never actually used since the real link
+// is USB) and GPIO14 (previously the unwired battery ADC placeholder,
+// see power_config.h) were the only GPIOs left to reclaim on the WROOM.
+// Driver/playback code not written yet -- pins only, for wiring.
+constexpr int ROVER_PIN_I2S_BCLK = 16;
+constexpr int ROVER_PIN_I2S_LRC = 17;
+constexpr int ROVER_PIN_I2S_DIN = 14;
