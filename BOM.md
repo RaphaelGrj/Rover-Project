@@ -71,6 +71,17 @@
 
 ## Alimentation
 
+> ⚠ **Révision du 2026-09-15 --- Raspberry Pi déporté.** Le Pi n'est plus
+> embarqué (`ARCHITECTURE_AND_ROADMAP.md` §6.2), ce qui change ce budget :
+> le pic passe de ~32W à **~24.5W** (~3.3A côté pack au lieu de ~4.3A).
+> Le gain réel est supérieur à ces 23 % --- le pic correspond aux moteurs
+> à fond, alors qu'au repos le Pi était le premier consommateur.
+> Conséquences sur la liste ci-dessous : le **buck 5V/3A dédié au Pi
+> n'est plus nécessaire** (ligne marquée ❌ ci-dessous), et le risque de
+> brownout/corruption de carte SD qui avait imposé de séparer les rails
+> disparaît (plus de Pi ni de carte SD à bord). Le pack et le BMS restent
+> dimensionnés à l'identique : la marge s'en trouve simplement élargie.
+>
 > Solution retenue (2026-09-02) : **pack 2S1P 18650 (7.4V nominal) avec
 > module BMS/charge USB-C tout-en-un**, alimente moteurs/Pi/ESP32/
 > servos/capteurs sur une seule batterie, recharge directe en USB-C.
@@ -95,7 +106,7 @@
 | Module BMS + charge USB-C 2S (protection + boost interne 5V→8.4V) | 1 | 🛒 | Protection (surcharge/décharge/surintensité/court-circuit) + recharge directe en USB-C | Ex. "2S 5A/8A 8.4V BMS USB-C", voir sources ci-dessous pour des références précises. ~5-8€ |
 | Support 2×18650 avec fils | 1 | 🛒 | Interface mécanique cellules ↔ BMS, évite la soudure directe sur les bornes des cellules | ~2-3€ |
 | Fusible réarmable (PTC) 6-8A | 1 | 🛒 | Protection en ligne indépendante du BMS, dernier rempart si l'électronique de protection tombe en panne | En série sur le + du pack. ~1-2€ |
-| Convertisseur buck 5V/3A dédié Pi | 1 | 🛒 | Rail 5V isolé/propre pour le Raspberry Pi (voir note ci-dessus) | Type MP1584/XL4015 réglable. ~3-5€ |
+| ~~Convertisseur buck 5V/3A dédié Pi~~ | ~~1~~ | ❌ **Abandonné (2026-09-15)** | ~~Rail 5V isolé/propre pour le Raspberry Pi~~ | Plus nécessaire : le Pi est déporté sur le réseau et n'est plus alimenté par la batterie du robot (voir note ci-dessus). Ne pas acheter |
 | Convertisseur buck 5V/3A servos + ESP32 | 1 | 🛒 | Rail 5V partagé pour le reste de l'électronique | Séparé du rail Pi. ~3-5€ |
 | Gaine/sac ignifuge pour les cellules | 1 | 🛒 | Confinement en cas de défaillance cellule, protection mécanique contre les chocs | "LiPo safe bag" ou support imprimé en matière ignifuge. ~5-10€ |
 | Câblage silicone 18-20AWG + connecteurs XT30 (détrompés) | --- | 🛒 | Câblage du rail batterie, polarité impossible à inverser | ~5€ |
@@ -129,7 +140,14 @@ Sources consultées pour les modules BMS/charge USB-C 2S :
 Ne pas commander maintenant --- listé pour mémoire, phases pas encore
 commencées :
 
-- Micro/haut-parleur (Phase 7, audio) --- non décidé.
+- **Micro I2S (Phase 7, audio) --- débloqué le 2026-09-15**, plus « non
+  décidé » : il restait sans broche disponible sur le WROOM jusqu'à ce
+  que le déport du Pi libère `GPIO3`. Modèle visé : **INMP441** (I2S,
+  partage l'horloge de l'ampli MAX98357A, ~3-5€). À câbler avec un
+  cavalier --- voir `AIDE_CABLAGE.md` et `esp32/WIRING.md`. Prévoir aussi
+  **un cavalier/header 2 broches** pour cette piste.
+- Haut-parleur (Phase 7) --- petit HP 4Ω/3W pour l'ampli MAX98357A déjà
+  câblé.
 - Tout composant Home Assistant/domotique (Phase 10).
 
 ------------------------------------------------------------------------

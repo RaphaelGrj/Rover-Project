@@ -8,6 +8,14 @@ connected, RoverCore simply stops sending HEARTBEAT and lets that
 hardware-level timeout do its job, rather than re-implementing a
 second, Pi-side "should I stop the motors" decision that could disagree
 with the ESP32's.
+
+That reasoning survived the Pi being deported over WiFi
+(ARCHITECTURE_AND_ROADMAP.md §6.2) unchanged, and is in fact what makes
+the deported design safe: a lost link looks exactly like a Pi that
+stopped heartbeating, which the firmware already handles. RoverLink
+drops frames silently while the link is down (rover_esp32/link.py)
+precisely so this stays true -- nothing here needs to know whether the
+robot is currently reachable.
 """
 from __future__ import annotations
 

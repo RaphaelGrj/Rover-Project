@@ -21,12 +21,27 @@ une modification silencieuse de la V1.
 
 ## 2. Couche physique
 
-- Liaison : UART série (voir §6 de l'architecture).
-- Vitesse : `115200` bauds, 8N1.
-- Le port UART exact (matériel utilisé) dépend de la carte cible et
-  sera défini en Phase 1/2 selon le câblage réel ; l'implémentation du
-  protocole ne doit dépendre d'aucun port UART particulier (voir
-  `RoverProtocol`, conçu autour d'un `Stream` générique).
+- Liaison : **socket TCP sur le WiFi** depuis le 2026-09-15 (Pi
+  déporté, voir §6.2 de l'architecture). Transport historique : UART
+  série sur câble USB (`/dev/ttyUSB0`).
+- Vitesse : `115200` bauds, 8N1 --- pertinent uniquement pour le
+  transport UART.
+- **Le format des trames est identique quel que soit le transport.**
+  Aucun message, aucun checksum, aucune séquence de démarrage ne change
+  entre USB et WiFi : c'est un changement de couche physique, pas de
+  protocole. Le protocole V1 n'est donc pas versionné à nouveau
+  (voir §29 de l'architecture).
+- Cette portabilité n'est pas un heureux hasard, elle était déjà
+  garantie aux deux extrémités :
+  - côté ESP32, `RoverProtocol` est conçu autour d'un `Stream`
+    générique --- un `WiFiClient` *est* un `Stream`, au même titre qu'un
+    `HardwareSerial` ;
+  - côté Pi, `pi/rover_esp32/link.py` utilise
+    `serial.serial_for_url()`, qui accepte indifféremment
+    `/dev/ttyUSB0`, `socket://host:port` ou `rfc2217://...` (ce dernier
+    servant déjà à piloter une simulation Wokwi).
+- L'implémentation ne doit dépendre d'aucun port ni d'aucun transport
+  particulier.
 
 ------------------------------------------------------------------------
 
@@ -121,9 +136,19 @@ HEARTBEAT *00\n
 
 - Envoyé périodiquement par le Pi, recommandé toutes les **150 ms**
   (soit environ 3 fois par fenêtre de timeout).
-- Timeout de sécurité : **500 ms** sans message valide reçu (voir §9
-  de l'architecture) → l'ESP32 déclenche `STOP MOTORS` puis passe en
-  état `SAFE`.
+- Timeout de sécurité, **révisé le 2026-09-15** pour le transport WiFi
+  (Pi déporté) --- trois paliers au lieu d'un seuil unique, voir §9 de
+  l'architecture pour le raisonnement complet :
+
+  | Sans message valide depuis | État | Effet |
+  |---|---|---|
+  | < 500 ms | `NOMINAL` | --- |
+  | 500 ms | `DEGRADED` | vitesse plafonnée (~30 %), `EVENT name=link_degraded` |
+  | ~1500 ms | `TIMEOUT` | `STOP MOTORS` → état `SAFE` |
+
+  ⚠ Ces valeurs sont un point de départ raisonné, **pas un résultat
+  mesuré** : à confirmer par une mesure de gigue/perte en conditions
+  réelles avant d'être considérées comme définitives.
 - N'importe quel message valide (`COMMAND` ou `HEARTBEAT`) réinitialise
   le compteur de timeout ; `HEARTBEAT` n'est qu'un minimum garanti
   quand aucune commande n'est envoyée.
@@ -239,10 +264,14 @@ BOOT → READY → ACTIVE → SAFE → ERROR
 
 ## 10. Compatibilité matérielle
 
-Le protocole est indépendant du port UART physique et du modèle exact
-de la carte (WROOM ou S3, voir `CLAUDE.md`). Le champ `board=` du
-message `SYSTEM` de boot permet au Pi de savoir sur quelle variante il
-communique, sans que cela change le format des messages.
+Le protocole est indépendant du **transport** (UART sur câble USB ou
+socket TCP WiFi, voir §2) et du modèle exact de la carte (WROOM ou S3,
+voir `CLAUDE.md`). Le champ `board=` du message `SYSTEM` de boot permet
+au Pi de savoir sur quelle variante il communique, sans que cela change
+le format des messages.
+
+Carte de référence actuelle : **WROOM**, confirmée le 2026-09-15 (un S3
+est disponible mais gardé pour une évolution ultérieure).
 
 ------------------------------------------------------------------------
 

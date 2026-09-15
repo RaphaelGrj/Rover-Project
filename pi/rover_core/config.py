@@ -23,7 +23,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 DEFAULTS: dict[str, Any] = {
+    # Still the USB cable by default: the Pi-deported decision is made
+    # (ARCHITECTURE_AND_ROADMAP.md §6.2) but the ESP32 does not listen
+    # on TCP yet, so defaulting to "socket://..." would ship a default
+    # that cannot connect. Switch to "socket://rover.local:3333" once
+    # the firmware side lands -- rover_esp32.link needs no change,
+    # serial_for_url handles both.
     "port": "/dev/ttyUSB0",
+    # Only meaningful for a real UART; ignored by socket:// transports.
     "baudrate": 115200,
     "http_host": "0.0.0.0",
     "http_port": 8080,

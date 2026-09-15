@@ -96,8 +96,13 @@ class AIPanel:
 
         cleaned = {k: v for k, v in new_data.items() if v not in (None, "")}
 
-        await self._provider.close()
+        # Save FIRST, then swap the provider. The other order (close,
+        # then save) leaves the panel holding a closed provider if
+        # save_credentials() raises -- every later ask() would fail on a
+        # closed session, with a restart as the only way out. Saving
+        # first means a failed write changes nothing at all.
         save_credentials(cleaned, self._path)
+        await self._provider.close()
         self._credentials = cleaned
         self._provider = create_provider(cleaned)
         # A reconfigured provider/vendor should not silently carry over

@@ -1,7 +1,8 @@
 """Entrypoint: wires the ESP32 link, RoverCore and the control web
 server together, and runs them until interrupted.
 
-    python -m rover_core.main --port /dev/ttyUSB0
+    python -m rover_core.main --port socket://rover.local:3333  # Pi deported
+    python -m rover_core.main --port /dev/ttyUSB0               # USB cable
     python -m rover_core.main --port rfc2217://localhost:4000   # Wokwi
 
 See pi/README.md for setup, the Wokwi testing workflow, and how to set
@@ -48,8 +49,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--port",
         default=None,
-        help='Serial port to the ESP32 (Rover Protocol UART), e.g. "/dev/ttyUSB0" '
-        'on the real robot or "rfc2217://localhost:4000" against a Wokwi simulation.',
+        help='Where to reach the ESP32 (Rover Protocol). Anything pyserial\'s '
+        'serial_for_url accepts: "socket://rover.local:3333" now that the Pi is '
+        'deported over WiFi, "/dev/ttyUSB0" for the historical USB cable, or '
+        '"rfc2217://localhost:4000" against a Wokwi simulation.',
     )
     parser.add_argument("--baudrate", type=int, default=None)
     parser.add_argument("--http-host", default=None)
@@ -159,8 +162,14 @@ async def async_main(settings: dict) -> None:
     link = RoverLink(settings["port"], settings["baudrate"])
     core = RoverCore(link)  # must be built inside the running loop, see core.py
     link.on_frame = core.on_frame
+    # Non-blocking: start() only arms the supervisor, it does not wait
+    # for (nor require) the ESP32 to be reachable. Since the Pi is
+    # deported (ARCHITECTURE_AND_ROADMAP.md §6.2), "robot not reachable
+    # yet" is an ordinary startup condition -- the control server below
+    # must come up regardless. Watch for "ESP32 link up" from
+    # rover_esp32.link to know when the robot actually joined.
     link.start()
-    logger.info("connected to ESP32 on %s @ %d baud", settings["port"], settings["baudrate"])
+    logger.info("ESP32 link supervisor started for %s @ %d baud", settings["port"], settings["baudrate"])
 
     token = resolve_token()
     camera = CameraStream(settings["camera_url"])

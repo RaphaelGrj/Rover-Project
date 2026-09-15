@@ -16,9 +16,18 @@ WiFi à la place, une fois le robot déjà sur le réseau local.
 Ce n'est **pas** une entorse à la règle "l'ESP32 ne doit jamais dépendre
 d'Internet" (`ARCHITECTURE_AND_ROADMAP.md` §22) : c'est un canal de
 maintenance **réseau local uniquement**, jamais utilisé par le
-fonctionnement normal du robot (le Rover Protocol reste 100% UART), et
-entièrement inactif tant qu'un développeur ne l'active pas
-explicitement.
+fonctionnement normal du robot, et entièrement inactif tant qu'un
+développeur ne l'active pas explicitement.
+
+> ⚠ **Mise à jour du 2026-09-15** : le Rover Protocol n'est plus « 100 %
+> UART » comme l'affirmait ce paragraphe --- le Raspberry Pi est déporté
+> sur le réseau et la liaison est devenue une socket TCP WiFi (§6.2).
+> L'OTA et le Rover Protocol partagent donc désormais la même radio.
+> Cela ne change rien à l'argument ci-dessus (réseau local, pas
+> Internet), mais **l'OTA gagne en importance** : avec le micro prévu
+> sur `GPIO3` (`WIRING.md`), le flash filaire impose de retirer un
+> cavalier, donc l'OTA devient la voie normale de mise à jour et le
+> câble USB le recours de secours.
 
 ------------------------------------------------------------------------
 

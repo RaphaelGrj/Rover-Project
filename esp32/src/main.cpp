@@ -16,12 +16,19 @@
 #include "BatteryMonitor.h"
 #include "RoverOTA.h"
 #include "RoverWifiProvisioning.h"
+#include "StandaloneControl.h"
 #include "WifiCredentialsStore.h"
 #include "CalibrationStore.h"
 #include "Buzzer.h"
 
-// UART port TBD once the WROOM/S3 wiring is fixed (ROVER_PROTOCOL.md
-// section 2); Serial keeps this testable over USB in the meantime.
+// RoverProtocol takes a Stream&, never a HardwareSerial& -- that is what
+// keeps the transport swappable (ROVER_PROTOCOL.md section 2). The Pi is
+// deported over WiFi since 2026-09-15 (ARCHITECTURE_AND_ROADMAP.md
+// section 6.2), so this is meant to become a WiFiClient (also a Stream),
+// with Serial kept as the fallback. NOT DONE YET: the firmware still
+// speaks over the USB cable only -- see the "Pi deporte" work item in
+// PROGRESS.md for the intended order (transport first, measure, then
+// tune the heartbeat thresholds).
 RoverProtocol protocol(Serial);
 HeartbeatMonitor heartbeat;
 RoverState state = RoverState::BOOT;
@@ -33,7 +40,23 @@ EStop estop;
 BatteryMonitor battery;
 RoverOTA ota;
 RoverWifiProvisioning wifiProvisioning;
+StandaloneControl standalone;
 Buzzer buzzer;
+// How long without any valid frame from the Pi before Rover offers its
+// own piloting AP (StandaloneControl.h). Deliberately far longer than
+// ROVER_HEARTBEAT_TIMEOUT_MS: that one is a safety reflex measured in
+// hundreds of milliseconds, this is "the Pi is really not coming back",
+// and raising an access point on every brief WiFi hiccup would be both
+// useless and a standing door onto the robot.
+constexpr unsigned long ROVER_STANDALONE_FALLBACK_MS = 30000;
+// When the *Pi* last sent a valid frame -- tracked separately from
+// HeartbeatMonitor, which is fed by the standalone page too. Using the
+// monitor here would be circular: the page keeps it fresh, so the robot
+// would keep concluding the Pi was back and shut the AP down mid-drive.
+// Starts at 0, so before the first frame this reads as "time since
+// boot" -- which is what makes "powered on with no Pi at all" reach the
+// fallback, the primary case standalone piloting exists for.
+unsigned long lastPiFrameMs = 0;
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
 unsigned long lastBatteryTelemetryMs = 0;
@@ -42,6 +65,9 @@ unsigned long lastBatteryTelemetryMs = 0;
 void onFrame(const RoverFrame& frame) {
     // Any valid frame counts as proof of life from the Pi.
     heartbeat.reset();
+    // Separately from the heartbeat above, which the standalone page
+    // also feeds -- see lastPiFrameMs's declaration.
+    lastPiFrameMs = millis();
     // First frame after boot promotes us out of READY; SAFE can only be
     // left via an explicit SYSTEM action=resume (see below), not just
     // because traffic resumed -- avoids silently un-safing the robot.
@@ -182,10 +208,29 @@ void onFrame(const RoverFrame& frame) {
             char fields2[96];
             if (wifiProvisioning.isActive()) {
                 wifiProvisioning.buildStatusFields(fields2, sizeof(fields2));
+            } else if (standalone.isActive()) {
+                standalone.buildStatusFields(fields2, sizeof(fields2));
             } else {
                 ota.buildStatusFields(fields2, sizeof(fields2));
             }
             protocol.send("STATE", fields2);
+        } else if (strcmp(action, "standalone") == 0) {
+            // Manual entry, mainly for testing the mode without waiting
+            // out ROVER_STANDALONE_FALLBACK_MS -- and for deliberately
+            // handing the robot over to a phone before walking away
+            // from the Pi. Note this drops the station link, so over a
+            // WiFi Rover Protocol link this command is one-way: the
+            // reply below may not reach the Pi.
+            if (standalone.start()) {
+                char fields2[96];
+                standalone.buildStatusFields(fields2, sizeof(fields2));
+                protocol.send("STATE", fields2);
+            } else {
+                protocol.sendError("standalone_no_password");
+            }
+        } else if (strcmp(action, "standalone_off") == 0) {
+            standalone.stop();
+            protocol.send("STATE", "wifi_mode=idle");
         } else if (strcmp(action, "wifi_forget") == 0) {
             // Clears the stored home-network credentials (keeps the OTA
             // password, see WifiCredentialsStore::forgetNetwork) so the
@@ -270,6 +315,59 @@ void setup() {
     // immediately unless WiFi/OTA credentials were set at build time.
     ota.begin();
 
+    // Standalone piloting (StandaloneControl.h): every callback below
+    // routes into the SAME code the Pi's frames go through, rather than
+    // reaching into the motors directly. That is the whole safety
+    // argument for this mode -- there is no second control path that
+    // could drift out of agreement with the first one.
+    standalone.onHeartbeat = []() {
+        // A request from the page is proof of life exactly like a frame
+        // from the Pi, so it feeds the same monitor and the same
+        // timeout stops the motors when the tab closes or the phone
+        // walks out of range.
+        heartbeat.reset();
+    };
+    standalone.onMove = [](float velocity, float rotation) {
+        // Same ACTIVE gate as a MOVE frame: a page left open must not
+        // re-arm a robot sitting in SAFE.
+        if (state == RoverState::ACTIVE) drive.setTarget(velocity, rotation);
+    };
+    standalone.onLook = [](float pitch, float yaw) {
+        if (state == RoverState::ACTIVE) head.setTarget(pitch, yaw);
+    };
+    standalone.onResume = []() {
+        // Same E-stop guard as SYSTEM action=resume -- the operator is
+        // standing next to the robot here, which makes honouring a held
+        // button more important, not less.
+        //
+        // One deliberate difference: READY is accepted too, which the
+        // Pi's resume does not allow. Normally the Pi's first frame is
+        // what promotes READY -> ACTIVE, so a robot powered on with no
+        // Pi at all would sit in READY forever and this whole mode
+        // would be unusable in exactly the case it exists for. The
+        // press on "Activer" is the equivalent explicit act.
+        if ((state == RoverState::SAFE || state == RoverState::READY) && !estop.isPressed()) {
+            state = RoverState::ACTIVE;
+        }
+    };
+    standalone.onStop = []() {
+        drive.stop();
+        state = RoverState::SAFE;
+    };
+    standalone.statusProvider = []() {
+        const char* name = "?";
+        switch (state) {
+            case RoverState::BOOT:   name = "BOOT";   break;
+            case RoverState::READY:  name = "READY";  break;
+            case RoverState::ACTIVE: name = "ACTIVE"; break;
+            case RoverState::SAFE:   name = "SAFE";   break;
+            case RoverState::ERROR:  name = "ERROR";  break;
+        }
+        // Shown verbatim on the page: without forward_blocked, an
+        // obstacle reflex reads as "the robot ignores my joystick".
+        return String(name) + (drive.forwardBlocked() ? " | obstacle: marche avant bloquee" : "");
+    };
+
     char fields[64];
     snprintf(fields, sizeof(fields), "protocol=%s board=%s state=BOOT",
              ROVER_PROTOCOL_VERSION, ROVER_BOARD_NAME);
@@ -301,7 +399,56 @@ void loop() {
     battery.update();
     ota.update();
     wifiProvisioning.update();
+    standalone.update();
     buzzer.update();
+
+    // Standalone piloting fallback: after a long silence from the Pi,
+    // Rover raises its own AP so it stays drivable by whoever is
+    // standing next to it (ARCHITECTURE_AND_ROADMAP.md §6.3). Covers
+    // both "the link died" and "there is no Pi at all" -- see
+    // HeartbeatMonitor::millisSinceLast on why booting without a Pi
+    // reaches this too.
+    //
+    // Never while the provisioning portal is up: both want the radio in
+    // AP mode and port 80, and provisioning is an explicit operator
+    // action that must not be interrupted by an automatic one.
+    if (!standalone.isActive() && !wifiProvisioning.isActive() &&
+        millis() - lastPiFrameMs >= ROVER_STANDALONE_FALLBACK_MS) {
+        if (standalone.start()) {
+            char fields[96];
+            standalone.buildStatusFields(fields, sizeof(fields));
+            protocol.send("STATE", fields);
+            protocol.send("EVENT", "name=standalone_started");
+        } else {
+            // Refused for want of a stored password (StandaloneControl
+            // never falls back to an open AP). Reported once per boot,
+            // not every loop: with no Pi listening this frame may well
+            // go nowhere, but the buzzer tells whoever is next to the
+            // robot why no "Rover-Pilot-..." network is appearing.
+            static bool refusalReported = false;
+            if (!refusalReported) {
+                refusalReported = true;
+                protocol.send("EVENT", "name=standalone_unavailable reason=no_password");
+                buzzer.play(BuzzerSound::LOW_BATTERY);
+            }
+        }
+    }
+    // The Pi came back -- hand the radio back rather than leaving an AP
+    // open indefinitely. Reachable in practice over USB, or over WiFi
+    // once the station link returns; AP mode drops the station link, so
+    // this mostly matters for the wired case today.
+    //
+    // Guarded on isBeingUsed(): yanking the AP out from under someone
+    // actively driving would stop the robot mid-manoeuvre (the page's
+    // heartbeat dies with the network, so SAFE follows within
+    // ROVER_HEARTBEAT_TIMEOUT_MS). Safe, but a nasty surprise for
+    // whoever is holding the phone -- the Pi returning is not urgent
+    // enough to justify it, so we wait for the operator to let go.
+    if (standalone.isActive() && !standalone.isBeingUsed() &&
+        millis() - lastPiFrameMs < ROVER_STANDALONE_FALLBACK_MS) {
+        standalone.stop();
+        protocol.send("EVENT", "name=standalone_stopped");
+    }
 
     if (state == RoverState::ACTIVE && heartbeat.isTimedOut()) {
         state = RoverState::SAFE;
@@ -348,6 +495,24 @@ void loop() {
         snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=%s", failedSensor);
         protocol.send("ERROR", errFields);
     }
+    // LOCAL obstacle reflex -- the ESP32 refuses to drive further into an
+    // obstacle by itself, without consulting the Pi. Level-driven (not
+    // the edge event below) so the block holds for as long as the
+    // obstacle is there, and releases on its own once it clears.
+    //
+    // Before 2026-09-15 this clamp existed ONLY on the Pi
+    // (rover_core/core.py move()), which was fine while the Pi sat on
+    // the robot at the end of a USB cable. With the Pi deported over
+    // WiFi (ARCHITECTURE_AND_ROADMAP.md §6.2) a Pi-side-only reflex
+    // would have to cross a lossy link to stop the robot hitting
+    // something -- so it is duplicated here deliberately. The Pi keeps
+    // its own clamp: two independent layers, neither load-bearing alone.
+    //
+    // Reads false while no ToF sensor is healthy, so this is inert until
+    // the VL53L0X are actually wired and can never immobilize the robot
+    // on a phantom reading from a missing sensor.
+    drive.setForwardBlocked(sensors.obstacleDetected());
+
     if (sensors.consumeObstacleEvent()) {
         protocol.send("EVENT", "name=obstacle_detected");
         buzzer.play(BuzzerSound::OBSTACLE);
@@ -374,7 +539,13 @@ void loop() {
         unsigned long now = millis();
         if (now - lastTelemetryMs >= ROVER_DRIVE_TELEMETRY_PERIOD_MS) {
             lastTelemetryMs = now;
-            char fields[96];
+            // 128, not 96: adding forward_blocked= (2026-09-15) pushed
+            // the worst case to ~84 bytes, leaving only 12 spare -- the
+            // exact margin that produced this file's three previous
+            // truncation bugs. RoverProtocol::send() now detects a
+            // truncated frame instead of emitting a silently-cut one,
+            // but detection is the backstop, not the plan.
+            char fields[128];
             drive.buildTelemetryFields(fields, sizeof(fields));
             protocol.send("STATE", fields);
         }

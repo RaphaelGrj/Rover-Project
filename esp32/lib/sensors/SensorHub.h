@@ -26,6 +26,16 @@ public:
     // away, this isn't latched for a second read.
     bool consumeObstacleEvent();
 
+    // Non-consuming, level (not edge): true for as long as an obstacle
+    // stays within range. consumeObstacleEvent() above is the *edge*,
+    // for reporting; this is the *state*, for the local safety reflex
+    // in main.cpp -- a reflex driven by the edge would fire once and
+    // then release while the obstacle was still there.
+    // Reads false whenever no ToF sensor is healthy (see
+    // DistanceSensor::evaluateObstacle), so an unwired or failed sensor
+    // can never immobilize the robot by claiming a phantom obstacle.
+    bool obstacleDetected() const { return _distance.obstacleDetected(); }
+
     // Pops one pending sensor failure per call ("tof_left", "tof_right",
     // "imu" or "bme688") until none remain -- call in a loop so
     // simultaneous failures (eg. several sensors unwired at boot) are

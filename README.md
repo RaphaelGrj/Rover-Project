@@ -10,7 +10,7 @@ Un compagnon robotique autonome, intelligent, et intégré à l'écosystème dom
 
 Project Rover est le successeur spirituel de LUMI. Là où LUMI observait depuis son bureau, Rover explore. Fortement inspiré par la mécanique et l'expressivité du robot Vector (Anki), Rover va plus loin en devenant un véritable assistant domotique mobile.
 
-Il ne s'agit pas d'un simple jouet télécommandé, mais d'une machine à émotions capable d'interagir naturellement avec son environnement et son humain. Conçu autour d'une architecture hybride (ESP32-S3 + Raspberry Pi), Rover surveille le logement, analyse l'air, interagit via une IA générative, et patrouille tout en gardant une direction artistique unique : un design "Vector Glitché".
+Il ne s'agit pas d'un simple jouet télécommandé, mais d'une machine à émotions capable d'interagir naturellement avec son environnement et son humain. Conçu autour d'une architecture hybride (ESP32 WROOM embarqué + Raspberry Pi déporté sur le réseau), Rover surveille le logement, analyse l'air, interagit via une IA générative, et patrouille tout en gardant une direction artistique unique : un design "Vector Glitché".
 
 🎯 Cahier des Charges & Fonctionnalités
 
@@ -46,8 +46,17 @@ L'architecture est divisée en deux couches pour garantir fluidité et puissance
 
 | Composant | Rôle |
 | :--- | :--- |
-| **ESP32 WROOM** | Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI. |
-| **Raspberry Pi 3B+** | Ordinateur de bord : Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant. |
+| **ESP32 WROOM** | *(embarqué)* Microcontrôleur temps réel : gestion des moteurs, servos, capteurs I2C et écran SPI. |
+| **ESP32-CAM** | *(embarqué)* Module caméra indépendant, sert son flux MJPEG sur le réseau local. |
+| **Raspberry Pi 3B+** | *(**déporté sur le réseau** depuis le 2026-09-15)* Serveur vidéo, traitement IA lourde, SLAM, lien Home Assistant. |
+
+> **Le Raspberry Pi n'est plus embarqué sur le robot.** Il vit sur le
+> réseau local et dialogue avec l'ESP32 par une socket TCP WiFi
+> (Rover Protocol inchangé). Le châssis ne porte plus qu'ESP32 +
+> ESP32-CAM + batterie --- gain d'encombrement et d'autonomie, et « le
+> cerveau » peut désormais être n'importe quelle machine du LAN, pas
+> forcément un Pi. Raisonnement complet :
+> `ARCHITECTURE_AND_ROADMAP.md` §6.2.
 
 ### Locomotion & Mouvement
 

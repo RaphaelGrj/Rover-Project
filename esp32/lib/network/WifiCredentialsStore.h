@@ -44,10 +44,17 @@ inline void remove(const char* key) {
 inline String getSsid() { return getString("ssid", ""); }
 inline String getPassword() { return getString("pass", ""); }
 inline String getOtaPassword() { return getString("ota_pass", ""); }
+// WPA2 password of the robot's OWN access point in standalone piloting
+// mode (StandaloneControl.h). Separate from the OTA password on
+// purpose: one lets someone drive the robot, the other lets them
+// replace its firmware -- different blast radius, so an operator can
+// hand out one without handing out the other.
+inline String getStandalonePassword() { return getString("solo_pass", ""); }
 
 inline void setSsid(const String& v) { setString("ssid", v); }
 inline void setPassword(const String& v) { setString("pass", v); }
 inline void setOtaPassword(const String& v) { setString("ota_pass", v); }
+inline void setStandalonePassword(const String& v) { setString("solo_pass", v); }
 
 // Clears the WiFi network credentials (SSID/password) but deliberately
 // keeps the OTA password -- forgetting which router to join shouldn't

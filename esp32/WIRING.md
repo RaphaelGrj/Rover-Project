@@ -33,14 +33,20 @@
   détection de tension flash, mais **si le boot du WROOM se comporte
   bizarrement après ce câblage (mode/taille de flash mal détecté, sortie
   série très précoce corrompue), cette broche est la première suspecte**.
-- `GPIO1`, `GPIO3` : UART0, réservé console/programmation USB.
+- `GPIO1`, `GPIO3` : UART0, console/programmation USB. ⚠ **Statut changé
+  le 2026-09-15** --- ces deux broches étaient les seules non attribuées
+  du WROOM, et elles l'étaient parce qu'elles portaient le câble USB
+  vers le Raspberry Pi. Le Pi étant désormais déporté sur le réseau
+  (`ARCHITECTURE_AND_ROADMAP.md` §6.2), ce câble n'existe plus et
+  `GPIO3` devient utilisable pour le micro I2S. Voir la section
+  « Micro I2S » ci-dessous avant d'y toucher : ce n'est pas gratuit.
 - `GPIO6`--`GPIO11` : reliés à la flash SPI interne, jamais disponibles.
 
 ## Tableau de correspondance
 
 | Fonction                        | Pin ESP32 | Remarque |
 |----------------------------------|-----------|----------|
-| Ampli I2S (MAX98357A) BCLK        | GPIO16    | ⚠ Pin réaffectée le 2026-09-13 --- prévue à l'origine pour une UART2 vers le Pi (`ROVER_PROTOCOL.md` §2), jamais utilisée en pratique : le lien réel Pi↔ESP32 est le câble USB (`/dev/ttyUSB0`, UART0/GPIO1-3), confirmé lors du bring-up matériel. Récupérée pour l'ampli faute de GPIO libre restant |
+| Ampli I2S (MAX98357A) BCLK        | GPIO16    | ⚠ Pin réaffectée le 2026-09-13 --- prévue à l'origine pour une UART2 vers le Pi (`ROVER_PROTOCOL.md` §2), jamais utilisée en pratique : le lien réel Pi↔ESP32 était alors le câble USB (`/dev/ttyUSB0`, UART0/GPIO1-3), confirmé lors du bring-up matériel. Récupérée pour l'ampli faute de GPIO libre restant. *(Ce câble USB n'existe plus depuis le 2026-09-15 --- Pi déporté en WiFi, voir plus haut ; la réaffectation reste valable.)* |
 | Ampli I2S (MAX98357A) LRC (WS)    | GPIO17    | idem, voir remarque ci-dessus |
 | Ampli I2S (MAX98357A) DIN         | GPIO14    | ⚠ Pin réaffectée le 2026-09-13, récupérée sur le monitoring batterie (jamais câblé, désactivé par défaut --- voir note GPIO14 obsolète ci-dessous et `power_config.h`) |
 | Moteur gauche IN1 (avant)         | GPIO27    | DRV8833, PWM direct (pas de pin PWM séparée comme sur un TB6612FNG) |
@@ -49,7 +55,7 @@
 | Moteur droit IN2 (arrière)        | GPIO32    | DRV8833 |
 | DRV8833 SLP (sleep/enable)        | 3V3 direct | pas de contrôle logiciel dans cette base ; à passer sur un GPIO si un mode veille piloté est nécessaire plus tard. ⚠ **Confirmé bloquant en test matériel (2026-09-01)** : sur le breakout utilisé (pins `SLEEP`/`FAULT`/`OUT1-4`/`IN1-4`/`VCC`/`GND`), `SLEEP` non câblé ne flotte pas vers un état actif par défaut --- le driver reste désactivé en permanence (0 A consommé, aucun moteur ne répond, quoi qu'envoient IN1-4) tant que cette broche n'est pas explicitement reliée au 3V3 |
 | Bouton E-stop                     | GPIO25    | `INPUT_PULLUP` (voir `esp32/lib/safety/EStop.h`) --- bouton entre cette broche et GND, pressé = LOW. **Non câblé pour l'instant** : la broche flotte HIGH (relâché) grâce au pull-up interne, le firmware fonctionne à l'identique avec ou sans bouton physique |
-| Diviseur de tension batterie (ADC) | **libre / à réassigner** | ⚠ GPIO14 (utilisé jusqu'ici comme placeholder) a été réaffecté à l'ampli I2S le 2026-09-13 (voir tableau ci-dessus) --- monitoring toujours désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`), aucun diviseur câblé à ce jour. Si ce monitoring est remis en service plus tard, il faudra choisir un GPIO ADC1 libre (les ADC2 comme GPIO14 sont illisibles pendant le WiFi/OTA) --- aucun GPIO n'est actuellement libre sur le WROOM, il faudra en libérer un |
+| Diviseur de tension batterie (ADC) | **libre / à réassigner** | ⚠ GPIO14 (utilisé jusqu'ici comme placeholder) a été réaffecté à l'ampli I2S le 2026-09-13 (voir tableau ci-dessus) --- monitoring toujours désactivé par défaut (`ROVER_BATTERY_MONITORING_ENABLED = false`, `power_config.h`), aucun diviseur câblé à ce jour. Si ce monitoring est remis en service plus tard, il faudra choisir un GPIO ADC1 libre (les ADC2 comme GPIO14 sont illisibles pendant le WiFi/OTA) --- **toujours bloqué au 2026-09-15** : le déport du Pi libère `GPIO1`/`GPIO3`, mais ni l'une ni l'autre n'est sur l'ADC1, et les 6 broches ADC1 du WROOM (GPIO32/33 moteurs, GPIO34/35/36/39 encodeurs) sont toutes prises. Il faudra donc toujours en libérer une |
 | Buzzer (bip sonore)                | GPIO12    | ⚠ Strapping, voir "Pins évitées volontairement" ci-dessus --- `esp32/lib/sound/Buzzer.h`. Buzzer passif ou actif, les deux fonctionnent avec `tone()`/`noTone()` pour un simple signal on/off rythmé |
 | Encodeur gauche A                 | GPIO34    | entrée seule, pas de pull interne --- ⚠ pull-up externe **requise** (voir note ci-dessous) |
 | Encodeur gauche B                 | GPIO35    | entrée seule, idem |
@@ -67,6 +73,53 @@
 | I2C SCL (bus partagé)             | GPIO22    | |
 | XSHUT VL53L0X gauche              | GPIO0     | ⚠ strapping ; doit rester HIGH/flottant au boot, piloté HIGH par le firmware ensuite pour l'adressage I2C séquentiel |
 | XSHUT VL53L0X droite              | GPIO4     | |
+
+## Micro I2S --- planifié, pas encore câblé (2026-09-15)
+
+Le micro est resté « non décidé » (`BOM.md`) tout au long des Phases 2-4
+pour une raison simple : **il ne restait aucune broche**. Le déport du
+Raspberry Pi (`ARCHITECTURE_AND_ROADMAP.md` §6.2) débloque la situation.
+
+Un micro I2S type **INMP441** peut partager l'horloge de l'ampli
+MAX98357A en mode full-duplex sur I2S0 --- il ne réclame donc qu'**une
+seule broche supplémentaire** :
+
+| Fonction | Pin ESP32 | Remarque |
+|---|---|---|
+| Micro I2S BCLK | GPIO16 | **partagé** avec l'ampli (même horloge) |
+| Micro I2S WS (LRC) | GPIO17 | **partagé** avec l'ampli |
+| Micro I2S SD (data out du micro) | GPIO3 | ⚠ ex-UART0 RX, voir l'avertissement ci-dessous |
+| Micro L/R (sélection canal) | GND ou 3V3 direct | pas de GPIO nécessaire |
+
+`GPIO3` plutôt que `GPIO1` : c'est une **entrée**, ce qui correspond au
+sens du signal (data out du micro → entrée ESP32), et contrairement à
+`GPIO1`/TX elle n'émet pas le log de boot de l'ESP32.
+
+### ⚠ Le coût : plus de console série USB
+
+Occuper `GPIO3` revient à perdre la console série filaire. Le scénario
+gênant est identifié et assumé : **si le WiFi tombe, on perd le
+pilotage *et* le moyen de déboguer au même instant.**
+
+**Mitigation retenue avec l'utilisateur le 2026-09-15 : un cavalier
+(jumper) sur la piste du micro**, à retirer pour flasher ou déboguer en
+filaire, la CAO étant adaptée pour le rendre accessible sans démonter le
+robot. Ne pas souder ce fil en dur.
+
+En usage normal, la mise à jour du firmware passe par l'**OTA**
+(`esp32/OTA.md`, validée sur matériel réel) --- le cavalier n'est qu'un
+filet de sécurité pour le jour où l'OTA ne répond plus.
+
+------------------------------------------------------------------------
+
+## Raspberry Pi --- plus aucun câble (2026-09-15)
+
+Il n'y a plus de liaison filaire entre l'ESP32 et le Raspberry Pi. Le
+Rover Protocol passe par une **socket TCP sur le WiFi**
+(`ROVER_PROTOCOL.md` §2). L'UART0 (`GPIO1`/`GPIO3`) n'est donc plus
+réservé à cet usage --- c'est ce qui libère la broche du micro ci-dessus.
+
+------------------------------------------------------------------------
 
 Les deux `VL53L0X` partagent la même adresse I2C par défaut (0x29) : le
 firmware maintient le droit en reset via son `XSHUT` pendant qu'il

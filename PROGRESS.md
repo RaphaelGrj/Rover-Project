@@ -12,6 +12,173 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **DÉCISION D'ARCHITECTURE --- Raspberry Pi déporté (2026-09-15)** :
+  le Pi quitte le châssis et devient une machine du réseau local ; le
+  Rover Protocol passe du câble USB à une **socket TCP WiFi**. Le robot
+  n'embarque plus qu'ESP32 + ESP32-CAM + batterie. **Carte confirmée :
+  WROOM** (un S3 est disponible mais gardé pour plus tard, objectif =
+  finir le projet sur le WROOM). Raisonnement complet dans
+  `ARCHITECTURE_AND_ROADMAP.md` §6.2, rédigé selon les 7 questions de la
+  §28. Points saillants :
+  - **Coût en code quasi nul** : les deux extrémités étaient déjà
+    abstraites sans que ç'ait été prévu --- `serial_for_url()` côté Pi
+    accepte `socket://`, `RoverProtocol` côté ESP32 prend un `Stream&`
+    (donc un `WiFiClient`). Aucun changement du protocole V1.
+  - **Mesures réelles** (compilation WROOM ce jour) : RAM 16.2 %
+    (53 144/327 680), Flash **71.0 %** (930 353/1 310 720, déjà en
+    partition OTA double). La ressource tendue est la flash, pas la RAM.
+  - **Vraie difficulté = le heartbeat** : les 500 ms étaient calibrées
+    pour un câble. Remplacées par 3 paliers (NOMINAL / DEGRADED ~30 % de
+    vitesse à 500 ms / TIMEOUT→SAFE à ~1500 ms), §9. ⚠ **Valeurs non
+    mesurées**, à confirmer en conditions réelles.
+  - **Seul sous-système pénalisé = l'audio** (§17.3) : ampli/micro sur
+    l'ESP32, STT/TTS sur le Pi → l'audio doit traverser le WiFi. Viable
+    sur WROOM **à condition de streamer** (~8-16 Ko) et non de
+    bufferiser (~160 Ko). Impose une variante binaire/streaming de
+    `POST /audio/converse`, qui renvoie du base64 aujourd'hui.
+  - **Effet de bord heureux** : le déport libère `GPIO1`/`GPIO3`
+    (ex-UART0 vers le Pi) --- or `esp32/WIRING.md` constatait qu'il ne
+    restait *aucune* broche libre, ce qui bloquait le micro depuis la
+    Phase 4. Micro INMP441 prévu sur `GPIO3` en partageant BCLK/WS avec
+    l'ampli. Contrepartie assumée : perte de la console série USB,
+    **mitigée par un cavalier** que la CAO rendra accessible.
+  - Budget de puissance revu (~32W → ~24.5W pic), **buck 5V/3A dédié au
+    Pi abandonné** (`BOM.md`), risque de brownout/corruption SD éliminé.
+  - Documentation mise à jour : `ARCHITECTURE_AND_ROADMAP.md` (§4.1,
+    §6.2, §9, §17.3, §19, §21), `ROVER_PROTOCOL.md` (§2, §6, §10),
+    `esp32/WIRING.md`, `AIDE_CABLAGE.md`, `BOM.md`, `README.md`,
+    `pi/README.md`, `esp32/OTA.md`.
+- **`RoverLink` rendu résistant aux coupures réseau (2026-09-15)**,
+  même session que la décision ci-dessus --- **seul code modifié à ce
+  jour pour le Pi déporté**, et ce n'est pas du développement neuf mais
+  la correction d'un défaut que le WiFi rend critique.
+  Constat : `pi/rover_esp32/link.py` ouvrait la connexion dans
+  `__init__` et écrivait dans `self._serial` sans aucune gestion
+  d'erreur. Acceptable sur un câble USB (le port existe ou pas),
+  **cassé sur une socket WiFi** où une coupure est un événement normal :
+  (a) le process Pi refusait de démarrer si l'ESP32 n'écoutait pas
+  encore, (b) `send()` levait `SerialException` → `_heartbeat_loop`
+  (`core.py`) ne rattrape que `CancelledError`, donc **la tâche
+  heartbeat mourait définitivement** et ne repartait jamais même réseau
+  revenu, (c) le thread lecteur mourait en silence. Précédent réel de
+  cette classe de panne : le bug non-ASCII du 2026-09-10 qui *« killed
+  the pyserial reader thread entirely »* (`tests/test_protocol.py`).
+  Violait aussi la règle `CLAUDE.md` « gère systématiquement les erreurs
+  de communication ».
+  Corrections : connexion supervisée avec reconnexion et backoff
+  (0.5s → 5s, remis au minimum après succès), `start()` non bloquant
+  (le serveur de contrôle démarre même robot éteint), `send()` renvoie
+  `False` au lieu de lever, exceptions du consommateur et
+  `connection_lost` neutralisées pour ne plus tuer le lien, et une
+  course `stop()`-pendant-connexion fermée sous verrou (elle laissait
+  fuir un thread lecteur --- **trouvée grâce à un test flaky**, pas par
+  relecture). API publique inchangée : `RoverCore` et `main.py` n'ont eu
+  besoin d'aucune adaptation.
+  **9 nouveaux tests (`pi/tests/test_link.py`, entièrement nouveau)** ---
+  contre un vrai serveur TCP en mémoire via `socket://`, donc la
+  reconnexion est réellement exercée. **145 tests `pi/`**, suite lancée
+  4× d'affilée pour vérifier l'absence de flakiness.
+  ⚠ Restent 2 échecs **pré-existants et propres à Windows**
+  (`test_rover_ai`/`test_rover_audio`, permissions `0600` des fichiers
+  d'identifiants : `os.chmod` ne pose pas de bits POSIX sous Windows,
+  mode 438 = `0o666`). Sans rapport avec cette session, devraient passer
+  sous Linux Mint --- **à reconfirmer sur le vrai Pi**, ne pas
+  « corriger » en assouplissant l'assertion, c'est une vraie garantie de
+  sécurité côté Linux.
+  **Toujours rien côté ESP32** : le firmware parle encore uniquement sur
+  `Serial`, pas de `WiFiServer`, pas de paliers de heartbeat.
+- **Pilotage autonome sans Pi ni réseau (2026-09-15)** --- exigence de
+  l'utilisateur, qui **revient sur un compromis que §6.2 présentait comme
+  accepté** (« plus de WiFi = plus de cerveau »). La perte de
+  l'*intelligence* hors réseau reste assumée ; la perte du *pilotage*
+  non. Nouveau `esp32/lib/network/StandaloneControl.h` : l'ESP32 ouvre
+  son propre AP WPA2 et sert une page joystick (`PROGMEM`, pas de CDN --
+  il n'y a pas d'Internet sur cet AP par définition). Conception en
+  §6.3.
+  - **Principe : réutiliser, jamais dupliquer.** Le module ne contient
+    aucune logique de sécurité propre --- la page alimente le *même*
+    `HeartbeatMonitor` que le Pi (fermer l'onglet ou sortir de portée
+    arrête donc les moteurs par le timeout existant), l'E-stop prime
+    toujours, le réflexe d'obstacle s'applique, et entrer dans ce mode
+    ne réarme pas les moteurs.
+  - **WPA2 obligatoire, refus de démarrer sans mot de passe** --- calqué
+    sur `RoverOTA`. Un AP ouvert serait pire que dans le cas OTA : il ne
+    flashe pas un firmware, il déplace un robot. Mot de passe distinct
+    de celui de l'OTA (`solo_pass` en NVS), collecté par le portail
+    existant, refusé si < 8 caractères (sans quoi `softAP()` bascule
+    silencieusement en réseau **ouvert**).
+  - **Déclenchement** : automatique après 30 s sans trame du Pi ---
+    couvre « le lien est mort » *et* « il n'y a pas de Pi du tout »
+    (avant la première trame, le compteur mesure depuis le boot, ce qui
+    est voulu : c'est le cas d'usage principal). Manuel via
+    `SYSTEM action=standalone`.
+  - **Deux pièges attrapés en cours d'écriture**, tous deux notés dans
+    le code : (1) la page alimentant le heartbeat, s'en servir pour
+    détecter « le Pi est revenu » était **circulaire** et coupait l'AP
+    sous les pieds du pilote → suivi séparé de `lastPiFrameMs` ;
+    (2) une première version ne se déclenchait jamais sur un robot
+    démarré sans Pi --- exactement le cas visé.
+  - **Coût : +8 Ko de flash** (71,0 % → 71,6 %), +400 octets de RAM ---
+    `WebServer` était déjà lié par le portail de provisioning.
+  - ⚠ **Jamais exécuté sur matériel** : WROOM et S3 compilent, 18/18
+    tests natifs, relecture --- rien de plus.
+- **Revue de code complète (2026-09-15)** --- passe sur l'ensemble du
+  dépôt (~9 300 lignes : `pi/`, `esp32/`, `esp32-cam/`) à la recherche
+  d'incohérences, de failles et de points bloquants pour le Pi déporté.
+  **Le constat le plus important m'a fait corriger ma propre
+  documentation** : §6.2 affirmait que les réflexes d'obstacle étaient
+  déjà locaux à l'ESP32 « puisque les VL53L0X sont de son côté ». Faux :
+  les *capteurs* l'étaient, le *réflexe* non --- le firmware n'émettait
+  qu'un `EVENT`, le seul blocage réel vivait côté Pi. L'argument de
+  sécurité central de la décision reposait donc sur du vide.
+  **8 corrections appliquées** (détail et raisonnement dans le diff) :
+  - **Réflexe d'obstacle local** (`DriveController::setForwardBlocked`,
+    appliqué dans `update()` donc valable aussi pour une commande
+    périmée ; marche avant seule, reculer/tourner restent possibles ;
+    inerte si aucun ToF sain). Le clamp du Pi est **conservé** : deux
+    couches indépendantes. Nouveau champ `forward_blocked=` en
+    télémétrie --- sans lui, « le robot n'avance plus » serait
+    indiagnosticable depuis un Pi déporté.
+  - **Troncature silencieuse des trames sortantes**
+    (`RoverProtocol::send`) : une trame coupée repartait avec un
+    checksum valide *calculé sur le texte tronqué*, donc indétectable
+    côté réception. Ce dépôt s'est fait avoir 3 fois par des buffers
+    trop petits (commentaires « 48, not 32 » / « 96, not 64 » dans
+    `main.cpp`) --- la garde couvre la classe entière au seul endroit
+    par où tout passe. 2 tests natifs.
+  - **Verrouillage WiFi** : `RoverWifiProvisioning::stop()` finissait
+    sur `WIFI_OFF` sans jamais rallumer --- un portail qui expirait tuait
+    l'OTA jusqu'au reboot. Après le déport, ç'aurait été le lien de
+    pilotage, sans câble pour se rattraper. Retour en `WIFI_STA` +
+    `reconnect()`.
+  - **Injection HTML dans le portail WiFi** : le SSID stocké était
+    réinjecté brut dans `value='...'` --- une apostrophe suffit à sortir
+    de l'attribut. Échappement ajouté.
+  - **Boucle infinie du firmware caméra** : `stream_handler` retentait
+    `esp_camera_fb_get()` sans condition de sortie ; une caméra HS
+    confisquait définitivement un worker httpd (et finissait par figer
+    le serveur). Abandon après 10 échecs + 503, et `esp_camera_deinit()`
+    avant chaque réinitialisation (sans quoi la relance renvoie
+    `ESP_ERR_INVALID_STATE` à vie).
+  - **Panneaux IA/audio** : le fournisseur était fermé *avant* une
+    sauvegarde qui peut échouer → panneau mort jusqu'au redémarrage.
+    Ordre inversé.
+  - **WebSocket** : une tâche par trame, sans référence conservée
+    (asyncio ne garde qu'une référence faible → collecte possible en vol)
+    et sans ordre garanti. Remplacé par une file bornée + une tâche de
+    drainage unique.
+  - **Docstring de `camera.py`** qui surestimait la protection : le
+    proxy authentifie ceux qui passent par le Pi, il n'empêche pas
+    l'accès direct à l'ESP32-CAM, qui reste ouvert sur le LAN.
+  **2 points structurels documentés, non corrigés** (ils demandent du
+  firmware et deviennent bloquants pour l'étape 1, voir §6.2 « 5 bis » /
+  « 5 ter ») : le lien déporté n'aurait **aucune authentification**
+  (alors que le serveur web exige un token et l'OTA un mot de passe), et
+  la connexion WiFi vit dans `RoverOTA`, un module explicitement
+  optionnel dont le lien de commande ne peut pas dépendre.
+  **Vérifié** : WROOM *et* S3 compilent (portabilité `CLAUDE.md`
+  respectée), 18/18 tests natifs, 143/145 tests `pi/` (2 échecs
+  pré-existants propres à Windows, voir ci-dessous).
 - **Audio pipeline --- STT/IA/TTS enchaînés (2026-09-11)**, même
   session que `rover_audio` ci-dessous : nouveau
   `pi/rover_control/voice_panel.py` (`VoicePanel.converse`) enchaîne
@@ -820,9 +987,78 @@ soir-là :
    de bout en bout sur matériel réel, flash OTA réel inclus**. Rien de
    plus à faire ici pour l'instant.
 
+**Chantier « Pi déporté » (décidé le 2026-09-15, rien d'implémenté).**
+Ne pas démarrer avant d'avoir réglé le moteur gauche ci-dessus --- mais
+l'ordre interne de ce chantier compte, parce qu'il est conçu pour
+échouer tôt et pas cher :
+
+0. **Deux prérequis bloquants, trouvés à la revue de code du
+   2026-09-15** (détail : `ARCHITECTURE_AND_ROADMAP.md` §6.2, questions
+   « 5 bis » et « 5 ter »). À traiter **avant** de débrancher l'USB,
+   parce qu'aujourd'hui le câble *est* la sécurité :
+   - **Authentifier le lien.** Le Rover Protocol n'a aucune notion
+     d'identité. Une socket ouverte = n'importe qui sur le WiFi pilote
+     les moteurs. Le serveur web exige un token et l'OTA un mot de
+     passe ; le lien de commande serait le seul canal ouvert, et le plus
+     dangereux. Secret en NVS (`WifiCredentialsStore`), trame d'auth
+     obligatoire avant de quitter `READY`, une seule connexion à la fois.
+   - **Sortir le WiFi de `RoverOTA`.** C'est aujourd'hui le seul endroit
+     qui connecte la radio, dans un module explicitement optionnel --- le
+     lien de commande ne peut pas en dépendre.
+
+1. **Transport socket d'abord, mécanique ensuite.** Côté ESP32,
+   `WiFiServer` → `WiFiClient` passé à `RoverProtocol` (qui prend déjà
+   un `Stream&`), avec repli sur `Serial` tant que le câble existe
+   encore. Côté Pi, **plus rien à écrire** : `RoverLink` supervise déjà
+   la connexion et reconnecte (fait le 2026-09-15), il ne reste qu'à
+   mettre `socket://host:port` dans `config.json`. Garder le Pi
+   physiquement sur le robot à ce stade --- on ne teste qu'une chose à la
+   fois. ⚠ Penser à `WiFi.setSleep(false)` dès ce premier jet : sans ça
+   la mesure de l'étape 2 mesurerait l'économie d'énergie radio, pas le
+   lien.
+2. **Mesurer avant de régler.** Gigue et taux de perte du lien WiFi,
+   robot en mouvement et à distance du point d'accès. C'est cette mesure
+   qui fixe les seuils de §9 --- les 500 ms/1500 ms écrits aujourd'hui
+   sont une hypothèse, pas un résultat. Tant que ce n'est pas mesuré, ne
+   pas toucher à `ROVER_HEARTBEAT_TIMEOUT_MS`
+   (`esp32/include/board_config.h`).
+3. **Durcir** : paliers de heartbeat, `WiFi.setSleep(false)`, échéance
+   propre à chaque `MOVE` (« vitesse X pendant au plus N ms »).
+4. **Seulement là**, retirer physiquement le Pi et adapter la CAO
+   (emplacement du cavalier `GPIO3` accessible sans démontage).
+5. **Audio en dernier**, une fois le lien éprouvé : micro INMP441 sur
+   `GPIO3`, variante binaire/streaming de `POST /audio/converse` côté
+   Pi. Ne pas tenter de bufferiser un énoncé complet sur le WROOM.
+
 ------------------------------------------------------------------------
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
+
+- **2026-09-15 (3)** --- **Pilotage autonome sans Pi ni réseau**
+  (`StandaloneControl.h`, §6.3) : l'ESP32 ouvre son propre AP WPA2 et
+  sert une page joystick. Rattrape le seul vrai point faible du Pi
+  déporté. Aucune logique de sécurité dupliquée : la page bat le même
+  heartbeat que le Pi. +8 Ko de flash. Jamais testé sur matériel.
+- **2026-09-15 (2)** --- Revue de code complète du dépôt. Constat
+  principal : §6.2 affirmait à tort que le réflexe d'obstacle était déjà
+  local à l'ESP32 (les capteurs l'étaient, pas le réflexe) --- corrigé
+  en firmware *et* dans la doc. 8 corrections au total (réflexe local,
+  troncature de trame indétectable, verrouillage WiFi, injection HTML du
+  portail, boucle infinie caméra, ordre fermeture/sauvegarde des
+  panneaux, tâches WebSocket, docstring trompeuse). 2 prérequis
+  bloquants documentés pour le Pi déporté : **aucune authentification**
+  sur le lien, et WiFi enfermé dans `RoverOTA`.
+
+- **2026-09-15** --- Décision d'architecture : **Raspberry Pi déporté sur
+  le réseau** (socket TCP WiFi au lieu du câble USB), **carte WROOM
+  confirmée** (S3 gardé pour plus tard). Motivée par l'encombrement et
+  l'autonomie, validée par compilation réelle (Flash 71 %, RAM 16 %).
+  Trois conséquences traitées : heartbeat à paliers (§9), audio en
+  streaming obligatoire (§17.3), et déblocage inattendu de `GPIO3` pour
+  le micro (cavalier prévu). Côté code, une seule correction mais réelle :
+  `RoverLink` ne survivait pas à une coupure réseau (reconnexion, `send()`
+  qui ne lève plus, course `stop()` fermée) --- 9 nouveaux tests, 145 au
+  total. Firmware ESP32 non modifié.
 
 - **2026-09-11** --- Session bring-up des moteurs N20 définitifs, non
   résolue. Résumé : muet (contact intermittent, jamais soudé malgré une

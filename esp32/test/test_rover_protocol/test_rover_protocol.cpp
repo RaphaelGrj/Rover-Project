@@ -126,8 +126,55 @@ void test_frame_get_field_helpers(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 42.0f, frame.getFloat("missing", 42.0f));
 }
 
+// Regression guard for the failure mode this project hit three times
+// through undersized caller buffers (see the "48, not 32" / "96, not
+// 64" comments in src/main.cpp). A truncated frame is worse than a
+// dropped one: it still carries a checksum computed over the truncated
+// text, so it looks perfectly valid to the receiver, which simply sees
+// a field that got cut in half.
+void test_oversized_outgoing_frame_is_reported_not_silently_truncated(void) {
+    FakeStream stream;
+    RoverProtocol protocol(stream);
+
+    // Comfortably past ROVER_MAX_FRAME_LEN once "STATE " is prepended.
+    std::string huge = "value=";
+    huge.append(ROVER_MAX_FRAME_LEN, 'x');
+
+    protocol.send("STATE", huge.c_str());
+
+    TEST_ASSERT_EQUAL_size_t(1, stream.sent.size());
+    // What went out must be the ERROR, never a cut-off STATE. Checksum
+    // recomputed here rather than pasted from a run, same reasoning as
+    // test_send_with_no_fields_omits_trailing_space above.
+    const std::string content = "ERROR code=tx_truncated";
+    uint8_t expected = 0;
+    for (char c : content) expected ^= (uint8_t)c;
+    char want[48];
+    snprintf(want, sizeof(want), "%s *%02X\n", content.c_str(), expected);
+    TEST_ASSERT_EQUAL_STRING(want, stream.sent[0].c_str());
+}
+
+// The guard must not fire on a frame that merely comes close to the
+// limit -- otherwise it would trade silent truncation for silent loss.
+void test_frame_just_within_the_limit_is_still_sent(void) {
+    FakeStream stream;
+    RoverProtocol protocol(stream);
+
+    // "STATE " (6) + fields, landing exactly on the last byte that fits
+    // in the ROVER_MAX_FRAME_LEN buffer (which reserves one for '\0').
+    std::string fields = "v=";
+    fields.append(ROVER_MAX_FRAME_LEN - 1 - 6 - 2, 'x');
+
+    protocol.send("STATE", fields.c_str());
+
+    TEST_ASSERT_EQUAL_size_t(1, stream.sent.size());
+    TEST_ASSERT_EQUAL_INT(0, strncmp(stream.sent[0].c_str(), "STATE v=", 8));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
+    RUN_TEST(test_oversized_outgoing_frame_is_reported_not_silently_truncated);
+    RUN_TEST(test_frame_just_within_the_limit_is_still_sent);
     RUN_TEST(test_send_appends_the_documented_checksum);
     RUN_TEST(test_send_with_no_fields_omits_trailing_space);
     RUN_TEST(test_round_trip_send_then_parse);

@@ -157,12 +157,32 @@ void RoverProtocol::handleLine(char* line, size_t len) {
 // (see header) so this stays a thin, allocation-free transport layer.
 void RoverProtocol::send(const char* type, const char* fields) {
     char content[ROVER_MAX_FRAME_LEN];
+    int written;
     if (fields && fields[0] != '\0') {
-        snprintf(content, sizeof(content), "%s %s", type, fields);
+        written = snprintf(content, sizeof(content), "%s %s", type, fields);
     } else {
-        snprintf(content, sizeof(content), "%s", type);
+        written = snprintf(content, sizeof(content), "%s", type);
     }
-    uint8_t cs = checksum(content, strlen(content));
+
+    // snprintf reports what it WOULD have written, so this catches a
+    // frame that got cut off. It matters more than it looks: a
+    // truncated frame still gets a valid checksum (computed over the
+    // truncated text), so the receiver has no way to tell it apart from
+    // a legitimate one -- it just silently sees a missing or half-cut
+    // field. This project has already been bitten by that exact failure
+    // three times through undersized caller buffers (see the "48, not
+    // 32" / "96, not 64" comments in src/main.cpp, all found the hard
+    // way on real hardware). Catching it here covers the whole class at
+    // the one place every outgoing frame passes through.
+    //
+    // Terminates: the ERROR frame below is ~28 bytes, far under
+    // ROVER_MAX_FRAME_LEN, so it can never itself truncate and recurse.
+    if (written < 0 || (size_t)written >= sizeof(content)) {
+        sendError("tx_truncated");
+        return;
+    }
+
+    uint8_t cs = checksum(content, (size_t)written);
     _port.printf("%s *%02X\n", content, cs);
 }
 

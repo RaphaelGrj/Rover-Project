@@ -57,12 +57,29 @@ public:
         _lastActivityMs = millis();
     }
 
+    // Tears the portal down and hands the radio BACK to station mode
+    // rather than switching it off.
+    //
+    // This used to end on WiFi.mode(WIFI_OFF), which left the radio dead
+    // until someone power-cycled the robot: a portal that simply timed
+    // out (nobody finished the form) killed OTA for the rest of the
+    // session. Survivable while the Pi was on a USB cable. Since the Pi
+    // is deported over WiFi (ARCHITECTURE_AND_ROADMAP.md §6.2) the same
+    // path would take out the *control link* -- an unrecoverable lockout
+    // with no cable left to fall back on.
+    //
+    // WIFI_STA + reconnect() only re-arms the radio; it does not
+    // guarantee the network comes back (wrong password, AP out of
+    // range). That's fine: the Pi's own link supervisor retries
+    // indefinitely (pi/rover_esp32/link.py), so recovery is automatic
+    // as soon as the network is reachable again.
     void stop() {
         if (!_active) return;
         _server.stop();
         _dnsServer.stop();
         WiFi.softAPdisconnect(true);
-        WiFi.mode(WIFI_OFF);
+        WiFi.mode(WIFI_STA);
+        WiFi.reconnect();
         _active = false;
     }
 
@@ -109,6 +126,31 @@ private:
     static constexpr unsigned long ROVER_PROVISIONING_TIMEOUT_MS = 10UL * 60UL * 1000UL;
     bool _apStarted = false;
 
+    // Minimal HTML-attribute escaping for the one untrusted string this
+    // portal echoes back (the stored SSID, pre-filled into the form).
+    // Without it, an SSID containing a quote breaks out of the value=''
+    // attribute and anything after it is parsed as markup -- a stored
+    // XSS that fires on whoever next opens the portal. The SSID is
+    // operator-supplied, so this is not a remote attack on its own, but
+    // it is written through this very form by anyone who reaches the AP
+    // during a provisioning window, and escaping costs nothing.
+    static String escapeHtml(const String& raw) {
+        String out;
+        out.reserve(raw.length() + 16);
+        for (size_t i = 0; i < raw.length(); i++) {
+            char c = raw[i];
+            switch (c) {
+                case '&':  out += "&amp;";  break;
+                case '<':  out += "&lt;";   break;
+                case '>':  out += "&gt;";   break;
+                case '"':  out += "&quot;"; break;
+                case '\'': out += "&#39;";  break;
+                default:   out += c;        break;
+            }
+        }
+        return out;
+    }
+
     String buildApSsid() const {
         // Last 3 bytes of the MAC keep this unique across multiple
         // Rovers on the same site without needing any config of its own.
@@ -125,6 +167,7 @@ private:
         // setup just to change a password doesn't require retyping it.
         String currentSsid = WifiCredentialsStore::getSsid();
         String hasOta = WifiCredentialsStore::getOtaPassword().length() > 0 ? "oui" : "non";
+        String hasSolo = WifiCredentialsStore::getStandalonePassword().length() >= 8 ? "oui" : "non";
 
         String page;
         page.reserve(1024);
@@ -136,11 +179,14 @@ private:
         page += "<h2>Configuration WiFi Rover</h2>";
         page += "<form method=POST action=/save>";
         page += "<label>Reseau WiFi (SSID)</label>";
-        page += "<input name=ssid value='" + currentSsid + "' required>";
+        page += "<input name=ssid value='" + escapeHtml(currentSsid) + "' required>";
         page += "<label>Mot de passe WiFi (laisser vide pour garder l'actuel)</label>";
         page += "<input name=pass type=password>";
         page += "<label>Mot de passe OTA (laisser vide pour garder l'actuel -- deja configure : " + hasOta + ")</label>";
         page += "<input name=ota_pass type=password>";
+        page += "<label>Mot de passe pilotage direct, 8 caracteres minimum ";
+        page += "(mode sans Pi ni reseau -- deja configure : " + hasSolo + ")</label>";
+        page += "<input name=solo_pass type=password minlength=8>";
         page += "<button type=submit>Enregistrer et redemarrer</button>";
         page += "</form></body></html>";
 
@@ -168,6 +214,19 @@ private:
         }
         if (_server.arg("ota_pass").length() > 0) {
             WifiCredentialsStore::setOtaPassword(_server.arg("ota_pass"));
+        }
+        // Rejected rather than silently stored if too short: WPA2 needs
+        // >= 8 characters, and softAP() would quietly open an OPEN
+        // network with a shorter one -- an unauthenticated door onto the
+        // robot's motors, which is exactly what StandaloneControl
+        // refuses to allow. Better to keep the previous value and say so.
+        if (_server.arg("solo_pass").length() > 0) {
+            if (_server.arg("solo_pass").length() < 8) {
+                _server.send(400, "text/plain",
+                    "Mot de passe pilotage direct trop court (8 caracteres minimum)");
+                return;
+            }
+            WifiCredentialsStore::setStandalonePassword(_server.arg("solo_pass"));
         }
 
         _server.send(200, "text/html",

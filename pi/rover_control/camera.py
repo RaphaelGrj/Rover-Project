@@ -1,8 +1,19 @@
 """MJPEG video -- reverse-proxies the stream served by the ESP32-CAM
 (a separate, deported camera module, see ARCHITECTURE_AND_ROADMAP.md
 §4.3: "the ESP32-CAM films, the Pi analyzes") through this server's own
-authenticated `/video` endpoint, instead of exposing the ESP32-CAM
-directly and unauthenticated on the local network.
+authenticated `/video` endpoint, so that clients reaching Rover through
+this server (the control page, and anything outside the LAN via the
+Phase 6 VPN) need a valid token to see the feed.
+
+What this does NOT do, despite how it reads at first glance: it does not
+*prevent* direct access to the camera. The ESP32-CAM serves its stream
+unauthenticated on the local network (esp32-cam/src/main.cpp says so
+explicitly) and stays reachable at its own address whether or not this
+proxy exists -- anyone already on the WiFi can just open it. This
+endpoint adds authentication for everyone coming through the Pi; it is
+not a substitute for the camera having none of its own. Closing that
+gap means putting the camera on an isolated network segment, or adding
+a check to its firmware -- neither is done today.
 
 "Hardware optional" -- same principle used throughout this project
 (esp32/lib/sensors/I2CProbe.h is the equivalent idea on the firmware

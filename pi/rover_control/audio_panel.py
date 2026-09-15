@@ -87,9 +87,13 @@ class AudioPanel:
 
         cleaned = {k: v for k, v in new_data.items() if v not in (None, "")}
 
+        # Save FIRST, then swap the providers -- same reasoning as
+        # ai_panel.AIPanel.update: closing before a write that can fail
+        # would leave this panel holding closed STT/TTS sessions, dead
+        # until the process restarts.
+        save_credentials(cleaned, self._path)
         await self._stt.close()
         await self._tts.close()
-        save_credentials(cleaned, self._path)
         self._credentials = cleaned
         self._stt = create_stt_provider(cleaned)
         self._tts = create_tts_provider(cleaned)

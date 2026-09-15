@@ -155,6 +155,22 @@ et ouvrir `http://localhost:8080/`. Aucune différence de code entre les
 deux cas : `RoverLink` utilise `serial.serial_for_url()`, qui traite
 `/dev/ttyUSB0` et `rfc2217://...` de la même façon.
 
+### Pi déporté --- liaison WiFi (décidé le 2026-09-15)
+
+Depuis cette décision (`ARCHITECTURE_AND_ROADMAP.md` §6.2), le Pi n'est
+plus embarqué sur le robot et le Rover Protocol passe par une **socket
+TCP** au lieu du câble USB. C'est la même mécanique `serial_for_url()`
+que ci-dessus, donc **aucun changement de code côté Pi** --- seulement la
+valeur de `--port` (ou de `"port"` dans `config.json`) :
+
+```bash
+python -m rover_core.main --port socket://rover.local:3333
+```
+
+⚠ **Côté ESP32, ce n'est pas encore implémenté** (le firmware écoute
+toujours sur `Serial`). Voir le chantier « Pi déporté » dans
+`PROGRESS.md` pour l'ordre des étapes.
+
 ## Vidéo
 
 La caméra n'est **pas** locale au Pi --- c'est un module **ESP32-CAM**

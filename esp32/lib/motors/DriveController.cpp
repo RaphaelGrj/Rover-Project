@@ -63,11 +63,19 @@ void DriveController::update() {
     float dtSeconds = (now - _lastUpdateMs) / 1000.0f;
     _lastUpdateMs = now;
 
+    // Local obstacle reflex: applied here rather than in setTarget() so
+    // it also holds for a target that was set BEFORE the obstacle
+    // appeared, and for a stale target left behind by a dropped link.
+    // Forward only -- reversing away and turning in place stay
+    // available. See setForwardBlocked() for the full reasoning.
+    float velocity = _targetVelocity;
+    if (_forwardBlocked && velocity > 0.0f) velocity = 0.0f;
+
     // Unicycle model: linear velocity + rotation -> per-wheel target speed
     // (ARCHITECTURE_AND_ROADMAP.md section 12).
     float halfTrack = ROVER_WHEEL_BASE_M / 2.0f;
-    float targetLeft = _targetVelocity - _targetRotation * halfTrack;
-    float targetRight = _targetVelocity + _targetRotation * halfTrack;
+    float targetLeft = velocity - _targetRotation * halfTrack;
+    float targetRight = velocity + _targetRotation * halfTrack;
 
     // Bring-up finding (2026-09-02): both wheels settle into a stable,
     // reproducible runaway (large negative measured speed while PID
@@ -86,6 +94,11 @@ void DriveController::update() {
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
-    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d",
-             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight);
+    // forward_blocked is reported, not just acted on: without it, the
+    // local obstacle reflex (setForwardBlocked) looks from the Pi like
+    // "the robot ignores my MOVE" with no way to tell it apart from a
+    // dead motor, a saturated PID or a lost link -- and the Pi is now
+    // deported, so nobody can watch the robot while reading the logs.
+    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d forward_blocked=%d",
+             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight, _forwardBlocked ? 1 : 0);
 }

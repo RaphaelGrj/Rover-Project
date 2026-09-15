@@ -128,6 +128,14 @@ Assistant ou la logique métier principale.
 
 ## 4.1 Raspberry Pi 3B+
 
+> ⚠ **« De bord » n'est plus littéral depuis le 2026-09-15** : le Pi
+> n'est plus embarqué sur le châssis, c'est une machine du réseau local
+> (§6.2). Ses responsabilités ci-dessous sont **inchangées** --- seul son
+> emplacement physique et le transport du Rover Protocol changent.
+> Corollaire : « le Pi » peut désormais être n'importe quelle machine du
+> LAN, ce qui ouvre la Phase 8 (Vision) et un LLM local, hors de portée
+> d'un 3B+.
+
 Le Raspberry Pi est l'ordinateur de bord.
 
 Responsabilités :
@@ -251,7 +259,13 @@ composant.
 
 # 6. Communication Raspberry Pi ↔ ESP32
 
-## 6.1 Technologie retenue
+> ⚠ **Mise à jour (2026-09-15)** : le Raspberry Pi n'est plus embarqué
+> sur le robot (voir §6.2). Le transport physique décrit en §6.1 est
+> **remplacé par une socket TCP sur le WiFi** ; le raisonnement de §6.1
+> (pourquoi un flux d'octets orienté message plutôt qu'I2C) reste
+> valable et explique pourquoi la bascule coûte si peu.
+
+## 6.1 Technologie retenue (transport historique : UART)
 
 La communication principale cible est :
 
@@ -276,6 +290,359 @@ Raspberry Pi
      ▼
  ESP32
 ```
+
+------------------------------------------------------------------------
+
+## 6.2 Raspberry Pi déporté --- décision (2026-09-15)
+
+**Le Raspberry Pi quitte le châssis.** Il devient une machine du réseau
+local, et la liaison Rover Protocol passe du câble USB à une **socket
+TCP sur le WiFi**.
+
+Le robot embarque désormais : ESP32 WROOM + ESP32-CAM + batterie.
+Rien d'autre.
+
+### 1. Qui possède cette fonctionnalité ?
+
+Inchangé --- et c'est le point clé de cette décision. La règle d'or
+(§3) ne bouge pas d'un pouce : le Pi décide **quoi**, l'ESP32 décide
+**comment**. Seul le *transport* entre les deux change. Aucune
+responsabilité ne migre d'un côté à l'autre.
+
+### 2. Pourquoi ?
+
+Trois raisons, par ordre d'importance réelle :
+
+-   **Encombrement et batterie.** Le Pi 3B+ pèse ~7,5 W sur un budget
+    de ~32 W en pic (§19, `BOM.md`). Mais ce pic correspond aux moteurs
+    à fond : **au repos ou en déplacement lent, le Pi est de loin le
+    premier consommateur**. Le gain d'autonomie en usage réel dépasse
+    donc largement les 23 % du pic. On supprime au passage le
+    convertisseur buck 5V/3A dédié au Pi, son volume, son câblage --- et
+    le risque de brownout/corruption de carte SD qui avait justement
+    imposé de séparer les rails (§19).
+-   **Le Pi n'a plus besoin d'être un Pi.** Une fois sur le réseau, le
+    cerveau peut être n'importe quelle machine du LAN. La Phase 8
+    (Vision) et un LLM local, irréalistes sur un 3B+, redeviennent
+    envisageables. À terme c'est probablement le gain principal, devant
+    la batterie.
+-   **Ça débloque les broches du micro.** Voir question 7 ci-dessous ---
+    résultat inattendu, mais décisif.
+
+### 3. Quel message est nécessaire ?
+
+**Aucun nouveau message.** Le Rover Protocol V1 est inchangé : mêmes
+trames, même checksum, même séquence de démarrage. C'est un changement
+de couche physique, pas de protocole (`ROVER_PROTOCOL.md` §2).
+
+La bascule est peu coûteuse parce que les deux extrémités étaient déjà
+abstraites --- sans que ç'ait été prévu pour ça :
+
+-   **Côté Pi** : `pi/rover_esp32/link.py` utilise
+    `serial.serial_for_url()`, qui accepte `socket://host:port` aussi
+    bien que `/dev/ttyUSB0`. Le changement est une ligne de
+    configuration, pas de code.
+-   **Côté ESP32** : `RoverProtocol` prend un `Stream&`
+    (`esp32/lib/communication/RoverProtocol.h`), pas un
+    `HardwareSerial&`. Un `WiFiClient` *est* un `Stream`.
+
+Le WiFi lui-même n'est pas une nouveauté sur l'ESP32 principal : il est
+déjà provisionné et validé sur matériel réel pour l'OTA
+(`esp32/lib/network/`, `esp32/lib/ota/`).
+
+### 4. Que se passe-t-il si la communication est interrompue ?
+
+**C'est la vraie difficulté de cette décision, et elle mérite d'être
+nommée franchement.** Sur USB, une coupure est un événement rare et
+franc. Sur WiFi, les micro-coupures sont *normales* : gigue, économie
+d'énergie radio, itinérance entre points d'accès, congestion.
+
+Le timeout heartbeat de **500 ms** (§9) était calibré pour un câble.
+Appliqué tel quel au WiFi, il couperait les moteurs en permanence : le
+robot avancerait par à-coups. Allonger bêtement le délai n'est pas une
+réponse acceptable --- ça dégraderait la sécurité.
+
+La réponse retenue est une **dégradation graduée** plutôt qu'un
+basculement binaire, détaillée en §9.
+
+### 5. Quel est le comportement SAFE ?
+
+Inchangé dans son principe (moteurs à zéro, état `SAFE`), mais il faut
+**remonter l'autonomie de l'ESP32 d'un cran**, puisque le lien devient
+moins fiable :
+
+-   Les réflexes d'obstacle sont **locaux** à l'ESP32.
+    ⚠ **Correction du 2026-09-15 (revue de code)** : la première version
+    de cette section affirmait que c'était déjà le cas « parce que les
+    VL53L0X sont du côté ESP32 ». **C'était faux.** Les *capteurs*
+    étaient côté ESP32, mais le *réflexe* ne l'était pas : le firmware
+    se contentait d'émettre `EVENT name=obstacle_detected`, et le seul
+    blocage réel vivait côté Pi (`rover_core/core.py`, `move()`).
+    Autrement dit, l'argument de sécurité central de cette décision
+    reposait sur quelque chose qui n'existait pas --- et avec le Pi
+    déporté, le réflexe aurait traversé le WiFi pour empêcher le robot
+    de percuter un obstacle.
+    Corrigé le jour même : `DriveController::setForwardBlocked()`,
+    appliqué dans `update()` (donc aussi à une commande *périmée*, pas
+    seulement à un nouveau `MOVE`), câblé sur
+    `SensorHub::obstacleDetected()` dans `main.cpp`. Bloque la marche
+    **avant uniquement** --- reculer et tourner sur place restent
+    possibles, exactement la même sémantique que le clamp du Pi, qui est
+    **conservé** : deux couches indépendantes, aucune porteuse à elle
+    seule. Inerte tant qu'aucun ToF n'est sain, donc un capteur absent
+    ne peut pas immobiliser le robot.
+    ⚠ **Jamais exécuté sur matériel** : les VL53L0X ne sont pas câblés
+    (voir `PROGRESS.md`), donc ce chemin n'a pour l'instant été validé
+    que par compilation et relecture.
+-   Une commande `MOVE` doit être réinterprétée comme *« avance à
+    vitesse X pendant **au plus** N ms »* au lieu de *« avance jusqu'à
+    nouvel ordre »*. Ainsi, une perte de lien ne laisse jamais le robot
+    en mouvement libre : l'ordre expire tout seul, même si l'ESP32
+    n'avait pas encore détecté le timeout.
+-   `WiFi.setSleep(false)` devient obligatoire : l'économie d'énergie
+    radio de l'ESP32 ajoute une latence très irrégulière, incompatible
+    avec un heartbeat serré.
+
+### 5 bis. Qui a le droit de piloter ? (bloquant, ajouté le 2026-09-15)
+
+Question absente de la première version de cette section, relevée à la
+revue de code. Elle est **bloquante pour l'étape 1 du chantier**.
+
+Tant que le lien était un **câble USB**, l'authentification était
+physique : pour envoyer un `MOVE`, il fallait être dans la pièce, une
+main sur le robot. Ce n'était écrit nulle part parce que personne
+n'avait besoin de l'écrire.
+
+En passant sur une socket TCP, **cette protection disparaît entièrement,
+et rien ne la remplace** : le Rover Protocol n'a aucune notion
+d'identité. Un `WiFiServer` qui accepte la première connexion venue
+donne à **n'importe qui sur le réseau WiFi** le contrôle complet des
+moteurs, des servos et du mode SAFE --- sans mot de passe, sans trace.
+
+Le contraste est net avec le reste du projet, par ailleurs rigoureux
+là-dessus : le serveur de contrôle exige un token
+(`rover_control/auth.py`, comparaison à temps constant, aucun défaut
+codé en dur) et l'OTA refuse de démarrer sans mot de passe (`RoverOTA.h`
+: « no unauthenticated flashing by anyone on the LAN »). Le lien de
+commande serait le **seul** canal ouvert --- et le plus dangereux des
+trois, puisque c'est celui qui fait bouger le robot.
+
+**Exigence retenue** : l'ESP32 ne doit pas quitter l'état `READY` sur
+une connexion réseau tant qu'un secret partagé n'a pas été présenté.
+
+-   Stockage du secret : NVS via `WifiCredentialsStore`, à côté du mot
+    de passe OTA --- même mécanisme, même portail de provisioning, rien
+    de nouveau à inventer et jamais commité dans le dépôt.
+-   Forme : une première trame obligatoire du Pi après connexion ; toute
+    autre trame reçue avant est rejetée (`ERROR code=unauthenticated`)
+    et la connexion fermée.
+-   Comparaison à temps constant, comme `auth.py` le fait déjà côté Pi.
+-   Une seule connexion active à la fois : une seconde est refusée plutôt
+    que de laisser deux pilotes se disputer les moteurs.
+
+⚠ **Rien de cela n'est implémenté.** C'est la raison pour laquelle le
+câble USB ne doit pas être débranché avant que ce point soit traité :
+aujourd'hui, le lien filaire *est* l'authentification.
+
+### 5 ter. À qui appartient la connexion WiFi ? (dette à solder)
+
+Autre constat de la revue : aujourd'hui, la seule chose qui connecte
+l'ESP32 au réseau est `RoverOTA::begin()` --- un module dont le contrat
+explicite est d'être *optionnel*, « entirely inert unless a developer
+deliberately configures credentials ».
+
+Faire passer le Rover Protocol par le WiFi rendrait donc **le lien de
+commande dépendant d'un module de maintenance facultatif**, ce qui
+contredit §4.2 (« l'ESP32 doit rester fonctionnel ») et la hiérarchie de
+§22. Deux symptômes concrets déjà présents :
+
+-   `RoverOTA::begin()` ne tente la connexion **qu'une fois, au boot**.
+    Aucune reconnexion explicite (on dépend du `setAutoReconnect` par
+    défaut du core ESP32, jamais affirmé dans le code).
+-   `SYSTEM action=wifi_setup` bascule la radio en mode AP --- **la
+    commande arrive donc par le lien qu'elle s'apprête à couper**, et le
+    Pi ne peut plus rien envoyer jusqu'à la fin du portail.
+    *(Le cas le plus grave --- `stop()` laissait la radio en `WIFI_OFF`
+    sans jamais la rallumer, verrouillage dur jusqu'au reboot --- a été
+    corrigé le 2026-09-15 : retour en `WIFI_STA` + `reconnect()`.)*
+
+**À faire avant l'étape 1** : extraire la gestion de la connexion WiFi
+de `RoverOTA` vers un module autonome et toujours actif, dont l'OTA et
+le Rover Protocol deviennent tous deux de simples clients.
+
+### 6. Comment tester la fonctionnalité sans le reste du robot ?
+
+Le point fort de cette bascule : la testabilité ne régresse pas.
+
+-   `serial_for_url()` accepte déjà `socket://` --- les tests Pi
+    existants tournent contre une socket locale sans aucun ESP32.
+-   Le firmware reste testable hors matériel via `pio test -e native`
+    (`RoverProtocol` ne dépend d'aucun périphérique).
+-   La liaison WiFi doit être éprouvée **avant** toute modification
+    mécanique : mesurer la gigue et le taux de perte en conditions
+    réelles (robot en mouvement, à distance du point d'accès) décide du
+    réglage final des seuils de §9.
+
+### 7. Est-ce compatible avec l'architecture actuelle ?
+
+Oui, et l'ESP32-CAM en est la preuve : il est déporté en WiFi depuis le
+2026-09-06 (§4.3) et le Pi récupère déjà son flux par le réseau. Le
+modèle « périphérique sur le LAN plutôt qu'au bout d'un câble » est
+donc déjà en service et validé dans ce projet.
+
+Deux conséquences matérielles méritent d'être notées :
+
+**Le paradoxe des broches.** `esp32/WIRING.md` constate qu'il ne reste
+*aucun* GPIO libre sur le WROOM : 24 broches utilisables sur 26 sont
+attribuées, et les deux dernières (`GPIO1`/`GPIO3`) sont réservées à
+l'UART0 --- c'est-à-dire **au câble USB vers le Pi**. Déporter le Pi est
+donc précisément ce qui libère les broches dont le micro a besoin, alors
+que le micro est justement le composant qui n'avait nulle part où aller
+(`BOM.md`, « Micro/haut-parleur --- non décidé »). Voir §17.3.
+
+**Le robot devient strictement dépendant du réseau.** Plus de WiFi =
+plus de cerveau du tout. Les fournisseurs STT/TTS/IA retenus sont de
+toute façon en ligne (§17.1, §17.2), donc la perte de *l'intelligence*
+hors réseau est assumée.
+
+⚠ **Mais la perte du *pilotage* ne l'est pas** --- révision du
+2026-09-15, à la demande de l'utilisateur : Rover doit **rester
+pilotable hors connexion et sans Pi**. Voir §6.3, qui rattrape
+précisément ce point.
+
+### Carte choisie
+
+**ESP32 WROOM, décision confirmée le 2026-09-15.** Un ESP32-S3 est
+disponible mais volontairement gardé de côté : l'objectif est de
+terminer le projet sur le WROOM. Mesures réelles à l'appui (compilation
+du firmware au 2026-09-15) :
+
+``` text
+RAM:   16.2 %  (53 144 / 327 680 octets)
+Flash: 71.0 %  (930 353 / 1 310 720 octets)  -- déjà en partition OTA double
+```
+
+La ressource tendue est la **flash** (~380 Ko libres), pas la RAM
+(~274 Ko libres au link, moins ~40-60 Ko pris par la pile WiFi une fois
+connectée). Le S3 (PSRAM) resterait utile pour une étape ultérieure ---
+détection de mot-clé embarquée, assistance vision locale --- mais aucune
+de ces fonctions n'est nécessaire au périmètre « Pi déporté + voix ».
+
+Côté CPU, aucune action requise : le WROOM est bi-cœur, WiFi/LwIP
+tourne sur le cœur 0 et la boucle Arduino (PID, encodeurs, interruptions
+d'encodeur) sur le cœur 1 par défaut. `esp32/src/main.cpp` n'épingle
+aucune tâche manuellement --- c'est déjà la bonne configuration, à ne
+pas « corriger » par inadvertance.
+
+------------------------------------------------------------------------
+
+## 6.3 Pilotage autonome --- sans Pi et sans réseau (2026-09-15)
+
+**Exigence** : quoi qu'il arrive au Pi ou au réseau, Rover doit rester
+pilotable par quelqu'un qui se tient à côté de lui.
+
+C'est le plancher sous la décision §6.2. Déporter le Pi rendait le robot
+dépendant de **deux** choses à la fois --- un réseau qui marche *et* un
+Pi joignable. Une coupure WiFi, un Pi resté éteint, ou simplement
+emporter Rover quelque part sans infrastructure : dans les trois cas le
+robot devenait inerte. §6.3 supprime ce mode de défaillance.
+
+**Solution** : l'ESP32 ouvre **son propre point d'accès WPA2** et sert
+une petite page joystick (`esp32/lib/network/StandaloneControl.h`). Un
+téléphone se connecte directement au robot. Aucun Pi, aucun réseau,
+aucune box, aucun Internet.
+
+### Est-ce que ça viole la §22 ?
+
+La question se pose sérieusement, puisque §22 interdit à l'ESP32 la
+logique métier. **Non**, et la distinction est nette :
+
+-   §22 interdit à l'ESP32 de décider **QUOI faire** --- IA, navigation,
+    Home Assistant, boucle de décision.
+-   Ici, la décision vient d'un **pouce humain sur un écran**. L'ESP32
+    fait exactement ce qu'il fait déjà d'une trame `MOVE` venue du Pi :
+    du **COMMENT**. La page est une *source de commandes*
+    supplémentaire, pas un nouveau décideur.
+
+Rien dans ce module ne planifie, ne choisit ni ne mémorise quoi que ce
+soit. C'est de la téléopération directe.
+
+### Sécurité : réutiliser, jamais dupliquer
+
+C'est le principe de conception central, et la raison pour laquelle les
+commandes de la page passent par **les mêmes gestionnaires** que celles
+du Pi plutôt que de toucher les moteurs directement. Ce module ne
+contient **aucune logique de sécurité propre** :
+
+-   le navigateur alimente le **même** `HeartbeatMonitor` que le Pi ---
+    donc fermer l'onglet ou sortir de portée arrête les moteurs via le
+    timeout existant, sans second chemin de code qui pourrait diverger ;
+-   l'E-stop est vérifié indépendamment dans `loop()` et prime toujours ;
+-   le réflexe d'obstacle local (§6.2 question 5) s'applique tel quel ;
+-   entrer dans ce mode **ne réarme pas les moteurs** : le robot est en
+    `SAFE` en y arrivant (c'est en général pourquoi il y arrive), et
+    seule une pression explicite sur « Activer » appelle le resume.
+
+Une seule divergence assumée : « Activer » accepte aussi l'état `READY`,
+que le resume du Pi refuse. Sans ça, un robot allumé sans Pi resterait
+en `READY` à vie et le mode serait inutilisable dans le cas même pour
+lequel il existe.
+
+### Contrôle d'accès : WPA2 obligatoire
+
+L'AP est en **WPA2 et le mode refuse de démarrer sans mot de passe
+stocké** --- posture calquée sur celle de `RoverOTA` (« no
+unauthenticated flashing by anyone on the LAN »). Un AP ouvert serait
+ici strictement pire que dans le cas OTA : il ne flashe pas un firmware,
+il **déplace un robot physique**.
+
+C'est le choix **inverse** de celui de `RoverWifiProvisioning`, dont le
+portail est délibérément ouvert --- et la différence se justifie : ce
+portail ne fait que *collecter* des identifiants pendant quelques
+minutes et ne bouge rien, celui-ci fait rouler le robot.
+
+Le mot de passe est distinct de celui de l'OTA (`solo_pass` en NVS,
+collecté par le portail existant) : conduire le robot et remplacer son
+firmware n'ont pas la même portée, un opérateur doit pouvoir confier
+l'un sans l'autre.
+
+### Déclenchement
+
+-   **Automatique** après `ROVER_STANDALONE_FALLBACK_MS` (30 s) sans
+    trame valide du Pi. Couvre les deux cas : « le lien est mort » *et*
+    « il n'y a pas de Pi du tout » (avant la première trame, le compteur
+    mesure depuis le boot --- voulu, c'est le cas d'usage principal).
+-   **Manuel** via `SYSTEM action=standalone` / `standalone_off`.
+-   **Jamais** pendant que le portail de provisioning est actif : les
+    deux veulent la radio en mode AP et le port 80, et le provisioning
+    est une action opérateur explicite qu'une bascule automatique ne doit
+    pas interrompre.
+
+⚠ Piège de conception évité à l'écriture : la page alimentant elle-même
+le heartbeat, utiliser ce dernier pour décider « le Pi est revenu »
+serait **circulaire** --- le robot conclurait sans cesse au retour du Pi
+et couperait l'AP sous les pieds du pilote. `main.cpp` suit donc
+`lastPiFrameMs` séparément, et ne referme l'AP que si personne n'est en
+train de piloter (`isBeingUsed()`).
+
+### Coût mesuré
+
++8 Ko de flash (71,0 % → 71,6 % sur WROOM), +400 octets de RAM ---
+modeste parce que `WebServer` était déjà lié par le portail de
+provisioning. La page est servie depuis la flash (`PROGMEM`), jamais
+construite en RAM.
+
+⚠ **Jamais exécuté sur matériel réel** : validé par compilation
+(WROOM et S3) et relecture uniquement.
+
+### Améliorations possibles
+
+-   Afficher le SSID/mot de passe sur l'écran ST7789 au démarrage du
+    mode : seul quelqu'un physiquement présent le verrait, ce qui
+    supprimerait l'étape de configuration préalable sans ouvrir l'AP.
+-   Entrée par appui long sur le bouton E-stop (pas de GPIO libre à
+    trouver, et le bouton met déjà le robot en `SAFE` avant) --- à
+    envisager une fois ce bouton réellement câblé.
 
 ------------------------------------------------------------------------
 
@@ -459,6 +826,47 @@ Valeur initiale recommandée pour les essais :
 **500 ms**
 
 Cette valeur pourra être ajustée après tests.
+
+### Dégradation graduée --- requis par le Pi déporté (2026-09-15)
+
+Les 500 ms ci-dessus ont été calibrées pour un **câble USB**, où une
+coupure est un événement rare et franc. Depuis que le Pi est déporté
+(§6.2), le lien est une socket WiFi : les micro-coupures y sont
+*normales*. Un seuil unique à 500 ms ferait avancer le robot par
+à-coups, et l'allonger bêtement dégraderait la sécurité.
+
+Le seuil unique est donc remplacé par **trois paliers** :
+
+``` text
+< 500 ms      NOMINAL    -- rien à signaler
+500 ms        DEGRADED   -- vitesse plafonnée (~30 %), EVENT link_degraded
+~1500 ms      TIMEOUT    -- STOP MOTORS -> SAFE (comportement historique)
+```
+
+Raison du palier intermédiaire : une gigue WiFi passagère ne doit pas
+provoquer un arrêt complet, mais elle ne doit pas non plus passer
+inaperçue. Ralentir laisse au lien le temps de se rétablir tout en
+réduisant l'énergie cinétique --- donc les dégâts possibles --- pendant
+la fenêtre d'incertitude.
+
+Cette dégradation ne remplace pas les protections locales, elle s'y
+ajoute :
+
+-   les réflexes d'obstacle (VL53L0X) restent **entièrement locaux** à
+    l'ESP32 et ne dépendent à aucun moment du lien ;
+-   toute commande `MOVE` porte sa propre échéance (« vitesse X pendant
+    au plus N ms »), de sorte qu'un ordre expire seul même si le timeout
+    n'a pas encore été détecté ;
+-   `WiFi.setSleep(false)` est obligatoire --- l'économie d'énergie
+    radio introduit une latence trop irrégulière pour un heartbeat
+    serré.
+
+⚠ **Valeurs à confirmer par la mesure.** Les 500 ms / 1500 ms ci-dessus
+sont un point de départ raisonné, pas un résultat : le réglage
+définitif doit venir d'une mesure de gigue et de taux de perte en
+conditions réelles (robot en mouvement, à distance du point d'accès).
+Tant que cette mesure n'a pas été faite, ces chiffres sont des
+hypothèses.
 
 ### Important
 
@@ -1027,6 +1435,68 @@ attendre le micro/haut-parleur du robot.
 
 ------------------------------------------------------------------------
 
+## 17.3 Conséquence du Pi déporté : l'audio doit traverser le réseau
+
+Décision du 2026-09-15 (§6.2). C'est **le seul sous-système réellement
+pénalisé** par le déport du Pi, et il mérite d'être traité à part.
+
+Le problème : l'ampli MAX98357A est câblé sur l'**ESP32** (I2S,
+`AIDE_CABLAGE.md`), le micro y sera également (voir ci-dessous), mais le
+STT/TTS vit sur le **Pi**, désormais à l'autre bout du WiFi. L'audio doit
+donc traverser le réseau dans les deux sens --- et le Rover Protocol,
+orienté ligne ASCII avec checksum, n'est pas fait pour ça. Il faut un
+**canal séparé**, distinct du lien de commande.
+
+### Contrainte dimensionnante : streamer, pas bufferiser
+
+À 16 kHz mono 16 bits, l'audio pèse 32 Ko/s. Sur un WROOM (~274 Ko de
+RAM libre au link, moins ~40-60 Ko pris par la pile WiFi) :
+
+| Approche | RAM nécessaire | Verdict WROOM |
+|---|---|---|
+| Bufferiser un énoncé complet de 5 s | ~160 Ko (+33 % si base64) | Passe, mais fragile |
+| Streamer au fil de la capture (DMA I2S → TCP) | ~8-16 Ko | Confortable |
+
+**Le streaming n'est pas une optimisation, c'est la condition qui rend
+le WROOM viable.** En mode flux, la RAM cesse d'être un sujet.
+
+### Ce que ça impose côté Pi
+
+`POST /audio/converse` (§17.2, `pi/rover_control/voice_panel.py`) fait
+déjà conceptuellement le bon travail --- « audio en entrée → audio en
+sortie en un appel » --- mais il renvoie l'audio en **base64**. Ce choix
+était délibéré et reste le bon pour le navigateur (robustesse des
+accents français, voir `PROGRESS.md` 2026-09-11) ; il est en revanche
+inadapté à un client ESP32, puisqu'il oblige à bufferiser toute la
+réponse avant de pouvoir en jouer la moindre milliseconde.
+
+Il faudra donc une **variante binaire/streaming** de cette route pour le
+client embarqué, sans toucher à la route existante que le panneau web
+utilise. C'est du Python, sans difficulté particulière --- mais c'est du
+travail à prévoir, pas un détail d'implémentation.
+
+### Micro : la broche est enfin disponible
+
+Le micro (`BOM.md`, resté « non décidé » jusqu'ici) n'avait nulle part
+où aller : plus aucun GPIO libre sur le WROOM. Le déport du Pi libère
+`GPIO1`/`GPIO3` (ex-UART0 vers le Pi) et résout le problème.
+
+Un micro I2S type INMP441 peut **partager BCLK (`GPIO16`) et WS
+(`GPIO17`) avec l'ampli** en mode full-duplex sur I2S0 : il ne réclame
+donc qu'**une seule broche supplémentaire** pour sa sortie data.
+`GPIO3` (RX) est le bon candidat --- c'est une entrée, et contrairement à
+`GPIO1`/TX elle n'émet pas le log de boot.
+
+⚠ **Coût à assumer** : occuper `GPIO3` revient à perdre la console série
+USB. Le scénario qui pique est identifié --- *si le WiFi tombe, on perd
+le pilotage **et** le moyen de déboguer en même temps*. Mitigation
+retenue avec l'utilisateur le 2026-09-15 : un **cavalier (jumper)** sur
+la piste du micro, à retirer pour flasher ou déboguer en filaire, avec
+la CAO adaptée pour le rendre accessible sans démonter le robot. Détail
+dans `esp32/WIRING.md`.
+
+------------------------------------------------------------------------
+
 # 18. Home Assistant
 
 Home Assistant est une couche externe.
@@ -1088,6 +1558,21 @@ Le Pi peut alors prendre des décisions :
 
 Mais les protections électriques matérielles doivent rester
 indépendantes du logiciel.
+
+**Révision du budget (2026-09-15)** : le Pi déporté (§6.2) sort du
+budget de puissance embarqué. Le pic passe de ~32 W à **~24,5 W**
+(~3,3 A côté pack à 7,4 V au lieu de ~4,3 A). Surtout, le gain réel est
+bien supérieur à ces 23 % : le pic correspond aux moteurs à fond, alors
+qu'**au repos ou en déplacement lent le Pi était le premier
+consommateur**. Conséquences matérielles :
+
+-   le **convertisseur buck 5V/3A dédié au Pi** (`BOM.md`) n'est plus
+    nécessaire --- une carte, du volume et du câblage en moins ;
+-   le risque de **brownout/corruption de carte SD** qui avait imposé de
+    séparer les rails disparaît complètement, puisqu'il n'y a plus ni
+    Pi ni carte SD à bord ;
+-   le rail 5V restant (servos + ESP32 + ampli audio) reste dimensionné
+    à l'identique.
 
 **État (2026-08-31)** : `STATE battery=...` et `EVENT name=low_battery`
 sont implémentés côté ESP32 (`esp32/lib/power/BatteryMonitor.h`), mais
@@ -1184,6 +1669,27 @@ STOP
  ↓
 SAFE
 ```
+
+### Lien WiFi perdu (depuis le Pi déporté, 2026-09-15)
+
+Distinct du cas ci-dessus : le Pi va parfaitement bien, c'est le
+**réseau** qui lâche. Depuis §6.2 c'est devenu le mode de défaillance le
+plus probable, alors qu'il était négligeable à l'époque du câble USB.
+
+``` text
+WiFi ❌
+ ↓
+ralentissement (~30 %)     -- palier DEGRADED, §9
+ ↓  (si ça persiste)
+STOP -> SAFE
+ ↓
+l'ESP32 continue seul : réflexes d'obstacle, E-stop, écran
+```
+
+L'ESP32 reste pleinement fonctionnel sans Pi --- c'est déjà la règle
+(§4.2), elle devient simplement beaucoup plus sollicitée. Il tente sa
+reconnexion en continu et reprend au vol dès que le Pi est de nouveau
+joignable, sans redémarrage.
 
 ### Capteur ToF HS
 

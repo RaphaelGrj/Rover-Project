@@ -240,20 +240,41 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
     core: "RoverCore" = request.app["core"]
 
+    # Frames are queued and drained by one dedicated task rather than
+    # spawning a task per frame. Two reasons, both real:
+    #  - asyncio only holds a weak reference to a bare create_task()
+    #    result, so a task nobody keeps a reference to can be garbage
+    #    collected mid-flight and silently never deliver its frame;
+    #  - N concurrent send tasks have no defined completion order, so
+    #    telemetry could reach the browser out of order -- which for a
+    #    distance/state feed means showing a stale reading as current.
+    # maxsize bounds memory if a client stops reading (a phone that went
+    # to sleep, say): the oldest frames are dropped instead of growing
+    # the queue without limit. Dropping telemetry is safe -- every STATE
+    # field is re-sent periodically by the ESP32.
+    outgoing: asyncio.Queue[dict] = asyncio.Queue(maxsize=256)
+
     def on_esp32_frame(frame_type: str, fields: dict[str, str]) -> None:
         # RoverCore calls this synchronously from within the same loop
         # (see core._handle_frame), so we're already on the right event
-        # loop here -- just can't await directly from a plain callback,
-        # hence scheduling the actual send as its own task. A client
-        # that closed between frames makes send_json raise; that's
-        # expected and not worth logging.
-        async def _send() -> None:
-            try:
-                await ws.send_json({"type": frame_type, **fields})
-            except ConnectionResetError:
-                pass
+        # loop -- but we still can't await from a plain callback.
+        try:
+            outgoing.put_nowait({"type": frame_type, **fields})
+        except asyncio.QueueFull:
+            logger.warning("control client too slow, dropping a %s frame", frame_type)
 
-        asyncio.create_task(_send())
+    async def _pump() -> None:
+        while True:
+            message = await outgoing.get()
+            try:
+                await ws.send_json(message)
+            except (ConnectionResetError, RuntimeError):
+                # Client closed between frames -- expected, and the
+                # `async for` loop below is what actually notices and
+                # tears the connection down.
+                return
+
+    pump_task = asyncio.create_task(_pump())
 
     core.add_listener(on_esp32_frame)
     logger.info("control client connected (%s)", request.remote)
@@ -299,6 +320,11 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     core.look(head_pitch, head_yaw)
     finally:
         core.remove_listener(on_esp32_frame)
+        # Removed from the listener set first, so nothing can enqueue
+        # after this point, then the pump is cancelled -- otherwise a
+        # frame arriving during teardown would sit in a queue nobody
+        # drains.
+        pump_task.cancel()
         logger.info("control client disconnected (%s)", request.remote)
         await core.client_disconnected()
 

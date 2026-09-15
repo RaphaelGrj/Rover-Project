@@ -79,10 +79,34 @@ bool init_camera() {
     return true;
 }
 
+// A stream handler runs on one of httpd's small pool of worker tasks
+// and holds it for as long as it stays inside this function. So every
+// failure path here MUST be able to return: an unbounded retry loop
+// does not just fail this one request, it permanently consumes a worker
+// and eventually wedges the whole server for every future client.
+constexpr int MAX_CONSECUTIVE_CAPTURE_FAILURES = 10;
+
 esp_err_t stream_handler(httpd_req_t *req) {
     static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=roverframe";
     static const char *STREAM_BOUNDARY = "\r\n--roverframe\r\n";
     static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
+    // Refuse up front rather than entering the loop below to discover it
+    // frame by frame: with the camera never initialized, esp_camera_fb_get()
+    // can only ever fail.
+    if (!camera_ready) {
+        Serial.println("ERROR stream_requested_but_camera_unavailable");
+        // Explicit status string rather than httpd_resp_send_err(): the
+        // httpd_err_code_t enum has no 503 entry. 503 is the right code
+        // here (temporarily unavailable, retry later) and it lines up
+        // with what the Pi already reports for a missing camera --
+        // pi/rover_control/camera.py turns any non-200 from us into its
+        // own 503.
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "camera unavailable", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
 
     esp_err_t res = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
     if (res != ESP_OK) {
@@ -90,6 +114,7 @@ esp_err_t stream_handler(httpd_req_t *req) {
     }
 
     char part_buf[64];
+    int consecutive_failures = 0;
     while (true) {
         camera_fb_t *fb = esp_camera_fb_get();
         if (!fb) {
@@ -98,9 +123,20 @@ esp_err_t stream_handler(httpd_req_t *req) {
             // camera (CLAUDE.md: "gère systématiquement les erreurs de
             // communication").
             Serial.println("ERROR camera_fb_get_failed");
+            if (++consecutive_failures >= MAX_CONSECUTIVE_CAPTURE_FAILURES) {
+                // Give up and free this worker task. Flagging the camera
+                // as not-ready hands recovery to loop(), which
+                // re-initializes it -- a transient glitch heals on the
+                // Pi's next request, a genuinely dead camera stops
+                // consuming a worker on every retry.
+                Serial.println("ERROR camera_giving_up_on_stream");
+                camera_ready = false;
+                return ESP_FAIL;
+            }
             delay(200);
             continue;
         }
+        consecutive_failures = 0;
 
         res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
         if (res == ESP_OK) {
@@ -197,6 +233,12 @@ void loop() {
     // reseated after power-up, for example) instead of leaving it
     // dead until a manual reset.
     if (!camera_ready) {
+        // Deinit before retrying: esp_camera_init() on a driver that is
+        // already partially initialized (a failed init, or the stream
+        // handler giving up on a wedged sensor) returns
+        // ESP_ERR_INVALID_STATE forever instead of actually retrying.
+        // Harmless when nothing was initialized.
+        esp_camera_deinit();
         camera_ready = init_camera();
     }
     delay(1000);

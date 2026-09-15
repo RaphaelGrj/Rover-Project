@@ -28,6 +28,21 @@ public:
     // command can't silently resume motion once ACTIVE again.
     void stop();
 
+    // Local obstacle reflex (ARCHITECTURE_AND_ROADMAP.md §6.2 question
+    // 5). Blocks FORWARD motion only: backing away and turning in place
+    // stay available, deliberately the same semantics as the Pi's own
+    // clamp in rover_core/core.py move() -- this is a safety clamp, not
+    // navigation, so the decision of what to do next still belongs to
+    // the Pi.
+    //
+    // Why this exists on the ESP32 at all, given the Pi already does it:
+    // since the Pi is deported over WiFi, a Pi-side-only reflex would
+    // have to cross a lossy link to stop the robot hitting something.
+    // Re-applied on every update(), not just on a new MOVE, so a *stale*
+    // command can't keep driving into an obstacle after the link drops.
+    void setForwardBlocked(bool blocked) { _forwardBlocked = blocked; }
+    bool forwardBlocked() const { return _forwardBlocked; }
+
     // Fills "left_speed=... right_speed=..." for a STATE frame.
     void buildTelemetryFields(char* out, size_t outLen) const;
 
@@ -65,6 +80,7 @@ private:
 
     float _targetVelocity = 0.0f;  // m/s
     float _targetRotation = 0.0f;  // rad/s
+    bool _forwardBlocked = false;  // see setForwardBlocked()
     float _measuredLeftMps = 0.0f;
     float _measuredRightMps = 0.0f;
     // Last PWM actually sent to each motor (motion_config.h: +/-255). Kept
