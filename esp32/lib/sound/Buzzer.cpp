@@ -13,6 +13,13 @@ constexpr Buzzer::Step ESTOP_STEPS[] = {{2500, 300}};
 }  // namespace
 
 void Buzzer::play(BuzzerSound sound) {
+    // Single gate for the whole class: with the buzzer disabled its pin
+    // belongs to the yaw servo (sound_config.h), and tone() on a pin
+    // driven by LEDC would fight the servo for the pad. Refusing here
+    // rather than at every call site keeps main.cpp free of
+    // "if (buzzer enabled)" noise -- play() simply becomes a no-op.
+    if (!ROVER_BUZZER_ENABLED) return;
+
     switch (sound) {
         case BuzzerSound::BOOT:
             _steps = BOOT_STEPS;

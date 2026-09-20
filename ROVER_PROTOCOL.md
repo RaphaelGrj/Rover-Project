@@ -92,6 +92,7 @@ EVENT          ESP32 → Raspberry Pi
 ERROR          ESP32 → Raspberry Pi
 ACK            ESP32 → Raspberry Pi
 HEARTBEAT      Raspberry Pi → ESP32
+AUTH           Raspberry Pi → ESP32
 ```
 
 ------------------------------------------------------------------------
@@ -125,6 +126,60 @@ ne reçoivent pas d'ACK.
 | `wifi_setup` | ouvre le portail de configuration WiFi/OTA (point d'accès temporaire `Rover-Setup-XXXX`, voir `esp32/OTA.md`) --- accessible depuis un PC ou un smartphone, se ferme seul après 10 min d'inactivité |
 | `wifi_status` | répond `STATE wifi_mode=...` : `setup` (portail ouvert), `wifi` avec `ip=...` (connecté au réseau, OTA pas encore configurée), `ota` avec `ip=...` (connecté, OTA active), ou `off` |
 | `wifi_forget` | efface le SSID/mot de passe WiFi enregistrés en NVS (garde le mot de passe OTA) |
+| `standalone` / `standalone_off` | entre/sort du pilotage autonome (point d'accès WPA2 + page joystick, §6.3 de l'architecture) |
+| `motor_raw` | **bring-up uniquement** : `SYSTEM action=motor_raw left=200 right=200 ms=2000` applique un rapport cyclique fixe directement au pont en H, **sans PID ni encodeur**, et s'arrête tout seul (15 s max). Indispensable pour diagnostiquer une roue immobile : la sortie du PID sature à 255 *parce que* rien ne tourne, donc un blocage mécanique, un driver mort et un encodeur inversé y sont indiscernables. Refusé hors de l'état `ACTIVE` |
+| `pintest` | **bring-up uniquement** : `SYSTEM action=pintest pin=13 level=1` force une broche (servos ou entrées moteur seulement) à un niveau logique continu, bien plus lisible au multimètre qu'un PWM. Réarme le PWM moteur après coup, `digitalWrite` détachant la broche du LEDC |
+| `head_origin` / `head_status` | `head_origin` fige les angles servo courants comme position de référence de la tête et les persiste en NVS ; tout angle logique est ensuite mesuré depuis là, ce qui rend un remontage de palonnier rattrapable sans reflasher. `head_status` renvoie `head_enabled=`, `head_a_att=`, `head_b_att=`, `head_a_deg=`, `head_b_deg=`, `head_org_a=`, `head_org_b=` |
+| `servo` | **bring-up uniquement** : `which=a\|b` pilote un servo en relâchant l'autre, `which=ab a= b=` les deux indépendamment, `which=pair angle=` les deux depuis l'origine, `which=off` relâche tout (aucune impulsion, aucun couple) |
+| `tof_status` / `tof_rescan` | diagnostic des deux VL53L0X : `tof_pre29=`/`tof_pre30=` (qui répondait avant la séquence), `tof_areset=` (remise à l'adresse d'usine), `tof_post29=`, `tof_lbegin=`/`tof_rbegin=` (init de chaque côté). `tof_rescan` rejoue la séquence d'abord --- utile après avoir rebranché un capteur, sans redémarrer. Les quatre causes possibles d'un `distance_left=9999` sont indiscernables autrement |
+| `net_status` | répond `STATE net=...` : santé du lien WiFi vue du robot --- `up` avec `ip=`, `rssi=` et `drops=` (nombre de coupures depuis le boot), `down` avec `drops=`, `suspended` (radio prêtée au portail ou au pilotage autonome) ou `unconfigured`. C'est l'instrument de mesure du lien avant le réglage des seuils de heartbeat (§6.2, étape 2) |
+
+------------------------------------------------------------------------
+
+## 5.2 AUTH --- authentification du lien (Pi → ESP32)
+
+```
+AUTH secret=<secret partagé> *xx
+```
+
+**Obligatoire sur un transport réseau, inutile sur le câble USB.**
+
+Tant que le lien était un câble, l'authentification était physique :
+pour envoyer un `MOVE`, il fallait être dans la pièce, une main sur le
+robot. Une socket TCP supprime cette protection sans rien mettre à la
+place --- n'importe qui sur le WiFi pilote alors les moteurs, sans mot
+de passe et sans trace. Voir `ARCHITECTURE_AND_ROADMAP.md` §6.2,
+question « 5 bis ».
+
+Règles :
+
+- L'ESP32 **rejette toute trame** reçue avant un `AUTH` valide, y
+  compris un `HEARTBEAT` --- sans quoi un pair non authentifié pourrait
+  maintenir le robot en `ACTIVE` sans jamais s'identifier.
+- Réponse en cas de succès : `STATE link=authenticated`. La trame
+  `AUTH` est consommée, jamais traitée comme une commande.
+- Réponse en cas d'échec : `ERROR code=unauthenticated` (secret faux ou
+  absent) ou `ERROR code=link_secret_not_set` (aucun secret enregistré
+  côté robot). Les deux codes sont distincts parce que le premier se
+  corrige côté Pi et le second côté robot.
+- **L'authentification vaut pour une connexion, jamais au-delà** : le
+  robot l'oublie à chaque coupure, donc le Pi la represente à chaque
+  reconnexion (`pi/rover_esp32/link.py`).
+- Comparaison à temps constant, longueur du secret comprise.
+- Secret stocké en NVS côté robot (saisi par le portail
+  `SYSTEM action=wifi_setup`), 8 à 47 caractères. Côté Pi, il vient de
+  la variable d'environnement `ROVER_LINK_SECRET`, **jamais de
+  `config.json`**.
+- **Pas de secret enregistré = tout est refusé** (jamais l'inverse),
+  comme l'OTA refuse de flasher sans mot de passe. Le robot reste
+  pilotable par le mode autonome (§6.3) et par USB.
+
+⚠ **Limite assumée** : le secret circule en clair dans la trame, protégé
+seulement par le chiffrement WPA2 du réseau. Cela protège de « qui
+peut joindre l'IP du robot », pas de « qui a déjà la clé WiFi et
+capture les paquets » --- même niveau que le mot de passe ArduinoOTA et
+que le token du serveur de contrôle. Un défi/réponse (nonce + HMAC)
+serait l'incrément suivant.
 
 ------------------------------------------------------------------------
 
@@ -204,6 +259,9 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `frame_too_long`       | trame reçue > 128 octets              |
 | `unknown_command`      | `TYPE` non reconnu                    |
 | `invalid_pid_gains`    | `SYSTEM action=set_pid` avec une valeur négative, NaN ou infinie |
+| `unauthenticated`      | trame reçue avant un `AUTH` valide sur un lien réseau, ou secret faux (§5.2) |
+| `link_secret_not_set`  | `AUTH` reçue mais aucun secret enregistré côté robot (§5.2) |
+| `tx_truncated`         | trame sortante trop longue, abandonnée plutôt qu'émise tronquée |
 
 ```
 ERROR code=motor_overcurrent *3D
@@ -239,8 +297,14 @@ SYSTEM protocol=ROVER_PROTOCOL_V1 board=<WROOM|S3> state=BOOT *xx
   ↓
 en attente du premier HEARTBEAT du Pi
   ↓
+(lien réseau uniquement : AUTH secret=... → STATE link=authenticated)
+  ↓
 READY → ACTIVE (dès réception d'un HEARTBEAT ou d'une COMMAND valide)
 ```
+
+Sur un transport réseau, l'étape `AUTH` est un préalable strict : aucune
+trame reçue avant elle ne fait quoi que ce soit, et le passage
+`READY → ACTIVE` ne peut donc pas avoir lieu (§5.2).
 
 Le Pi doit vérifier le champ `protocol=` avant d'envoyer des commandes
 et refuser de continuer si la version ne correspond pas à celle qu'il

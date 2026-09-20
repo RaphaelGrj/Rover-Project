@@ -1,5 +1,32 @@
 # ROVER --- État actuel (résumé de reprise)
 
+> # 🚨 OBJECTIF IMPÉRATIF DE LA PROCHAINE SESSION
+> # **ROVER DOIT SE DÉPLACER.**
+>
+> **C'est une obligation, pas un souhait.** Le déplacement traîne depuis
+> le 2026-09-01 --- sept sessions à diagnostiquer des moteurs qui ne
+> tournent pas, pendant que tout le reste du projet avance.
+>
+> **Ne rien entreprendre d'autre tant que ce n'est pas fait** : pas de
+> nouveau sous-système, pas de refactorisation, pas d'audio, pas de
+> caméra, pas de tête. Le premier test de la session est un test moteur,
+> et le dernier aussi.
+>
+> **Point de départ imposé, à froid, avant toute autre manipulation**
+> (détail dans « Prochaines étapes ») :
+> 1. Mesurer la **tension aux bornes d'un moteur pendant qu'il force** ---
+>    c'est la seule piste restante et elle n'a jamais été faite.
+> 2. Alimentation **≥ 3 A**, et vérifier qu'elle ne passe pas en
+>    limitation au démarrage.
+> 3. Tests **courts, espacés**, moteurs froids : ils se dégradent
+>    d'essai en essai quand on insiste (constaté le 2026-09-20).
+>
+> Ce qui est déjà prouvé et n'a pas à être refait : le firmware est
+> correct, le driver commute, les moteurs tournent, les encodeurs
+> comptent, la mécanique est libre. **Il ne reste qu'un problème
+> d'énergie disponible.**
+
+
 > Fichier de reprise rapide --- objectif : que je puisse me repérer sans
 > tout relire. Statut détaillé par phase : voir
 > `ARCHITECTURE_AND_ROADMAP.md`. Détail complet de chaque session
@@ -12,6 +39,245 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **MOTEURS : diagnostic complet, cause non trouvée (2026-09-20)** ---
+  la session a éliminé méthodiquement tout ce qui pouvait l'être, et le
+  blocage restant est un **problème d'énergie disponible**, pas de code.
+  - **Le firmware est hors de cause, prouvé.** Nouvel outil
+    `SYSTEM action=motor_raw left= right= ms=` : duty fixe envoyé
+    directement au pont en H, **sans PID ni encodeur**. Indispensable
+    parce que la sortie du PID ne peut pas diagnostiquer une roue
+    immobile --- elle sature à 255 *parce que* rien ne bouge, si bien
+    qu'un blocage mécanique, un driver mort et un encodeur mal câblé
+    produisent exactement la même télémétrie.
+  - **Ce qui fonctionne, mesuré** : le DRV8833 commute, les deux moteurs
+    tournent (**3125 ticks en 10 s** à PWM 255), les deux encodeurs
+    comptent, `VM` reçoit 7,5 V, `SLEEP` est au 3V3, la mécanique tourne
+    librement à la main.
+  - **Le symptôme restant** : seuil de démarrage entre **200 et 255 de
+    PWM**, là où un N20 à nu démarre vers 60-80. À PWM 100 : 0 tick ; à
+    160 : 4 ticks.
+  - **Pistes testées et ÉCARTÉES** --- à ne pas refaire :
+    - *Friction mécanique* : infirmé, le moteur tourne à la main sans
+      forcer.
+    - *Fréquence PWM* : passée de 20 kHz à 5 kHz sur l'hypothèse de la
+      constante de temps L/R du moteur (~200 µs contre 50 µs de période).
+      **Nettement pire** (PWM 220 → 0 tick), revenu à 20 kHz.
+    - *Gains PID* : montés à 900/1200 pour forcer le passage --- **erreur
+      de ma part**, le PID s'est mis à osciller entre +255 et −255 et le
+      moteur vibrait sur place au lieu de tourner. C'était ça le
+      « mouvement pas continu », que j'avais attribué à tort à la
+      friction. Remis à 180/300 (`reset_pid`).
+    - *Alimentation absente* : `VM` mesuré à 7,5 V.
+  - ⚠️ **Les performances se dégradent d'essai en essai** : 3125 ticks,
+    puis 116 au même PWM une demi-heure plus tard. Protection thermique
+    du driver ou échauffement des bobinages --- conséquence d'essais
+    répétés à pleine puissance sur des moteurs calés. **Travailler à
+    froid, par tests courts et espacés.**
+  - **CORRECTIF APPLIQUÉ EN FIN DE SESSION : passage en SLOW DECAY**
+    (`MotorDriver::setSpeed`). L'ancien pilotage (PWM sur une entrée, 0
+    sur l'autre) est du **fast decay** : entre deux impulsions les deux
+    sorties sont relâchées et le courant du bobinage s'effondre dans les
+    diodes de roue libre. À 20 kHz il n'a jamais le temps de s'établir,
+    donc le couple moyen reste minuscule tant que le rapport cyclique
+    n'est pas proche de 100 % --- **exactement la courbe mesurée**. En
+    slow decay, une entrée reste haute et l'autre est modulée à
+    l'inverse : le courant recircule dans les transistors bas au lieu de
+    s'effondrer, et se reporte d'une impulsion à la suivante. C'est le
+    mode recommandé par TI pour le contrôle de vitesse sur ce composant.
+    - **Gain mesuré immédiatement** : PWM 100 → **13 ticks**, là où le
+      fast decay donnait **0**.
+    - ⚠️ **Évaluation à refaire À FROID** : les moteurs étaient déjà
+      dégradés thermiquement au moment du test (87 ticks à PWM 200,
+      du même ordre que les 116 à PWM 255 obtenus juste avant, contre
+      3125 à froid). **Ces chiffres ne mesurent pas le slow decay, ils
+      mesurent l'échauffement.**
+    - Le cas `pwm == 0` est traité à part (les deux entrées basses =
+      roue libre), car en slow decay un duty nul signifierait « les deux
+      entrées hautes », c'est-à-dire un **freinage actif** --- ce que
+      `stop()` et l'état SAFE ne doivent jamais faire.
+  - **Prochain correctif prévu si le slow decay ne suffit pas** : une
+    **rampe de démarrage** (monter le duty progressivement au lieu
+    d'envoyer 255 d'un coup), pour écrêter le pic de courant qui
+    déclenche peut-être la protection en surintensité du DRV8833 (elle
+    agit vers 2 A, un N20 à l'arrachage dépasse ça).
+  - **SEULE PISTE RESTANTE, jamais testée** : la tension réellement
+    présente aux bornes du moteur **pendant qu'il force**. Si l'alim
+    entre en limitation dès le démarrage, la tension s'effondre et le
+    moteur ne peut jamais s'arracher --- ce qui produirait exactement ce
+    seuil apparent très élevé. À mesurer en premier.
+  - **Côtés gauche/droite inversés** : la télémétrie comptait 3125 ticks
+    sur « gauche » pendant que la roue **droite** tournait. Moteur ET
+    encodeur sont inversés **ensemble**, ce qui est pourquoi ça n'avait
+    jamais été vu --- ça ne se voit que lorsqu'un seul côté tourne. À
+    corriger dans `motion_config.h`, mais **après** avoir résolu le
+    déplacement (ne pas mélanger deux problèmes).
+
+- **TÊTE : montage tandem abandonné, un seul servo retenu (2026-09-20)**
+  --- l'utilisateur a démonté le servo B et le remplacera par un
+  **roulement de maintien** côté opposé. Décision saine : deux servos sur
+  un axe commun ne sont jamais d'accord (neutres, courses et temps de
+  réponse diffèrent), ils se combattent en permanence.
+  - **Ce que la caractérisation a coûté, et pourquoi** : le palonnier
+    était monté ~90° hors du neutre, si bien que la position de repos de
+    la tête tombait à l'extrémité de la course du servo. **Tout angle
+    commandé enfonçait la tête dans sa butée basse**, dans les deux sens
+    --- d'où une longue série de fausses pistes (signe, conflit entre
+    servos, butées). Résolu en démontant les bras et en recentrant les
+    servos avant de les refixer.
+  - **Trois erreurs de méthode de ma part**, à ne pas reproduire :
+    (1) j'ai supposé qu'un servo relâché était libre --- faux, le
+    réducteur d'un MG90S bloque le rétro-entraînement, ce qui invalidait
+    tout le protocole « un servo à la fois » sur un montage rigide ;
+    (2) j'ai voulu déduire une position à partir de blocages, alors
+    qu'un servo ne renvoie **aucune** position ; (3) j'avais élargi un
+    clamp dans **un seul** des trois chemins de commande, si bien que
+    deux mesures du même matériel se contredisaient.
+  - **Acquis durable : origine mécanique persistée en NVS**
+    (`head_org_a`/`head_org_b`, `SYSTEM action=head_origin`). Tout angle
+    logique est mesuré depuis cette origine, donc un remontage de
+    palonnier se rattrape **sans reflasher** --- exactement ce qui
+    manquait aujourd'hui.
+  - **Servos relâchés au démarrage** (`ServoJoint::detach`, duty 0 = pas
+    d'impulsion = aucun couple). L'ancien « centrer au boot » était
+    dangereux sur un montage dont on ignore le neutre.
+  - **`pitch` pilote, `yaw` inerte** (`head_config.h`) : un seul degré de
+    liberté mécanique. Course bridée à **±20°** en attendant la mesure
+    des vraies butées (~35° de débattement annoncé).
+  - ⚠️ **GPIO12 est redevenu libre** avec le retrait du servo B --- le
+    **buzzer peut donc revenir** (`ROVER_BUZZER_ENABLED`, le code est
+    conservé intact). Dette à solder quand le déplacement sera réglé.
+
+- **GPIO19 est MORTE sur ce devkit (2026-09-20)** --- établi par
+  élimination sur matériel : les deux servos fonctionnent sur GPIO13,
+  aucun ne fonctionne sur GPIO19, et changer de canal LEDC (5 → 6, donc
+  de timer) n'y change rien alors que le firmware rapporte bien le canal
+  attaché. Le pad est mort ou non connecté. **Deuxième anomalie de cette
+  carte** après GPIO0 (voir plus bas) --- à garder en tête avant
+  d'incriminer le logiciel sur une broche qui ne répond pas.
+
+- **Trame série corrompue toutes les ~5 s, corrigé (2026-09-20)** ---
+  `ERROR code=checksum_invalid` en continu pendant le pilotage au
+  joystick. Cause : le tampon RX série par défaut (**256 octets**) ne
+  représente que ~22 ms à 115200 bauds, moins qu'un redraw complet de
+  l'écran ST7789 (~27 ms) pendant lequel `loop()` ne vide plus le port.
+  Les octets arrivés dans cette fenêtre étaient perdus, tronquant la
+  trame en vol. `Serial.setRxBufferSize(2048)` avant `begin()`. **Plus
+  aucune erreur depuis.** C'est un tampon, pas une correction du redraw
+  bloquant : si `loop()` stalle un jour plus de ~178 ms, il faudra un
+  redraw incrémental/DMA.
+
+- **VL53L0X câblés et validés sur le robot réel (2026-09-20)** --- ils
+  attendaient depuis le 2026-09-02, et on sait enfin pourquoi :
+  **`WIRING.md` demandait `GPIO0` pour le `XSHUT` gauche, or le devkit
+  WROOM 30 broches ne sort pas `GPIO0` du tout** (rangée réelle
+  constatée sur la carte : `GND, 15, 2, 4, RX2, TX2`). Le plan était
+  irréalisable et personne ne s'en était aperçu --- chaque session le
+  reportait à la suivante.
+  - **Correction : un seul `XSHUT` suffit.** Séparer deux capteurs qui
+    partagent l'adresse d'usine ne demande d'en éteindre qu'un le temps
+    de réadresser l'autre. `GPIO4` tient le droit en reset, le gauche
+    est réadressé en `0x30`, puis le droit reprend `0x29`. Le `XSHUT`
+    gauche part au 3V3. Adresses finales inchangées, une broche rendue,
+    et un risque de strapping supprimé au passage.
+  - **Un piège introduit par ce changement, trouvé et corrigé** : privé
+    de `XSHUT`, le capteur gauche ne peut plus être reseté matériellement
+    --- or un VL53L0X garde son adresse jusqu'à la **coupure
+    d'alimentation**, pas au reboot de l'ESP32. Dès le 2e démarrage il
+    serait resté sur `0x30` et porté disparu. Le firmware le remet
+    lui-même à l'adresse d'usine via son registre `0x8A` avant chaque
+    séquence. **Observé pour de vrai** : `tof_pre30=1 tof_areset=1
+    tof_post29=1`.
+  - **Validé sur matériel** : `i2c_scan` → `0x29,0x30,0x68,0x76` ;
+    les deux capteurs mesurent ; **gauche/droite confirmés non inversés**
+    en masquant un seul capteur à la fois (une main couvre les deux et
+    ne prouve rien --- ils sont côte à côte).
+  - **Nouvel outillage** : `SYSTEM action=tof_status` / `tof_rescan`.
+    Les quatre causes possibles d'un `distance_left=9999` (capteur
+    absent / adresse périmée / voisin mal tenu en reset / `begin()`
+    refusé) sont indiscernables sans ça --- elles se ressemblent toutes
+    à l'écran. Compteur `tof_bringups=` inclus pour détecter une
+    éventuelle boucle de réinitialisation (stable à 1 au repos).
+  - ✅ **Réflexe d'obstacle local exécuté pour la première fois sur du
+    vrai matériel** --- `DriveController::setForwardBlocked` existait
+    depuis le 2026-09-15 mais était du code mort tant qu'aucun ToF
+    n'était câblé (`obstacleDetected()` renvoyait toujours faux).
+    Mesuré : **0 transition et 0 `EVENT` sur 25 s de cible immobile**,
+    `tof_bringups` stable à 1 (aucune boucle de réinitialisation, même
+    sous charge). Une oscillation soupçonnée au premier test était un
+    **artefact de l'outil de mesure**, pas du firmware : il appariait
+    l'état `forward_blocked` avec la dernière distance reçue, alors que
+    les deux viennent de trames `STATE` émises à des cadences
+    différentes. Leçon d'outillage : ne jamais apparier deux trames de
+    périodes différentes comme si elles étaient simultanées.
+
+- **Firmware du 2026-09-20 validé sur le robot réel** (`RoverNetwork` /
+  `LinkAuth`, voir plus bas) : boot non bloquant confirmé, `net=up
+  ip=192.168.1.109 rssi=-64 drops=0`, OTA armée à la connexion
+  (`wifi_mode=ota`). **Un défaut trouvé par le matériel et corrigé** :
+  le backoff de 1 s réémettait `WiFi.begin()` pendant l'association
+  déjà en cours (`begin(): connect failed!` à chaque passe). Aucun code
+  de statut ne distingue « j'essaie encore » de « j'ai échoué » --- les
+  deux valent `WL_DISCONNECTED` --- donc l'intervalle doit simplement
+  être plus long qu'une tentative : 10 s, plus `WiFi.disconnect()`
+  avant chaque `begin()`. Plus aucune erreur depuis.
+
+- **Les deux prérequis bloquants du Pi déporté sont levés (2026-09-20)**
+  --- c'étaient les points « 5 bis » et « 5 ter » de
+  `ARCHITECTURE_AND_ROADMAP.md` §6.2, trouvés à la revue du 2026-09-15,
+  et ils interdisaient de débrancher l'USB. **L'étape 1 du chantier
+  (transport socket) n'est plus bloquée.** Rien n'a tourné sur
+  matériel : WROOM et S3 compilent, 29/29 tests natifs, 147 tests `pi/`.
+  - **`RoverNetwork.h` (nouveau) possède désormais le lien WiFi**, et
+    `RoverOTA` n'apporte plus qu'ArduinoOTA. Le lien de commande ne peut
+    pas dépendre d'un module de maintenance explicitement *optionnel*.
+    Trois défauts réels tombent avec l'ancien montage : connexion
+    **une seule fois au boot** en bloquant jusqu'à 10 s (un robot allumé
+    avant sa box restait hors réseau jusqu'au reboot), reconnexion
+    reposant sur un défaut du core jamais affirmé, et
+    `WiFi.setSleep(false)` appelé nulle part --- or mesurer la gigue du
+    lien (étape 2) avec le modem sleep actif aurait mesuré l'horaire de
+    sieste de la radio, pas le réseau.
+  - **Arbitrage de la radio** : le portail et le pilotage autonome
+    annoncent l'emprunt/la restitution (`onRadioTaken`/`onRadioReleased`
+    → `suspend()`/`resume()`) au lieu d'appeler `WiFi.mode()` chacun
+    dans son coin --- c'est précisément comme ça qu'était né le
+    verrouillage « portail expiré = radio morte jusqu'au reboot ».
+  - **Effet de bord utile** : l'OTA s'arme à *chaque* connexion réussie
+    et non plus seulement sur celle qui tombait dans la fenêtre de boot.
+  - **`LinkAuth.h` (nouveau) : plus rien ne bouge sans secret** sur un
+    lien réseau. Trame `AUTH secret=...` (`ROVER_PROTOCOL.md` §5.2),
+    comparaison à temps constant, **fail closed** (pas de secret
+    enregistré = tout est refusé, comme l'OTA refuse de flasher sans mot
+    de passe), authentification **par connexion** que le Pi represente à
+    chaque reconnexion.
+  - **Le point le plus important est un ordre d'instructions** : le
+    contrôle d'auth passe *avant* `heartbeat.reset()`. Dans l'ordre
+    inverse, un pair non authentifié maintenait le robot en `ACTIVE`
+    juste en lui parlant --- il atteignait le timeout de sécurité qu'il
+    ne doit justement pas pouvoir toucher.
+  - **Inerte sur le câble** (`requireAuth(false)`) : exiger un secret
+    sur l'USB verrouillerait `move_diagnostic.py` et un simple terminal
+    série sans rien apporter, l'accès physique *étant* l'authentification
+    là. Le comportement d'aujourd'hui est donc strictement inchangé.
+  - Une correction en cours d'écriture, à noter parce qu'elle contredit
+    son propre commentaire : ma première `constantTimeEquals` sortait
+    tôt en fin de chaîne --- donc **pas** à temps constant. Réécrite en
+    boucle de longueur fixe, correcte parce que `strncpy` remplit tout
+    le buffer de zéros aux deux points d'appel (précondition écrite dans
+    le code).
+  - **Nouvel instrument : `SYSTEM action=net_status`** (`net=up ip=...
+    rssi=... drops=...`). Un Pi déporté ne voit pas la console du
+    robot ; c'est la mesure dont l'étape 2 a besoin.
+  - ⚠ **Ce qui reste et appartient au transport (étape 1)** : fermer
+    réellement la connexion après un refus, et n'accepter qu'un seul
+    client à la fois. Aujourd'hui le transport est un câble, il n'y a
+    rien à fermer.
+  - ⚠ **Limite assumée** : le secret circule en clair, protégé par le
+    seul WPA2 --- même niveau que le mot de passe ArduinoOTA et le token
+    du serveur de contrôle. Défi/réponse (nonce + HMAC) = incrément
+    suivant.
+  - Coût : **+1,2 Ko de flash** (71,6 % → 71,9 %), RAM inchangée à
+    16,4 %.
 - **DÉCISION D'ARCHITECTURE --- Raspberry Pi déporté (2026-09-15)** :
   le Pi quitte le châssis et devient une machine du réseau local ; le
   Rover Protocol passe du câble USB à une **socket TCP WiFi**. Le robot
@@ -893,6 +1159,44 @@
 
 ## Prochaines étapes
 
+### 🚨 PRIORITÉ ABSOLUE ET UNIQUE : FAIRE ROULER ROVER
+
+**Rien d'autre ne doit être entrepris avant.** Protocole imposé, dans
+l'ordre, **moteurs froids** :
+
+1. **Vérifier le slow decay à froid.** Il a été implémenté en fin de
+   session 2026-09-20 mais mesuré sur des moteurs déjà échauffés.
+   `SYSTEM action=motor_raw left=100 right=100 ms=3000`, puis 150, 200.
+   Attendu si le correctif est bon : rotation franche dès ~100.
+   **Un test, puis une pause.**
+2. **Si insuffisant : mesurer la tension aux bornes du moteur PENDANT
+   qu'il force.** Jamais fait, et c'est la seule piste jamais explorée.
+   Une alim qui entre en limitation fait s'effondrer la tension et
+   empêche l'arrachage --- ce qui produirait exactement le seuil observé.
+   Alimentation **≥ 3 A**.
+3. **Si la tension tient : suspecter le DRV8833.** Le dépôt documente
+   déjà deux exemplaires avec un canal faible (2026-09-01) et un
+   remplacement suivi d'une panne totale (2026-09-11). Le canal droit
+   ne répond plus du tout depuis la fin de session. **Prévoir un driver
+   de rechange.**
+4. **Rampe de démarrage** si le pic de courant déclenche la protection
+   en surintensité du driver (~2 A).
+
+⚠️ **Règles de méthode, apprises à nos dépens le 2026-09-20 :**
+- **Les moteurs se dégradent quand on insiste** (3125 ticks → 116 au
+  même PWM en 30 min). Tests **courts et espacés**, jamais en rafale.
+- **Ne pas toucher aux gains PID** pour compenser un problème de
+  puissance : les monter fait osciller le PID entre ±255 et le moteur
+  vibre sur place au lieu de tourner.
+- **Toujours diagnostiquer avec `motor_raw`**, jamais avec le PID : sa
+  sortie sature *parce que* la roue ne tourne pas, donc elle ne
+  distingue pas un blocage d'un driver mort ou d'un encodeur inversé.
+
+**Une fois que ça roule** (et seulement après) : corriger l'inversion
+gauche/droite dans `motion_config.h`, recalibrer le PID avec les
+chenilles, puis reprendre le reste.
+
+
 **PRIORITÉ ABSOLUE pour la prochaine session** : moteur gauche toujours
 problématique avec les nouveaux moteurs + nouveau driver (2026-09-11, voir
 "État actuel" ci-dessus) --- saga de la session : muet, puis intermittent,
@@ -961,9 +1265,12 @@ soir-là :
 6. Servos tête : câblage signal documenté (`WIRING.md`/`head_config.h`),
    mais pas encore testés sur matériel réel, et leur alimentation
    (partager le rail moteurs, pas l'ESP32) reste à ajouter à `WIRING.md`.
-7. Capteurs Phase 4 : MPU6050 et BME280 câblés et validés (2026-09-02,
-   voir ci-dessus) --- **VL53L0X gauche/droite restent à câbler, prévu
-   pour la prochaine session.** Câblage à faire (les deux **ensemble**,
+7. ✅ **Capteurs Phase 4 terminés (2026-09-20)** : MPU6050, BME280 et
+   **les deux VL53L0X** sont câblés et validés sur le robot réel. Le
+   plan de câblage ci-dessous est **périmé sur un point** --- `XSHUT`
+   gauche va au **3V3**, pas sur `GPIO0` (broche absente du devkit 30
+   broches, voir l'état actuel en tête de fichier). Conservé tel quel
+   pour mémoire du raisonnement d'origine : Câblage à faire (les deux **ensemble**,
    pas un par un --- le firmware réadresse le gauche via `XSHUT` au boot,
    il attend les deux) :
    - `VCC`/`GND` des deux → 3V3/GND commun.
@@ -992,32 +1299,42 @@ Ne pas démarrer avant d'avoir réglé le moteur gauche ci-dessus --- mais
 l'ordre interne de ce chantier compte, parce qu'il est conçu pour
 échouer tôt et pas cher :
 
-0. **Deux prérequis bloquants, trouvés à la revue de code du
-   2026-09-15** (détail : `ARCHITECTURE_AND_ROADMAP.md` §6.2, questions
-   « 5 bis » et « 5 ter »). À traiter **avant** de débrancher l'USB,
-   parce qu'aujourd'hui le câble *est* la sécurité :
-   - **Authentifier le lien.** Le Rover Protocol n'a aucune notion
-     d'identité. Une socket ouverte = n'importe qui sur le WiFi pilote
-     les moteurs. Le serveur web exige un token et l'OTA un mot de
-     passe ; le lien de commande serait le seul canal ouvert, et le plus
-     dangereux. Secret en NVS (`WifiCredentialsStore`), trame d'auth
-     obligatoire avant de quitter `READY`, une seule connexion à la fois.
-   - **Sortir le WiFi de `RoverOTA`.** C'est aujourd'hui le seul endroit
-     qui connecte la radio, dans un module explicitement optionnel --- le
-     lien de commande ne peut pas en dépendre.
+0. ✅ **Les deux prérequis bloquants sont levés (2026-09-20)** ---
+   authentification du lien (`LinkAuth.h`, trame `AUTH`) et WiFi sorti
+   de `RoverOTA` (`RoverNetwork.h`). Détail en tête de fichier et dans
+   `ARCHITECTURE_AND_ROADMAP.md` §6.2, questions « 5 bis » / « 5 ter ».
+   **Rien n'a tourné sur matériel** : compilation WROOM + S3, 29 tests
+   natifs, 147 tests `pi/`, relecture --- rien de plus. Deux morceaux de
+   ces deux points appartiennent au transport et se feront donc à
+   l'étape 1 juste en dessous : **fermer la connexion après un refus
+   d'auth**, et **n'accepter qu'un seul client à la fois**.
 
 1. **Transport socket d'abord, mécanique ensuite.** Côté ESP32,
    `WiFiServer` → `WiFiClient` passé à `RoverProtocol` (qui prend déjà
    un `Stream&`), avec repli sur `Serial` tant que le câble existe
    encore. Côté Pi, **plus rien à écrire** : `RoverLink` supervise déjà
    la connexion et reconnecte (fait le 2026-09-15), il ne reste qu'à
-   mettre `socket://host:port` dans `config.json`. Garder le Pi
-   physiquement sur le robot à ce stade --- on ne teste qu'une chose à la
-   fois. ⚠ Penser à `WiFi.setSleep(false)` dès ce premier jet : sans ça
-   la mesure de l'étape 2 mesurerait l'économie d'énergie radio, pas le
-   lien.
+   mettre `socket://host:port` dans `config.json` (et exporter
+   `ROVER_LINK_SECRET`, voir le point 0). Garder le Pi physiquement sur
+   le robot à ce stade --- on ne teste qu'une chose à la fois.
+   Trois choses à faire dans ce jet, toutes propres au transport :
+   - `linkAuth.requireAuth(true)` **par connexion**, et
+     `linkAuth.reset()` à chaque nouveau client. C'est le seul endroit
+     qui peut le savoir.
+   - **Fermer la socket sur un refus d'auth** (aujourd'hui le refus se
+     contente de répondre `ERROR` : sur un câble il n'y a rien à
+     fermer). Un pair qui échoue a droit à une tentative, pas à une
+     socket ouverte pour continuer à deviner.
+   - **Une seule connexion à la fois** : refuser la seconde plutôt que
+     de laisser deux pilotes se disputer les moteurs.
+   ✅ `WiFi.setSleep(false)` est déjà fait (`RoverNetwork.h`,
+   2026-09-20) --- sans ça la mesure de l'étape 2 aurait mesuré
+   l'économie d'énergie radio, pas le lien.
 2. **Mesurer avant de régler.** Gigue et taux de perte du lien WiFi,
-   robot en mouvement et à distance du point d'accès. C'est cette mesure
+   robot en mouvement et à distance du point d'accès. L'instrument
+   existe depuis le 2026-09-20 : `SYSTEM action=net_status` renvoie
+   `net=up ip=... rssi=... drops=...` (compteur de coupures depuis le
+   boot), lisible depuis un Pi qui ne voit pas la console du robot. C'est cette mesure
    qui fixe les seuils de §9 --- les 500 ms/1500 ms écrits aujourd'hui
    sont une hypothèse, pas un résultat. Tant que ce n'est pas mesuré, ne
    pas toucher à `ROVER_HEARTBEAT_TIMEOUT_MS`
@@ -1033,6 +1350,49 @@ l'ordre interne de ce chantier compte, parce qu'il est conçu pour
 ------------------------------------------------------------------------
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
+
+- **2026-09-20** --- **Les deux prérequis bloquants du Pi déporté sont
+  levés** (§6.2 « 5 bis » / « 5 ter »), l'étape 1 du chantier n'est plus
+  interdite. `RoverNetwork.h` prend la propriété du lien WiFi (que seule
+  l'OTA, module *optionnel*, établissait) : connexion non bloquante,
+  reconnexion supervisée avec backoff, `setSleep(false)`, arbitrage de
+  la radio avec le portail et le pilotage autonome. `LinkAuth.h` ajoute
+  une trame `AUTH` obligatoire sur un lien réseau, à temps constant et
+  fail-closed, **contrôlée avant le heartbeat** --- sans quoi un pair non
+  authentifié tenait le robot en `ACTIVE` rien qu'en lui parlant. Inerte
+  sur le câble, donc comportement d'aujourd'hui inchangé. Nouvel
+  instrument `SYSTEM action=net_status` pour la mesure de l'étape 2.
+  +1,2 Ko de flash. 29 tests natifs (+11), 147 tests `pi/` (+4). Jamais
+  exécuté sur matériel.
+
+- **2026-09-20 (3)** --- **Session matérielle longue, déplacement
+  toujours pas acquis.** Moteurs : firmware définitivement innocenté
+  (nouvel outil `motor_raw`, duty fixe sans PID --- la sortie du PID ne
+  peut pas diagnostiquer une roue immobile, elle sature *parce que* rien
+  ne bouge). Driver, moteurs, encodeurs et mécanique tous vérifiés bons ;
+  seuil de démarrage anormal (200-255 au lieu de 60-80) non expliqué.
+  Écartés : friction (le moteur tourne à la main), fréquence PWM (5 kHz
+  pire que 20 kHz), gains PID (les monter à 900/1200 a fait osciller le
+  PID entre ±255 --- mon erreur, remis à 180/300). **Slow decay
+  implémenté en fin de session**, gain réel mesuré (13 ticks à PWM 100
+  contre 0), mais à revalider à froid. Servos : montage tandem abandonné
+  (un seul servo + roulement), origine mécanique persistée en NVS,
+  palonnier trouvé monté ~90° hors du neutre après une longue série de
+  fausses pistes. **GPIO19 morte** sur ce devkit (2e anomalie après
+  GPIO0). Tampon RX série à 2048 (corrige `checksum_invalid` toutes les
+  5 s pendant le pilotage). ⚠️ **Les moteurs se dégradent quand on
+  insiste** : travailler à froid, tests courts.
+
+- **2026-09-20 (2)** --- **Les deux VL53L0X enfin câblés et validés sur
+  le robot**, bloqués depuis le 2026-09-02 par un plan de câblage
+  irréalisable : `WIRING.md` demandait `GPIO0` pour le `XSHUT` gauche,
+  **que le devkit WROOM 30 broches ne sort pas**. Corrigé en n'utilisant
+  qu'un seul `XSHUT` (il suffit d'éteindre un capteur pour réadresser
+  l'autre), `XSHUT` gauche au 3V3. Piège attrapé au passage : sans
+  `XSHUT`, le capteur gauche garde son adresse jusqu'à la coupure
+  d'alimentation et disparaîtrait dès le 2e boot --- remis à l'adresse
+  d'usine par le registre `0x8A`. Gauche/droite confirmés non inversés.
+  Nouvel outillage `SYSTEM action=tof_status`/`tof_rescan`.
 
 - **2026-09-15 (3)** --- **Pilotage autonome sans Pi ni réseau**
   (`StandaloneControl.h`, §6.3) : l'ESP32 ouvre son propre AP WPA2 et

@@ -5,10 +5,20 @@ void ServoJoint::begin(int pin, int channel) {
     _channel = channel;
     ledcSetup(_channel, ROVER_SERVO_PWM_FREQ_HZ, ROVER_SERVO_PWM_RESOLUTION_BITS);
     ledcAttachPin(pin, _channel);
-    writeAngle(0.0f);  // center on boot, never start at an undefined pulse
+    // Released, NOT centered -- see detach()'s comment for why that
+    // changed on 2026-09-20.
+    detach();
+}
+
+void ServoJoint::detach() {
+    if (_channel < 0) return;
+    ledcWrite(_channel, 0);
+    _attached = false;
 }
 
 void ServoJoint::writeAngle(float angleDeg) {
+    if (_channel < 0) return;
+    _attached = true;
     float physicalDeg = constrain(angleDeg + 90.0f, 0.0f, 180.0f);
 
     long pulseUs = map((long)(physicalDeg * 100), 0, 180 * 100,

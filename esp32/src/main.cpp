@@ -3,7 +3,9 @@
 #include "board_config.h"
 #include "motion_config.h"
 #include "sensors_config.h"
+#include "head_config.h"
 #include "RoverProtocol.h"
+#include "LinkAuth.h"
 #include "HeartbeatMonitor.h"
 #include "Watchdog.h"
 #include "Diagnostics.h"
@@ -14,6 +16,7 @@
 #include "SensorHub.h"
 #include "EStop.h"
 #include "BatteryMonitor.h"
+#include "RoverNetwork.h"
 #include "RoverOTA.h"
 #include "RoverWifiProvisioning.h"
 #include "StandaloneControl.h"
@@ -30,6 +33,12 @@
 // PROGRESS.md for the intended order (transport first, measure, then
 // tune the heartbeat thresholds).
 RoverProtocol protocol(Serial);
+// Access control for that link (LinkAuth.h,
+// ARCHITECTURE_AND_ROADMAP.md section 6.2 "5 bis"). Inert as long as
+// the transport is the USB cable -- see requireAuth() in setup() -- so
+// today's behaviour is unchanged; it becomes load-bearing the moment
+// the transport is a socket anyone on the WiFi can open.
+LinkAuth linkAuth;
 HeartbeatMonitor heartbeat;
 RoverState state = RoverState::BOOT;
 DriveController drive;
@@ -38,6 +47,12 @@ DisplayEngine display;
 SensorHub sensors;
 EStop estop;
 BatteryMonitor battery;
+// Owns the WiFi station link since 2026-09-20 -- OTA and (next) the
+// socket transport are clients of it, never the other way round. See
+// RoverNetwork.h and ARCHITECTURE_AND_ROADMAP.md section 6.2 "5 ter"
+// for why the command link could not stay dependent on the optional
+// OTA module.
+RoverNetwork network;
 RoverOTA ota;
 RoverWifiProvisioning wifiProvisioning;
 StandaloneControl standalone;
@@ -63,6 +78,34 @@ unsigned long lastBatteryTelemetryMs = 0;
 
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
+    // Access control runs BEFORE anything else, heartbeat included.
+    // The ordering is the security property, not a detail: resetting
+    // the heartbeat first would let an unauthenticated peer hold the
+    // robot in ACTIVE indefinitely just by talking to it, which is
+    // precisely the safety timeout it must not be able to reach.
+    switch (linkAuth.evaluate(frame)) {
+        case LinkAuth::Decision::Rejected:
+            // One attempt, then the caller is expected to drop the
+            // connection -- an open socket to keep guessing on is not
+            // much better than no authentication at all. Dropping it is
+            // the socket transport's job (step 1 of the chantier);
+            // today the transport is a cable with nothing to drop, so
+            // this reports and ignores, which is the correct behaviour
+            // for a peer that has no business being here either way.
+            protocol.sendError(linkAuth.reason());
+            return;
+        case LinkAuth::Decision::Accepted:
+            // AUTH is consumed here, never dispatched as a command --
+            // but it IS proof of life, so it feeds the heartbeat like
+            // any other valid frame before we return.
+            heartbeat.reset();
+            lastPiFrameMs = millis();
+            protocol.send("STATE", "link=authenticated");
+            return;
+        case LinkAuth::Decision::Allow:
+            break;
+    }
+
     // Any valid frame counts as proof of life from the Pi.
     heartbeat.reset();
     // Separately from the heartbeat above, which the standalone page
@@ -136,6 +179,34 @@ void onFrame(const RoverFrame& frame) {
             snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
                      ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
             protocol.send("STATE", fields2);
+        } else if (strcmp(action, "motor_raw") == 0) {
+            // Bring-up only: fixed duty straight to the H-bridge, no
+            // PID, no encoder feedback, self-stopping.
+            //
+            // The PID's own output cannot diagnose a motionless wheel:
+            // it saturates at 255 BECAUSE nothing moves, so a jam, a
+            // dead driver and a miswired encoder all look identical
+            // from telemetry. A fixed duty removes the loop from the
+            // picture -- if the wheel still does not turn, everything
+            // upstream of the H-bridge is cleared.
+            //
+            //   SYSTEM action=motor_raw left=200 right=200 ms=2000
+            //
+            // Honours SAFE like any other actuation: a raw duty is
+            // still the robot moving, and must not be a way around the
+            // safety state (ARCHITECTURE_AND_ROADMAP.md section 27).
+            if (state != RoverState::ACTIVE) {
+                protocol.sendError("not_active");
+            } else {
+                long leftPwm = frame.getInt("left", 0);
+                long rightPwm = frame.getInt("right", 0);
+                long ms = frame.getInt("ms", 1500);
+                drive.driveRaw((int16_t)leftPwm, (int16_t)rightPwm, (unsigned long)ms);
+                char fields2[80];
+                snprintf(fields2, sizeof(fields2), "motor_raw_left=%ld motor_raw_right=%ld motor_raw_ms=%ld",
+                         leftPwm, rightPwm, ms);
+                protocol.send("STATE", fields2);
+            }
         } else if (strcmp(action, "raw_ticks") == 0) {
             // Bring-up only: raw cumulative encoder counts, untouched by
             // the PID loop's 20ms readAndResetTicks() -- lets a hand
@@ -211,7 +282,7 @@ void onFrame(const RoverFrame& frame) {
             } else if (standalone.isActive()) {
                 standalone.buildStatusFields(fields2, sizeof(fields2));
             } else {
-                ota.buildStatusFields(fields2, sizeof(fields2));
+                ota.buildStatusFields(fields2, sizeof(fields2), network.isConnected());
             }
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "standalone") == 0) {
@@ -231,6 +302,156 @@ void onFrame(const RoverFrame& frame) {
         } else if (strcmp(action, "standalone_off") == 0) {
             standalone.stop();
             protocol.send("STATE", "wifi_mode=idle");
+        } else if (strcmp(action, "servo") == 0) {
+            // Bring-up only: drives ONE head servo at a time and
+            // releases the other. Rover's head is a TANDEM mount --
+            // two servos facing each other, both bolted to the SAME
+            // part, one mechanical degree of freedom (confirmed on the
+            // robot 2026-09-20). Commanding both from the pitch/yaw
+            // model would have them pull the shared part in opposite
+            // directions and stall against each other, so head motion
+            // stays disabled until the mount is characterised, and this
+            // is how it gets characterised safely: the servo that is
+            // not moving has no pulse train at all, hence no torque,
+            // hence nothing to fight with.
+            //
+            //   SYSTEM action=servo which=a angle=10
+            //   SYSTEM action=servo which=off        (both released)
+            char which[8];
+            if (!frame.getField("which", which, sizeof(which))) {
+                protocol.sendError("servo_which_required");
+            } else if (strcmp(which, "off") == 0) {
+                head.releaseAll();
+                char fields2[144];
+                head.buildStatusFields(fields2, sizeof(fields2));
+                protocol.send("STATE", fields2);
+            } else if (strcmp(which, "ab") == 0) {
+                // Independent angles, for measuring the offset between
+                // the two horns -- see HeadController::driveIndependent.
+                //   SYSTEM action=servo which=ab a=-5 b=5
+                if (!frame.hasField("a") || !frame.hasField("b")) {
+                    protocol.sendError("servo_ab_required");
+                } else {
+                    head.driveIndependent(frame.getFloat("a", 0.0f), frame.getFloat("b", 0.0f));
+                    char fields2[144];
+                    head.buildStatusFields(fields2, sizeof(fields2));
+                    protocol.send("STATE", fields2);
+                }
+            } else if (strcmp(which, "pair") == 0) {
+                // Both servos, mirrored -- the mechanically correct
+                // command for this tandem head. See
+                // HeadController::driveTandem.
+                if (!frame.hasField("angle")) {
+                    protocol.sendError("servo_angle_required");
+                } else {
+                    head.driveTandem(frame.getFloat("angle", 0.0f));
+                    char fields2[144];
+                    head.buildStatusFields(fields2, sizeof(fields2));
+                    protocol.send("STATE", fields2);
+                }
+            } else if (strcmp(which, "a") == 0 || strcmp(which, "b") == 0) {
+                // No default angle: a missing angle= must not silently
+                // mean 0 and swing the head to centre unannounced.
+                if (!frame.hasField("angle")) {
+                    protocol.sendError("servo_angle_required");
+                } else {
+                    head.driveSingleJoint(which[0], frame.getFloat("angle", 0.0f));
+                    char fields2[144];
+                    head.buildStatusFields(fields2, sizeof(fields2));
+                    protocol.send("STATE", fields2);
+                }
+            } else {
+                protocol.sendError("servo_which_invalid");
+            }
+        } else if (strcmp(action, "pintest") == 0) {
+            // Bring-up only: forces one SERVO pin to a steady logic
+            // level so it can be checked with a multimeter. A servo's
+            // PWM is a 7.5% duty cycle at 50Hz -- about 0.25V average,
+            // awkward to read and easy to mistake for a dead pin. A
+            // steady 3.3V or 0V is unambiguous.
+            //
+            // Restricted to the two head servo pins on purpose: a
+            // generic "write any pin" would happily drive a motor
+            // input and move the robot.
+            //   SYSTEM action=pintest pin=19 level=1
+            long pin = frame.getInt("pin", -1);
+            long level = frame.getInt("level", 0);
+            // Motor inputs are allowed too since 2026-09-20: with the
+            // wheels dead even under raw PWM, the question became
+            // whether the PAD itself emits anything -- GPIO19 turned
+            // out not to, on this very board. digitalWrite bypasses
+            // LEDC entirely, so it separates "the PWM peripheral is
+            // misconfigured" from "the pin is dead".
+            //
+            // WARNING: a motor input held high runs that motor at full
+            // speed with no ramp. Caller is expected to have the robot
+            // propped up -- same precondition as motor_raw.
+            bool allowed = (pin == ROVER_PIN_SERVO_PITCH || pin == ROVER_PIN_SERVO_YAW ||
+                            pin == ROVER_PIN_MOTOR_L_IN1 || pin == ROVER_PIN_MOTOR_L_IN2 ||
+                            pin == ROVER_PIN_MOTOR_R_IN1 || pin == ROVER_PIN_MOTOR_R_IN2);
+            if (!allowed) {
+                protocol.sendError("pintest_pin_not_allowed");
+            } else {
+                // Detach the LEDC channel first, otherwise the PWM
+                // peripheral keeps driving the pad and digitalWrite is
+                // ignored.
+                head.releaseAll();
+                pinMode((int)pin, OUTPUT);
+                digitalWrite((int)pin, level ? HIGH : LOW);
+                // digitalWrite DETACHES the pad from LEDC, and nothing
+                // puts it back: after testing a motor input this way,
+                // that motor stops responding to PWM until the next
+                // reboot. Found the hard way on 2026-09-20 -- it turned
+                // an already-confusing motor diagnosis into a moving
+                // target. Re-arming the drive here restores the LEDC
+                // attachment straight away.
+                if (pin != ROVER_PIN_SERVO_PITCH && pin != ROVER_PIN_SERVO_YAW) {
+                    drive.begin();
+                }
+                char fields2[64];
+                snprintf(fields2, sizeof(fields2), "pintest_pin=%ld pintest_level=%ld", pin, level);
+                protocol.send("STATE", fields2);
+            }
+        } else if (strcmp(action, "head_origin") == 0) {
+            // Freezes the angles currently commanded as the head's
+            // reference position and writes them to NVS, so every later
+            // HEAD/tandem angle is measured from there rather than from
+            // wherever the horns happened to land on their splines.
+            head.setOriginHere();
+            char fields2[144];
+            head.buildStatusFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "head_status") == 0) {
+            char fields2[144];
+            head.buildStatusFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "tof_status") == 0 || strcmp(action, "tof_rescan") == 0) {
+            // Bring-up only. The two VL53L0X share a factory address
+            // and are separated by a single XSHUT line
+            // (DistanceSensor::bringUpBoth) -- a sequence with four
+            // distinct failure modes that all look identical from the
+            // outside ("distance_left=9999"). This reports what each
+            // step of that sequence actually saw. tof_rescan replays it
+            // first, so a sensor plugged in after boot can be picked up
+            // without waiting out the retry period or rebooting.
+            if (strcmp(action, "tof_rescan") == 0) sensors.rescanDistanceSensors();
+            // 128, not 96: five tof_* fields plus tof_rbegin run to
+            // ~75 bytes, and this file's three historical truncation
+            // bugs all came from exactly that kind of thin margin.
+            char fields2[128];
+            sensors.buildToFBringUpFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "net_status") == 0) {
+            // Link health as seen from the robot itself: a deported Pi
+            // cannot read the ESP32's console, so "how often does this
+            // link actually drop, and how strong is the signal where
+            // the robot currently is?" has to be answerable from
+            // telemetry alone. This is the instrument step 2 of the
+            // deported-Pi chantier needs (measure the link before
+            // tuning the heartbeat thresholds of section 9).
+            char fields2[96];
+            network.buildStatusFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
         } else if (strcmp(action, "wifi_forget") == 0) {
             // Clears the stored home-network credentials (keeps the OTA
             // password, see WifiCredentialsStore::forgetNetwork) so the
@@ -290,9 +511,36 @@ void onFrame(const RoverFrame& frame) {
 }
 
 void setup() {
+    // 2048 instead of the default 256, and it MUST be set before
+    // begin(). At 115200 baud, 256 bytes is only ~22ms of traffic --
+    // less than one full ST7789 redraw (240x280 at 16bpp over 40MHz
+    // SPI is ~27ms), during which loop() never gets to drain the port.
+    // Bytes arriving in that window were simply dropped, truncating
+    // whatever frame was in flight; the receiver then failed its
+    // checksum. Seen on real hardware 2026-09-20 as a steady
+    // "ERROR code=checksum_invalid" every ~5s while driving from the
+    // joystick page -- exactly the blink/redraw cadence.
+    //
+    // This is a buffer, not a fix for a blocking redraw: it buys ~178ms
+    // of slack, which covers the display today. The real answer, if
+    // loop() ever stalls longer than that, is to stop blocking in the
+    // first place (incremental redraw / DMA).
+    Serial.setRxBufferSize(2048);
     Serial.begin(115200);
     RoverWatchdog::begin();
     protocol.onFrame(onFrame);
+    // Load the shared secret now, while the transport is still the USB
+    // cable: provisioning it (SYSTEM action=wifi_setup) must be
+    // possible BEFORE the link that needs it exists, otherwise the
+    // first socket connection would have no way to ever authenticate.
+    linkAuth.setSecret(WifiCredentialsStore::getLinkSecret().c_str());
+    // Explicitly disabled, because the transport is a cable: physical
+    // access IS the authentication here, and demanding a secret over
+    // USB would lock out bring-up tooling (pi/tools/move_diagnostic.py,
+    // a plain serial terminal) for no gain. The socket transport will
+    // flip this to true per connection -- see ARCHITECTURE_AND_ROADMAP.md
+    // section 6.2 "5 bis" and step 1 of the chantier in PROGRESS.md.
+    linkAuth.requireAuth(false);
     // Attaches motor/encoder pins and immediately commands 0 speed, so
     // the driver never has stale/undefined PWM before the first MOVE.
     drive.begin();
@@ -306,14 +554,34 @@ void setup() {
         CalibrationStore::getFloat("pid_kd", ROVER_PID_KD)
     );
     head.begin();
+    // Servo horn positions survive reboots; the mechanical origin they
+    // imply must too (HeadController::loadOrigin).
+    head.loadOrigin();
     display.begin();
     sensors.begin();
     estop.begin();
     battery.begin();
     buzzer.begin();
-    // Entirely opt-in (see RoverOTA.h) -- a no-op that returns
-    // immediately unless WiFi/OTA credentials were set at build time.
-    ota.begin();
+    // Entirely opt-in (see RoverNetwork.h) -- a no-op with zero radio
+    // activity unless WiFi credentials were provisioned through the
+    // portal or set at build time. Non-blocking since 2026-09-20: it
+    // starts connecting and returns, where the old RoverOTA::begin()
+    // stalled the whole boot for up to 10s waiting for a network.
+    //
+    // OTA arms itself on every successful connection rather than only
+    // on one completed during the boot window -- a robot powered on
+    // before its router used to stay un-flashable until a power cycle.
+    network.onConnected = []() { ota.arm(); };
+    network.begin();
+
+    // Radio arbitration: the provisioning portal and standalone
+    // piloting both need AP mode, which cannot coexist with the station
+    // link. They announce the borrow/return and RoverNetwork stands
+    // down in between, so no two modules ever fight over WiFi.mode().
+    wifiProvisioning.onRadioTaken = []() { network.suspend(); };
+    wifiProvisioning.onRadioReleased = []() { network.resume(); };
+    standalone.onRadioTaken = []() { network.suspend(); };
+    standalone.onRadioReleased = []() { network.resume(); };
 
     // Standalone piloting (StandaloneControl.h): every callback below
     // routes into the SAME code the Pi's frames go through, rather than
@@ -397,6 +665,9 @@ void loop() {
     sensors.update();
     estop.update();
     battery.update();
+    // Before ota.update(): the supervisor decides whether the link is
+    // up this pass, and OTA is only meaningful once it is.
+    network.update();
     ota.update();
     wifiProvisioning.update();
     standalone.update();

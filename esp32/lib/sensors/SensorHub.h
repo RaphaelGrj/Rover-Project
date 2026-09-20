@@ -36,6 +36,11 @@ public:
     // can never immobilize the robot by claiming a phantom obstacle.
     bool obstacleDetected() const { return _distance.obstacleDetected(); }
 
+    // Bring-up only: what the ToF address dance actually observed, and
+    // a way to replay it on demand. See DistanceSensor::bringUpBoth().
+    void buildToFBringUpFields(char* out, size_t outLen) const { _distance.buildBringUpFields(out, outLen); }
+    void rescanDistanceSensors() { _distance.rescan(); }
+
     // Pops one pending sensor failure per call ("tof_left", "tof_right",
     // "imu" or "bme688") until none remain -- call in a loop so
     // simultaneous failures (eg. several sensors unwired at boot) are

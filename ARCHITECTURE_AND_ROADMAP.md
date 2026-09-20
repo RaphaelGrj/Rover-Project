@@ -403,10 +403,11 @@ moins fiable :
     radio de l'ESP32 ajoute une latence très irrégulière, incompatible
     avec un heartbeat serré.
 
-### 5 bis. Qui a le droit de piloter ? (bloquant, ajouté le 2026-09-15)
+### 5 bis. Qui a le droit de piloter ? (résolu le 2026-09-20)
 
 Question absente de la première version de cette section, relevée à la
-revue de code. Elle est **bloquante pour l'étape 1 du chantier**.
+revue de code. Elle était **bloquante pour l'étape 1 du chantier** ---
+traitée le 2026-09-20, voir la fin de cette section.
 
 Tant que le lien était un **câble USB**, l'authentification était
 physique : pour envoyer un `MOVE`, il fallait être dans la pièce, une
@@ -440,16 +441,44 @@ une connexion réseau tant qu'un secret partagé n'a pas été présenté.
 -   Une seule connexion active à la fois : une seconde est refusée plutôt
     que de laisser deux pilotes se disputer les moteurs.
 
-⚠ **Rien de cela n'est implémenté.** C'est la raison pour laquelle le
-câble USB ne doit pas être débranché avant que ce point soit traité :
-aujourd'hui, le lien filaire *est* l'authentification.
+✅ **Implémenté le 2026-09-20** --- `esp32/lib/communication/LinkAuth.h`
+(logique pure, 11 tests natifs), branché en tête de `onFrame()` dans
+`main.cpp`, trame `AUTH` spécifiée en `ROVER_PROTOCOL.md` §5.2, moitié
+Pi dans `pi/rover_esp32/link.py` (4 tests). Trois points méritent d'être
+retenus :
 
-### 5 ter. À qui appartient la connexion WiFi ? (dette à solder)
+-   **L'ordre est la propriété de sécurité, pas un détail.** Le contrôle
+    passe *avant* `heartbeat.reset()`. Dans l'ordre inverse, un pair non
+    authentifié maintenait le robot en `ACTIVE` simplement en lui
+    parlant --- c'est-à-dire en atteignant précisément le timeout de
+    sécurité qu'il ne doit pas pouvoir toucher.
+-   **Inerte sur le câble** (`requireAuth(false)`) : exiger un secret sur
+    l'USB verrouillerait l'outillage de bring-up
+    (`pi/tools/move_diagnostic.py`, un simple terminal série) sans rien
+    apporter --- l'accès physique *est* l'authentification là.
+-   **Authentification par connexion, jamais au-delà** : le robot
+    l'oublie à chaque coupure, le Pi la represente à chaque reconnexion.
+    Sur un lien WiFi où les coupures sont la norme, c'est le chemin
+    courant, pas un cas limite.
 
-Autre constat de la revue : aujourd'hui, la seule chose qui connecte
-l'ESP32 au réseau est `RoverOTA::begin()` --- un module dont le contrat
-explicite est d'être *optionnel*, « entirely inert unless a developer
-deliberately configures credentials ».
+⚠ **Reste à faire, et qui appartient au transport (étape 1)** : fermer
+réellement la connexion après un refus, et n'accepter qu'un seul client
+à la fois. Aujourd'hui le transport est un câble : il n'y a rien à
+fermer, donc le refus se contente de répondre `ERROR` et d'ignorer.
+
+⚠ **Limite assumée** : le secret circule en clair, protégé seulement par
+le WPA2 du réseau (`ROVER_PROTOCOL.md` §5.2). Même niveau que le mot de
+passe ArduinoOTA et le token du serveur de contrôle. Un défi/réponse
+(nonce + HMAC) est l'incrément suivant, volontairement pas fait ici :
+il demande un hash aux deux bouts, et ce point devait atterrir *avant*
+qu'on débranche le câble, pas après.
+
+### 5 ter. À qui appartient la connexion WiFi ? (soldée le 2026-09-20)
+
+Autre constat de la revue : jusqu'au 2026-09-20, la seule chose qui
+connectait l'ESP32 au réseau était `RoverOTA::begin()` --- un module
+dont le contrat explicite est d'être *optionnel*, « entirely inert
+unless a developer deliberately configures credentials ».
 
 Faire passer le Rover Protocol par le WiFi rendrait donc **le lien de
 commande dépendant d'un module de maintenance facultatif**, ce qui
@@ -465,10 +494,52 @@ contredit §4.2 (« l'ESP32 doit rester fonctionnel ») et la hiérarchie de
     *(Le cas le plus grave --- `stop()` laissait la radio en `WIFI_OFF`
     sans jamais la rallumer, verrouillage dur jusqu'au reboot --- a été
     corrigé le 2026-09-15 : retour en `WIFI_STA` + `reconnect()`.)*
+    ⚠ **Reste vrai après le 2026-09-20** : l'arbitrage ci-dessous rend
+    la restitution de la radio propre et centralisée, mais il ne change
+    rien au fait qu'ouvrir le portail coupe le lien de commande le temps
+    du portail. C'est inhérent à une radio unique, pas un défaut à
+    corriger --- seulement une chose à savoir avant d'envoyer la commande
+    depuis un Pi déporté.
 
-**À faire avant l'étape 1** : extraire la gestion de la connexion WiFi
-de `RoverOTA` vers un module autonome et toujours actif, dont l'OTA et
-le Rover Protocol deviennent tous deux de simples clients.
+✅ **Fait le 2026-09-20** --- nouveau `esp32/lib/network/RoverNetwork.h`,
+seul propriétaire du lien WiFi station ; `RoverOTA` n'apporte plus
+qu'ArduinoOTA et en devient un client. Trois défauts de l'ancien
+montage tombent avec lui :
+
+-   **Il ne se connectait qu'une fois, au boot, en bloquant jusqu'à 10 s.**
+    Un robot allumé avant que sa box ait fini de démarrer restait hors
+    réseau jusqu'à ce que quelqu'un le redémarre. `begin()` rend
+    désormais la main immédiatement et `update()` retente indéfiniment
+    (backoff 1 s → 30 s, même forme que `pi/rover_esp32/link.py` à
+    l'autre bout du même lien).
+-   **La reconnexion reposait sur le `setAutoReconnect` par défaut du
+    core**, jamais affirmé nulle part. Il est maintenant explicite, et
+    doublé d'un vrai superviseur.
+-   **`WiFi.setSleep(false)` n'était appelé nulle part.** L'économie
+    d'énergie radio bufferise les paquets entre balises : sans
+    importance pour un upload de firmware, rédhibitoire sous un
+    heartbeat de 500 ms --- et mesurer la gigue du lien (étape 2) avec
+    le modem sleep actif aurait mesuré l'horaire de sieste de la radio
+    plutôt que le réseau.
+
+**Arbitrage de la radio** : le portail de provisioning et le pilotage
+autonome ont légitimement besoin du mode AP, incompatible avec le lien
+station. Ils annoncent l'emprunt (`onRadioTaken` → `suspend()`) et la
+restitution (`onRadioReleased` → `resume()`) au lieu d'appeler
+`WiFi.mode()` chacun dans son coin --- c'est exactement comme ça
+qu'était né le verrouillage « portail expiré = radio morte jusqu'au
+reboot ».
+
+**Effet de bord utile** : l'OTA s'arme désormais à *chaque* connexion
+réussie, et non plus seulement sur celle qui tombait dans la fenêtre de
+boot. Un robot allumé avant sa box, ou reconnecté après une coupure,
+restait auparavant non flashable jusqu'au prochain cycle d'alimentation.
+
+**Nouvel instrument** : `SYSTEM action=net_status` renvoie `net=up ip=...
+rssi=... drops=...`. Un Pi déporté ne voit pas la console du robot ;
+« ce lien coupe-t-il souvent, et quel signal a-t-il là où le robot se
+trouve ? » doit pouvoir se répondre depuis la télémétrie seule --- c'est
+la mesure dont l'étape 2 a besoin avant de régler les seuils de §9.
 
 ### 6. Comment tester la fonctionnalité sans le reste du robot ?
 

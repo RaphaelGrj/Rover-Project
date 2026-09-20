@@ -32,6 +32,22 @@ network came back. The same class of bug (an exception escaping into a
 pyserial thread and killing it silently) already bit this project once
 on real hardware, see pi/tests/test_protocol.py.
 
+Authenticating
+--------------
+A USB cable authenticated itself: to send a MOVE you had to be in the
+room. A TCP socket does not, so the ESP32 requires a shared secret
+before it will accept any command on a network link (see
+esp32/lib/communication/LinkAuth.h and ARCHITECTURE_AND_ROADMAP.md
+§6.2 "5 bis"). This class presents it on every (re)connection, because
+the robot forgets it on every disconnection -- authentication is
+per-connection there, so that a link which drops and comes back is
+treated as a new peer.
+
+The secret comes from the ROVER_LINK_SECRET environment variable,
+never from config.json: that file is plain text on disk and its own
+docstring rules out secrets, which is why the control token doesn't
+live there either.
+
 Dropping frames while the link is down is correct, not a workaround:
 the ESP32 stops the motors on its own when HEARTBEAT stops arriving
 (ROVER_PROTOCOL.md §6), and "la sécurité ne doit jamais dépendre du
@@ -41,6 +57,7 @@ queue up stale commands to replay later.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 import serial
@@ -57,6 +74,19 @@ logger = logging.getLogger(__name__)
 # successful connection.
 RECONNECT_MIN_DELAY_S = 0.5
 RECONNECT_MAX_DELAY_S = 5.0
+
+
+def resolve_link_secret() -> str | None:
+    """The shared secret the ESP32 expects on a network link, or None.
+
+    Unlike the control server's token (rover_control/auth.py), this one
+    cannot be generated on the fly when unset: it has to match what is
+    stored on the robot, so there is nothing sensible to invent. None
+    means "send no AUTH frame", which is exactly right over the USB
+    cable -- the ESP32 requires none there.
+    """
+    secret = os.environ.get("ROVER_LINK_SECRET")
+    return secret or None
 
 
 class _LineHandler(serial.threaded.LineReader):
@@ -103,9 +133,12 @@ class RoverLink:
     callers are free to ignore.
     """
 
-    def __init__(self, port: str, baudrate: int = 115200) -> None:
+    def __init__(self, port: str, baudrate: int = 115200, secret: str | None = None) -> None:
         self._port = port
         self._baudrate = baudrate
+        # None = send no AUTH frame at all, which is what the USB cable
+        # wants (the ESP32 requires none there). See resolve_link_secret.
+        self._secret = secret
         # Guards the _serial/_reader pair only. Held just long enough to
         # read or swap the pointers, never across a blocking write, so a
         # write stalling on a half-dead socket can't block the
@@ -210,6 +243,12 @@ class RoverLink:
             logger.info("ESP32 link up on %s", self._port)
 
             reader.start()
+            # Only now, with the reader running, so the robot's reply
+            # ("STATE link=authenticated", or ERROR code=unauthenticated
+            # / link_secret_not_set) is actually seen and logged rather
+            # than sitting unread in a buffer. Sent on every connection
+            # because the ESP32 forgets it on every disconnection.
+            self._authenticate()
             # Returns when the transport fails (pyserial's ReaderThread
             # exits its loop on SerialException) or when stop() closed
             # it deliberately.
@@ -225,6 +264,20 @@ class RoverLink:
                 # reboot, or one client slot already taken) would spin
                 # this loop as fast as the network allows.
                 self._stopping.wait(RECONNECT_MIN_DELAY_S)
+
+    def _authenticate(self) -> None:
+        """Best-effort, like send(): a failure here is reported and left
+        to the supervisor, which will reconnect and try again. Nothing
+        waits for the reply -- the robot simply refuses every subsequent
+        frame if this did not land, and the ERROR it sends back says so
+        in the log."""
+        if self._secret is None:
+            logger.debug("no ROVER_LINK_SECRET set, not authenticating (expected over USB)")
+            return
+        if self.send("AUTH", {"secret": self._secret}):
+            logger.info("sent AUTH to the robot")
+        else:
+            logger.warning("could not send AUTH -- the robot will refuse every command")
 
     def _open(self) -> serial.SerialBase | None:
         try:

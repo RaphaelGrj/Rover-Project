@@ -15,8 +15,8 @@ import socket
 import threading
 import time
 
-from rover_esp32.link import RoverLink
-from rover_esp32.protocol import encode_frame
+from rover_esp32.link import RoverLink, resolve_link_secret
+from rover_esp32.protocol import decode_frame, encode_frame
 
 # Generous enough not to flake on a loaded CI box, short enough that a
 # genuine failure doesn't hang the suite. RoverLink's own backoff starts
@@ -45,6 +45,10 @@ class FakeEsp32:
         self._server.listen(1)
         self.port = self._server.getsockname()[1]
         self.connections = 0
+        # Every frame this "robot" received, decoded, in order -- so a
+        # test can assert on what the Pi actually put on the wire
+        # (notably the AUTH frame) rather than only on what came back.
+        self.received: list[tuple[str, dict[str, str]]] = []
         self._client: socket.socket | None = None
         self._lock = threading.Lock()
         self._stopping = threading.Event()
@@ -60,6 +64,29 @@ class FakeEsp32:
             with self._lock:
                 self._client = client
                 self.connections += 1
+            threading.Thread(target=self._read_loop, args=(client,), daemon=True).start()
+
+    def _read_loop(self, client: socket.socket) -> None:
+        """Collects whatever the Pi sends. Without this the socket's
+        receive buffer just fills silently and nothing can be asserted
+        about outgoing frames."""
+        buffer = b""
+        while not self._stopping.is_set():
+            try:
+                chunk = client.recv(4096)
+            except OSError:
+                return
+            if not chunk:
+                return
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                try:
+                    frame = decode_frame(line.decode("ascii").strip())
+                except Exception:  # noqa: BLE001 -- a malformed line is a test failure, not a crash
+                    continue
+                with self._lock:
+                    self.received.append(frame)
 
     def send_frame(self, frame_type: str, fields: dict[str, str] | None = None) -> None:
         with self._lock:
@@ -264,3 +291,83 @@ def test_can_be_restarted_after_stop():
     finally:
         link.stop()
         server.close()
+
+
+# --- Link authentication (ARCHITECTURE_AND_ROADMAP.md §6.2 "5 bis") ---
+#
+# The ESP32 refuses every command on a network link until a shared
+# secret has been presented (esp32/lib/communication/LinkAuth.h). These
+# check the Pi's half of that contract, against the same in-process TCP
+# server as everything above.
+
+
+def test_authenticates_on_connection_before_anything_else():
+    server = FakeEsp32()
+    link = RoverLink(server.url, secret="correct-horse")
+    try:
+        link.start()
+        assert _wait_until(lambda: link.is_connected), "link never came up"
+        assert _wait_until(lambda: server.received), "nothing was sent"
+
+        # First frame on the wire, not merely present somewhere in it:
+        # the robot rejects and reports anything that arrives before
+        # AUTH, so an AUTH sent second would already have cost a frame.
+        assert server.received[0] == ("AUTH", {"secret": "correct-horse"})
+    finally:
+        link.stop()
+        server.close()
+
+
+def test_reauthenticates_after_a_reconnection():
+    """Authentication is per-connection on the robot: it forgets on
+    every disconnection, so a link that comes back must prove itself
+    again or every subsequent command is refused. Over WiFi a drop is
+    routine, which makes this the common path rather than an edge case."""
+    server = FakeEsp32()
+    link = RoverLink(server.url, secret="correct-horse")
+    try:
+        link.start()
+        assert _wait_until(lambda: server.connections == 1), "link never came up"
+        assert _wait_until(lambda: len(server.received) == 1), "no initial AUTH"
+
+        server.hang_up()
+        assert _wait_until(lambda: server.connections == 2), "never reconnected"
+
+        assert _wait_until(lambda: len(server.received) == 2), "did not re-authenticate"
+        assert server.received[1] == ("AUTH", {"secret": "correct-horse"})
+    finally:
+        link.stop()
+        server.close()
+
+
+def test_no_secret_sends_no_auth_frame():
+    """The USB cable case, still the default: physical access is the
+    authentication there and the firmware requires none, so the Pi must
+    not start emitting a frame the robot never asked for."""
+    server = FakeEsp32()
+    link = RoverLink(server.url)  # no secret
+    try:
+        link.start()
+        assert _wait_until(lambda: link.is_connected), "link never came up"
+
+        link.send("MOVE", {"velocity": "0.20"})
+        assert _wait_until(lambda: server.received), "nothing was sent"
+        assert server.received[0][0] == "MOVE"
+        assert not any(frame_type == "AUTH" for frame_type, _ in server.received)
+    finally:
+        link.stop()
+        server.close()
+
+
+def test_resolve_link_secret_reads_the_environment(monkeypatch):
+    monkeypatch.delenv("ROVER_LINK_SECRET", raising=False)
+    assert resolve_link_secret() is None
+
+    # Empty is treated as unset rather than as a real (empty) secret --
+    # an empty secret would be refused by the robot anyway, and silently
+    # sending one would obscure why.
+    monkeypatch.setenv("ROVER_LINK_SECRET", "")
+    assert resolve_link_secret() is None
+
+    monkeypatch.setenv("ROVER_LINK_SECRET", "correct-horse")
+    assert resolve_link_secret() == "correct-horse"

@@ -50,7 +50,22 @@ le code ni dans un fichier du dépôt :
    ouvre un navigateur sur `http://192.168.4.1/` (ou laisse le
    téléphone/PC ouvrir automatiquement la page de connexion captive).
 4. Renseigne le SSID/mot de passe du vrai réseau WiFi et, si ce n'est
-   pas déjà fait, un mot de passe OTA. Valide : le robot enregistre en
+   pas déjà fait, un mot de passe OTA. Le formulaire propose aussi deux
+   autres secrets, indépendants et facultatifs à ce stade :
+   - **Mot de passe pilotage direct** (8 caractères min.) --- celui du
+     point d'accès WPA2 que le robot ouvre pour être piloté sans Pi ni
+     réseau (`ARCHITECTURE_AND_ROADMAP.md` §6.3).
+   - **Secret du lien Pi** (8 à 47 caractères) --- celui que le Raspberry
+     Pi devra présenter pour piloter quand le Rover Protocol passera par
+     le réseau (`ROVER_PROTOCOL.md` §5.2). Il doit être identique à la
+     variable d'environnement `ROVER_LINK_SECRET` côté Pi.
+
+   Trois secrets distincts, volontairement : l'un remplace le firmware,
+   l'un laisse quelqu'un piloter depuis un téléphone, l'autre laisse une
+   machine du réseau piloter en continu. On peut en confier un sans
+   confier les autres.
+
+   Valide : le robot enregistre en
    NVS (flash interne, survit aux redémarrages et aux reflash) et
    redémarre automatiquement. Laisser un champ mot de passe vide garde
    la valeur déjà enregistrée (utile pour revenir plus tard ajouter
@@ -73,6 +88,15 @@ Autres actions disponibles en `SYSTEM action=...` :
 - `wifi_forget` --- efface le SSID/mot de passe WiFi enregistrés (garde
   le mot de passe OTA) ; le prochain `wifi_setup` repart d'un formulaire
   vierge.
+- `net_status` --- renvoie `STATE net=...` : santé du lien WiFi vue du
+  robot (`up` avec `ip=`, `rssi=` et `drops=`, `down`, `suspended` quand
+  la radio est prêtée au portail ou au pilotage autonome, ou
+  `unconfigured`). Depuis le 2026-09-20, la connexion WiFi appartient à
+  `RoverNetwork.h` et non plus à l'OTA : elle est donc établie et
+  maintenue même sans mot de passe OTA, et l'OTA s'arme d'elle-même à
+  chaque reconnexion réussie (avant, seule une connexion réussie dans la
+  fenêtre de démarrage armait l'OTA --- un robot allumé avant sa box
+  restait non flashable jusqu'au reboot suivant).
 
 ### 2. Variables d'environnement au moment de la compilation (avancé/CI)
 

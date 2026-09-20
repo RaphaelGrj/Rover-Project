@@ -43,6 +43,24 @@ public:
     void setForwardBlocked(bool blocked) { _forwardBlocked = blocked; }
     bool forwardBlocked() const { return _forwardBlocked; }
 
+    // Bring-up only: drives raw PWM straight to the H-bridge, with NO
+    // PID and no encoder feedback, for `durationMs` and then stops.
+    //
+    // Why this is worth having: when the wheels do not turn, the PID's
+    // output is useless as evidence -- it saturates at 255 precisely
+    // BECAUSE nothing moves, so "PWM 255 and speed 0" is what a
+    // mechanical jam, a dead driver and a miswired encoder all look
+    // like. Commanding a fixed duty removes the loop from the picture
+    // entirely: if the motor still does not move, nothing upstream of
+    // the H-bridge can be blamed.
+    //
+    // Self-limiting by design: a raw duty with no feedback has no
+    // reason to outlive its test, so it stops on its own. Still
+    // subordinate to stop() and to the SAFE state, which call through
+    // the same motors.
+    void driveRaw(int16_t leftPwm, int16_t rightPwm, unsigned long durationMs);
+    bool rawActive() const { return _rawUntilMs != 0; }
+
     // Fills "left_speed=... right_speed=..." for a STATE frame.
     void buildTelemetryFields(char* out, size_t outLen) const;
 
@@ -70,6 +88,8 @@ public:
     }
 
 private:
+    unsigned long _rawUntilMs = 0;
+
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
                       float targetMps, float dtSeconds, float& measuredOut,
                       float tickSign, int16_t& pwmOut);

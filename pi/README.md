@@ -356,6 +356,22 @@ modification liée à la sécurité comme un détail.**
 - **Identifiants WiFi/OTA** (`esp32/OTA.md`) : même principe, jamais
   commités, lus depuis des variables d'environnement au moment de la
   compilation du firmware.
+- **Secret du lien ESP32** (`ROVER_LINK_SECRET`, depuis le 2026-09-20) :
+  quand le Rover Protocol passe par le réseau et non plus par un câble
+  USB, l'ESP32 exige ce secret avant d'accepter la moindre commande ---
+  sans lui, n'importe qui sur le WiFi pilote les moteurs
+  (`ROVER_PROTOCOL.md` §5.2). Variable d'environnement, **jamais dans
+  `config.json`**, exactement comme `ROVER_CONTROL_TOKEN`. Il doit
+  correspondre à celui enregistré sur le robot via le portail
+  (`SYSTEM action=wifi_setup`, champ « Secret du lien Pi », 8 à 47
+  caractères) : contrairement au token de contrôle, il ne peut pas être
+  généré à la volée puisqu'il faut que les deux bouts s'accordent.
+  Non défini = aucune trame `AUTH` envoyée, ce qui est exactement ce
+  qu'il faut sur le câble USB, où le firmware n'en demande pas.
+  Symptômes en cas d'erreur, visibles dans les logs : `ERROR
+  code=unauthenticated` (secret faux ou absent côté Pi) ou `ERROR
+  code=link_secret_not_set` (aucun secret enregistré côté robot ---
+  ça se corrige au robot, pas ici).
 - **Clé API `rover-ai`** (`rover_ai/credentials.py`) : même principe
   encore, `pi/ai_credentials.json` git-ignoré, permissions `0600`. Le
   panneau web (`/ai`) ne réaffiche jamais la clé en clair une fois

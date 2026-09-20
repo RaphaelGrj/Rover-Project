@@ -31,6 +31,10 @@ public:
     };
 
     void begin() {
+        // Inert when disabled: its pin now belongs to the yaw servo,
+        // and touching it here would fight the servo's PWM for the pad
+        // (see sound_config.h).
+        if (!ROVER_BUZZER_ENABLED) return;
         pinMode(ROVER_PIN_BUZZER, OUTPUT);
         noTone(ROVER_PIN_BUZZER);
     }

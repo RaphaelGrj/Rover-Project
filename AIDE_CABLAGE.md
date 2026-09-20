@@ -37,9 +37,11 @@ trace de ces anciens usages ailleurs dans le dépôt.
 
 ## Capteurs de distance VL53L0X --- gauche et droite
 
+✅ **Câblé et validé sur le vrai robot le 2026-09-20** --- les deux
+capteurs répondent et mesurent.
+
 Les deux capteurs partagent le même bus I2C (2 fils communs à tout le
-bus) plus une broche individuelle chacun pour pouvoir les distinguer au
-démarrage.
+bus). **Un seul fil `XSHUT` est piloté**, celui du capteur droit.
 
 | Broche du module VL53L0X | Où la brancher |
 |---|---|
@@ -47,12 +49,121 @@ démarrage.
 | `GND` (les deux capteurs) | GND commun |
 | `SDA` (les deux capteurs, même fil) | GPIO21 |
 | `SCL` (les deux capteurs, même fil) | GPIO22 |
-| `XSHUT` du capteur **gauche** | GPIO0 |
+| `XSHUT` du capteur **gauche** | **3V3** (en permanence, comme `VIN`) |
 | `XSHUT` du capteur **droit** | GPIO4 |
+| `GPIO1` du module (sortie interruption) | ne rien brancher |
 
-⚠ GPIO0 est une broche sensible au démarrage de l'ESP32 (elle doit
-rester haute/flottante pendant le boot) --- ne rien brancher dessus qui
-tire fort vers le GND en permanence.
+**Placement physique** : les deux **côte à côte en façade avant**,
+tournés vers l'avant --- pas un devant et un derrière. Le code
+`distance_left`/`distance_right` et le réflexe d'arrêt sur obstacle
+supposent les deux orientés dans la même direction.
+
+### ⚠ Pourquoi le `XSHUT` gauche va au 3V3 et pas sur une broche
+
+Ce guide demandait `GPIO0` jusqu'au 2026-09-20. **C'était impossible** :
+le devkit ESP32 WROOM 30 broches **ne sort pas GPIO0 du tout**. La
+rangée réelle enchaîne `GND, 15, 2, 4, RX2, TX2` --- il n'y a aucun `0`
+nulle part, parce que cette broche reste interne à la carte (elle est
+reliée au bouton `BOOT` et au circuit qui redémarre l'ESP32 tout seul
+au moment du flash).
+
+C'est la raison pour laquelle ces deux capteurs sont restés non câblés
+du 2026-09-02 au 2026-09-20 : le plan était irréalisable, sans que
+personne s'en aperçoive.
+
+Rien n'est perdu. Les deux capteurs sortent d'usine avec **la même
+adresse** (0x29) et ne peuvent donc pas parler sur le bus en même temps
+au démarrage. Pour les départager, il suffit d'en **éteindre un seul**
+le temps de renommer l'autre :
+
+1. le firmware éteint le capteur **droit** (`GPIO4` au niveau bas) ;
+2. le capteur **gauche**, seul à répondre, est renommé en `0x30` ;
+3. le firmware rallume le droit, qui prend l'adresse `0x29` laissée
+   libre.
+
+Le `XSHUT` du gauche n'a donc jamais besoin d'être piloté : il reste
+branché au 3V3, c'est-à-dire « allumé en permanence ». En prime, ça
+libère une broche sur une carte où il n'en reste aucune, et ça évite
+une broche sensible au démarrage.
+
+💡 **Un détail qui peut surprendre** : un VL53L0X garde son nouveau nom
+(`0x30`) tant qu'il n'est pas **débranché du courant**. Redémarrer
+l'ESP32 (bouton, reflash) ne suffit pas. Le firmware le remet donc
+lui-même à son adresse d'usine avant chaque initialisation --- sans
+quoi le capteur gauche serait porté disparu à partir du deuxième
+démarrage. Rien à faire de ton côté, mais ça explique le
+`SYSTEM action=tof_status` ci-dessous.
+
+### Vérifier que le câblage est bon
+
+- `SYSTEM action=i2c_scan` → doit lister **`0x29` et `0x30`** (en plus
+  de `0x68` = capteur de mouvement et `0x76` = capteur
+  température/pression).
+- `SYSTEM action=tof_status` → détaille ce que la séquence de
+  démarrage a vu, étape par étape (utile si un capteur manque à
+  l'appel) : `tof_post29=1` et `tof_lbegin=1` signifient que le gauche
+  a bien été trouvé et initialisé, `tof_rbegin=1` pareil pour le droit.
+- `SYSTEM action=tof_rescan` → rejoue toute la séquence sans
+  redémarrer, pratique après avoir rebranché un fil.
+- Dans la télémétrie, `distance_left=`/`distance_right=` en
+  millimètres. **`9999` = capteur absent**, **`8190` = capteur présent
+  mais ne voit rien à portée**. Les deux se ressemblent à l'oeil et ne
+  veulent pas du tout dire la même chose.
+
+------------------------------------------------------------------------
+
+## Servomoteur de tête (un seul, MG90S)
+
+✅ **Câblé et validé sur le robot le 2026-09-20.**
+
+| Fil du servo | Où le brancher |
+|---|---|
+| **Marron** (ou noir) | GND --- **la même masse que l'ESP32**, sinon le signal n'a aucune référence et le servo part n'importe où |
+| **Rouge** | +5 à 6 V (jamais le 3V3 de l'ESP32 : un MG90S tire jusqu'à 700 mA) |
+| **Orange** (ou jaune) | **GPIO13** |
+
+### ⚠ Pourquoi un seul servo, et pas deux
+
+Le projet prévoyait deux servos face à face entraînant la même pièce
+(montage « tandem »). **Abandonné le 2026-09-20** : deux servos sur un
+axe commun ne sont jamais parfaitement d'accord (leurs points neutres et
+leurs courses diffèrent toujours un peu), donc ils passent leur temps à
+se combattre --- ça chauffe, ça use, et ça ne tient pas la position.
+Remplacé par **un servo qui entraîne + un roulement qui guide** de
+l'autre côté.
+
+### ⚠ Le piège du palonnier : à lire avant de (re)monter le bras
+
+Le bras (« palonnier ») se fixe sur l'axe par des cannelures : il ne
+peut être posé que tous les ~1,4°, et **rien n'indique où est le milieu
+de la course du servo**. Le 2026-09-20, il était monté environ **90°
+hors du neutre** : la position de repos de la tête tombait tout au bout
+de la course du servo, si bien que **n'importe quel angle commandé
+enfonçait la tête dans sa butée**, dans les deux sens. Ça a coûté une
+bonne partie de la session avant d'être compris.
+
+**La bonne méthode, à suivre à chaque remontage :**
+
+1. **Retirer le bras** de l'axe du servo (pas seulement le dévisser de
+   la pièce : l'enlever complètement).
+2. Demander le centrage : le firmware place le servo au **milieu exact**
+   de sa course.
+3. **Alors seulement**, refixer le bras, tête en position neutre.
+
+On dispose ainsi de ~90° de marge de chaque côté, pour une tête qui n'a
+besoin que de ~20°.
+
+💡 Le firmware enregistre cette position de référence en mémoire
+(`SYSTEM action=head_origin`), et elle **survit aux redémarrages et aux
+reflash**. Si le bras est remonté légèrement de travers, il suffit de
+réenregistrer l'origine --- pas besoin de recompiler quoi que ce soit.
+
+### ⚠ Ne jamais utiliser GPIO19
+
+Cette broche était prévue pour un second servo : **elle n'émet rien sur
+cette carte** (vérifié le 2026-09-20 en croisant les deux servos et deux
+canaux PWM différents). C'est la deuxième broche défectueuse de ce
+devkit, après GPIO0 qui n'est carrément pas sortie sur le connecteur.
 
 ------------------------------------------------------------------------
 
@@ -205,3 +316,9 @@ complet et à jour :
 - GPIO2, GPIO12, GPIO15 : sensibles au démarrage, déjà utilisées
   (écran / buzzer) mais à éviter pour tout nouveau signal qui tirerait
   fort au boot.
+- GPIO19 : **ne fonctionne pas sur cette carte** (constaté le
+  2026-09-20 en croisant deux servos et deux canaux PWM). Ne rien y
+  brancher.
+- GPIO0 : **n'existe pas sur le connecteur** de ce devkit 30 broches
+  (constaté sur la carte le 2026-09-20). Inutile de la chercher : si un
+  plan de câblage la mentionne, c'est le plan qui est faux.

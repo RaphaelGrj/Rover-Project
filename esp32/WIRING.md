@@ -61,8 +61,9 @@
 | Encodeur gauche B                 | GPIO35    | entrée seule, idem |
 | Encodeur droit A                  | GPIO36    | entrée seule, idem --- marqué `VP` (ou `SVP`) sur le silkscreen de la plupart des devkits 30 broches, pas "36" |
 | Encodeur droit B                  | GPIO39    | entrée seule, idem --- marqué `VN` (ou `SVN`) sur le silkscreen, pas "39" |
-| Servo tête Pitch                  | GPIO13    | sortie LEDC (PWM servo) |
-| Servo tête Yaw                    | GPIO19    | sortie LEDC (PWM servo) |
+| Servo tête (unique)               | GPIO13    | sortie LEDC (PWM servo). **Seul servo de tête depuis le 2026-09-20** : un axe mécanique unique, piloté par `pitch` (`yaw` est inerte, voir `head_config.h`). Origine mécanique persistée en NVS (`SYSTEM action=head_origin`), donc un remontage de palonnier se rattrape sans reflasher |
+| ~~Servo tête Yaw~~                | ~~GPIO19~~ | ❌ **GPIO19 NE FONCTIONNE PAS sur ce devkit** (constaté 2026-09-20). Établi par élimination : les deux servos fonctionnent sur GPIO13, aucun ne fonctionne sur GPIO19, et changer de canal LEDC (5 → 6, donc de timer) n'y change rien alors que le firmware rapporte le canal attaché. Pad mort ou non connecté. **2e anomalie de cette carte** après GPIO0. Ne pas réutiliser cette broche |
+| *(2e servo tête --- supprimé)*     | *GPIO12*  | Le montage tandem (2 servos face à face sur un axe commun) a été **abandonné le 2026-09-20** au profit d'**un seul servo + un roulement de maintien** : deux servos sur un même axe ne sont jamais d'accord et se combattent. GPIO12 (ex-buzzer) avait été réquisitionné pour ce 2e servo, **il est donc redevenu libre** --- le buzzer peut y revenir (`ROVER_BUZZER_ENABLED`, `sound_config.h`) |
 | Écran ST7789 SCLK                 | GPIO18    | SPI logiciel/matriciel |
 | Écran ST7789 MOSI                 | GPIO23    | |
 | Écran ST7789 CS                   | GPIO5     | |
@@ -71,8 +72,8 @@
 | Écran ST7789 BLK (rétroéclairage) | 3V3 direct | pas de contrôle logiciel dans cette base |
 | I2C SDA (MPU6050, BME688, VL53L0X ×2, bus partagé) | GPIO21 | |
 | I2C SCL (bus partagé)             | GPIO22    | |
-| XSHUT VL53L0X gauche              | GPIO0     | ⚠ strapping ; doit rester HIGH/flottant au boot, piloté HIGH par le firmware ensuite pour l'adressage I2C séquentiel |
-| XSHUT VL53L0X droite              | GPIO4     | |
+| XSHUT VL53L0X gauche              | **3V3 direct** | ⚠ **Corrigé le 2026-09-20 sur matériel réel.** Prévu sur `GPIO0` jusque-là --- **impossible : le devkit WROOM 30 broches ne sort pas GPIO0** (rangée réelle : `GND, 15, 2, 4, RX2, TX2`, aucun 0 ; GPIO0 reste interne, relié au bouton BOOT et au circuit d'auto-reset). C'est pourquoi ces capteurs sont restés non câblés du 2026-09-02 au 2026-09-20. Aucune perte : séparer deux capteurs partageant l'adresse d'usine ne demande d'en éteindre qu'**un seul** (voir ci-dessous) |
+| XSHUT VL53L0X droite              | GPIO4     | seule ligne XSHUT pilotée ; maintenue LOW le temps que le gauche soit réadressé | |
 
 ## Micro I2S --- planifié, pas encore câblé (2026-09-15)
 

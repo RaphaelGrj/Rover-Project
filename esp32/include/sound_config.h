@@ -1,15 +1,26 @@
 #pragma once
 
-// Piezo buzzer (esp32/lib/sound/Buzzer.h). GPIO12 chosen deliberately
-// -- see WIRING.md "Pins évitées volontairement" for why this deviates
-// from the project's earlier "never use GPIO12" rule (strapping pin,
-// flash voltage selection risk at boot): explicitly accepted by the
-// user (2026-08-31) since every other GPIO on the WROOM devkit was
-// already spoken for. A passive piezo buzzer's high impedance rarely
-// pulls a strapping pin hard enough during the boot sampling window to
-// matter in practice -- watch the boot log after wiring this for real,
-// this pin is the first suspect if boot ever looks wrong.
-constexpr int ROVER_PIN_BUZZER = 12;
+// BUZZER DISABLED 2026-09-20 -- its pin (GPIO12) was handed to the yaw
+// servo, and there is no GPIO left to move it to.
+//
+// Why: GPIO19 (the yaw servo's pin since Phase 3) turns out to emit
+// nothing on this devkit. Verified by elimination on real hardware --
+// both servos work on GPIO13, neither works on GPIO19, and the LEDC
+// channel was swapped (5 -> 6, different timer) without change. The
+// firmware attaches the channel correctly (head_b_att=1), so the pad
+// itself is dead or unbonded. Driving the head matters more than a
+// beep, and the user chose to give up the buzzer (2026-09-20).
+//
+// What is lost: boot / obstacle / low-battery / E-stop beeps. The one
+// that stings is standalone mode, which beeped to explain why no
+// "Rover-Pilot" AP appeared when no password was stored -- on a robot
+// with no Pi attached, that diagnostic is now silent.
+//
+// The code is kept, not deleted: the buzzer comes straight back by
+// setting this to true and giving it a pin, if one is ever freed (the
+// deported Pi frees GPIO1, and GPIO3 is earmarked for the microphone).
+constexpr bool ROVER_BUZZER_ENABLED = false;
+constexpr int ROVER_PIN_BUZZER = -1;  // no pin assigned while disabled
 
 // I2S audio amplifier (MAX98357A). Pins confirmed with the user on
 // 2026-09-13 -- see WIRING.md for why GPIO16/17 (originally reserved

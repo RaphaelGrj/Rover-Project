@@ -57,8 +57,32 @@ void DriveController::updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID
     pwmOut = pwm;
 }
 
+void DriveController::driveRaw(int16_t leftPwm, int16_t rightPwm, unsigned long durationMs) {
+    // Bounded on purpose: an open-loop duty must not be able to outlive
+    // the operator's attention (see the header).
+    // 15s, raised from 5s on 2026-09-20: with this chassis needing
+    // near-full duty just to creep, 5s produced too little rotation to
+    // judge anything by. Still bounded -- an open-loop duty answers to
+    // nothing, so it must not be able to outlive the operator's
+    // attention (see the header).
+    if (durationMs > 15000) durationMs = 15000;
+    _rawUntilMs = millis() + durationMs;
+    _motorL.setSpeed(leftPwm);
+    _motorR.setSpeed(rightPwm);
+}
+
 void DriveController::update() {
     unsigned long now = millis();
+
+    // Raw bring-up drive owns the motors while it lasts: running the
+    // PID underneath would fight it for the same H-bridge.
+    if (_rawUntilMs != 0) {
+        if ((long)(now - _rawUntilMs) < 0) return;
+        _rawUntilMs = 0;
+        stop();
+        return;
+    }
+
     if (now - _lastUpdateMs < ROVER_DRIVE_UPDATE_PERIOD_MS) return;
     float dtSeconds = (now - _lastUpdateMs) / 1000.0f;
     _lastUpdateMs = now;

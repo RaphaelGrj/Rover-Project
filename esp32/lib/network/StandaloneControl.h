@@ -68,6 +68,16 @@ public:
     // Any request from the page counts as proof of life, exactly like
     // any valid frame from the Pi does (ROVER_PROTOCOL.md §6).
     std::function<void()> onHeartbeat;
+
+    // Radio arbitration (added 2026-09-20 with RoverNetwork.h, see
+    // ARCHITECTURE_AND_ROADMAP.md §6.2 "5 ter"). This mode needs the
+    // radio in AP mode, which by definition drops the station link the
+    // Pi talks over. Announcing the borrow and the return -- instead of
+    // calling WiFi.mode() directly -- keeps a single module in charge
+    // of that link. main.cpp routes both to
+    // RoverNetwork::suspend()/resume().
+    std::function<void()> onRadioTaken;
+    std::function<void()> onRadioReleased;
     // "ACTIVE"/"SAFE"/... plus whether forward motion is currently
     // blocked, so the page can show why it is not moving.
     std::function<String()> statusProvider;
@@ -84,13 +94,13 @@ public:
         // outcome this whole module refuses to allow.
         if (password.length() < 8) return false;
 
+        if (onRadioTaken) onRadioTaken();
         WiFi.mode(WIFI_AP);
         _apStarted = WiFi.softAP(buildApSsid().c_str(), password.c_str());
         if (!_apStarted) {
             // Hand the radio back rather than leaving it half-configured
             // in AP mode with no AP actually running.
-            WiFi.mode(WIFI_STA);
-            WiFi.reconnect();
+            releaseRadio();
             return false;
         }
 
@@ -114,8 +124,7 @@ public:
         if (!_active) return;
         _server.stop();
         WiFi.softAPdisconnect(true);
-        WiFi.mode(WIFI_STA);
-        WiFi.reconnect();
+        releaseRadio();
         _active = false;
         _apStarted = false;
     }
@@ -158,6 +167,20 @@ public:
     }
 
 private:
+    // Gives the radio back to whoever owns the station link. The
+    // WiFi.mode()/reconnect() branch is a fallback for the case where
+    // nobody wired the callback: leaving the radio in AP mode with no
+    // AP running would be worse than the duplication. main.cpp always
+    // wires it, so in practice only the callback runs.
+    void releaseRadio() {
+        if (onRadioReleased) {
+            onRadioReleased();
+        } else {
+            WiFi.mode(WIFI_STA);
+            WiFi.reconnect();
+        }
+    }
+
     void handlePage() {
         // Served straight from flash (PROGMEM), never built into a
         // String: this page is ~2KB and RAM is the scarcer resource

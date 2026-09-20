@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include "WifiCredentialsStore.h"
+#include "LinkAuth.h"
 #include "Watchdog.h"
 
 // On-demand WiFi configuration portal: the ESP32 opens its own
@@ -27,8 +28,20 @@
 // alongside everything else without risking the watchdog.
 class RoverWifiProvisioning {
 public:
+    // Radio arbitration (added 2026-09-20 with RoverNetwork.h, see
+    // ARCHITECTURE_AND_ROADMAP.md §6.2 "5 ter"). This module needs the
+    // radio in AP mode, which cannot coexist with the station link that
+    // now carries the command link. Rather than reaching for
+    // WiFi.mode() on its own -- how the "portal timeout leaves the
+    // radio dead until reboot" lockout happened in the first place --
+    // it announces the borrow and the return, and main.cpp routes both
+    // to RoverNetwork::suspend()/resume().
+    std::function<void()> onRadioTaken;
+    std::function<void()> onRadioReleased;
+
     // Non-blocking to call: WiFi.softAP() itself takes only a few ms.
     void start() {
+        if (onRadioTaken) onRadioTaken();
         WiFi.mode(WIFI_AP);
         String apSsid = buildApSsid();
         // Open AP, no password: this is a short-lived, operator-
@@ -78,8 +91,19 @@ public:
         _server.stop();
         _dnsServer.stop();
         WiFi.softAPdisconnect(true);
-        WiFi.mode(WIFI_STA);
-        WiFi.reconnect();
+        if (onRadioReleased) {
+            // RoverNetwork owns the station link since 2026-09-20 and
+            // handles the reconnection (with backoff) itself.
+            onRadioReleased();
+        } else {
+            // Kept as a fallback so this module still hands the radio
+            // back if nobody wired the callback -- leaving it in AP
+            // mode with no server behind it would be worse than the
+            // duplication. Not a second code path in practice: main.cpp
+            // always wires it.
+            WiFi.mode(WIFI_STA);
+            WiFi.reconnect();
+        }
         _active = false;
     }
 
@@ -168,6 +192,7 @@ private:
         String currentSsid = WifiCredentialsStore::getSsid();
         String hasOta = WifiCredentialsStore::getOtaPassword().length() > 0 ? "oui" : "non";
         String hasSolo = WifiCredentialsStore::getStandalonePassword().length() >= 8 ? "oui" : "non";
+        String hasLink = WifiCredentialsStore::getLinkSecret().length() > 0 ? "oui" : "non";
 
         String page;
         page.reserve(1024);
@@ -187,6 +212,9 @@ private:
         page += "<label>Mot de passe pilotage direct, 8 caracteres minimum ";
         page += "(mode sans Pi ni reseau -- deja configure : " + hasSolo + ")</label>";
         page += "<input name=solo_pass type=password minlength=8>";
+        page += "<label>Secret du lien Pi, 8 caracteres minimum ";
+        page += "(le Raspberry Pi doit le presenter pour piloter -- deja configure : " + hasLink + ")</label>";
+        page += "<input name=link_secret type=password minlength=8>";
         page += "<button type=submit>Enregistrer et redemarrer</button>";
         page += "</form></body></html>";
 
@@ -227,6 +255,26 @@ private:
                 return;
             }
             WifiCredentialsStore::setStandalonePassword(_server.arg("solo_pass"));
+        }
+        // Same "reject rather than silently store" stance as above, for
+        // two independent reasons. Too short: a guessable secret on the
+        // one channel that drives the motors continuously. Too long: a
+        // frame field is bounded (LinkAuth::MAX_SECRET_LEN), so an
+        // over-long secret would be truncated by the parser and then
+        // never match -- a failure that looks exactly like "wrong
+        // secret" from the Pi and is invisible from the robot.
+        if (_server.arg("link_secret").length() > 0) {
+            if (_server.arg("link_secret").length() < LinkAuth::MIN_SECRET_LEN) {
+                _server.send(400, "text/plain",
+                    "Secret du lien Pi trop court (8 caracteres minimum)");
+                return;
+            }
+            if (_server.arg("link_secret").length() > LinkAuth::MAX_SECRET_LEN) {
+                _server.send(400, "text/plain",
+                    "Secret du lien Pi trop long (47 caracteres maximum)");
+                return;
+            }
+            WifiCredentialsStore::setLinkSecret(_server.arg("link_secret"));
         }
 
         _server.send(200, "text/html",

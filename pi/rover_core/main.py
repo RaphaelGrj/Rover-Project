@@ -22,7 +22,7 @@ import asyncio
 from aiohttp import web
 
 from rover_ai.personality import PersonalityEngine
-from rover_esp32.link import RoverLink
+from rover_esp32.link import RoverLink, resolve_link_secret
 from rover_control.ai_panel import AIPanel
 from rover_control.audio_panel import AudioPanel
 from rover_control.auth import resolve_token
@@ -159,7 +159,10 @@ async def _mqtt_publish_loop(core: RoverCore, mqtt: MqttPublisher, period_s: flo
 
 
 async def async_main(settings: dict) -> None:
-    link = RoverLink(settings["port"], settings["baudrate"])
+    # The secret is read from the environment, never from config.json
+    # (see rover_esp32.link.resolve_link_secret). None over the USB
+    # cable, where the ESP32 requires no authentication.
+    link = RoverLink(settings["port"], settings["baudrate"], secret=resolve_link_secret())
     core = RoverCore(link)  # must be built inside the running loop, see core.py
     link.on_frame = core.on_frame
     # Non-blocking: start() only arms the supervisor, it does not wait

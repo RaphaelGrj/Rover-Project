@@ -14,7 +14,20 @@
 constexpr int ROVER_PIN_I2C_SDA = 21;
 constexpr int ROVER_PIN_I2C_SCL = 22;
 
-constexpr int ROVER_PIN_TOF_LEFT_XSHUT = 0;  // strapping pin, see WIRING.md
+// Only ONE XSHUT line is driven, and it is the right sensor's.
+//
+// The left sensor's XSHUT is tied to 3V3 in hardware instead. This was
+// GPIO0 until 2026-09-20, when the real board showed that a 30-pin
+// WROOM devkit does not break GPIO0 out at all -- it exposes
+// "GND, 15, 2, 4, RX2, TX2", with no 0 anywhere (GPIO0 stays internal,
+// wired to the BOOT button and the auto-reset circuit). The old plan
+// was therefore unbuildable, which is why these sensors sat unwired
+// from 2026-09-02 to 2026-09-20.
+//
+// Losing that line costs nothing: separating two devices that share a
+// factory address only requires holding ONE of them in reset while the
+// other is re-addressed (DistanceSensor::bringUpBoth). It also removes
+// a strapping-pin risk and gives a scarce GPIO back.
 constexpr int ROVER_PIN_TOF_RIGHT_XSHUT = 4;
 
 // Both VL53L0X boot on the same factory I2C address; the left sensor is

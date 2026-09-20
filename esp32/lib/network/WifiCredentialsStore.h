@@ -50,11 +50,20 @@ inline String getOtaPassword() { return getString("ota_pass", ""); }
 // replace its firmware -- different blast radius, so an operator can
 // hand out one without handing out the other.
 inline String getStandalonePassword() { return getString("solo_pass", ""); }
+// Shared secret the Pi must present on the Rover Protocol link before
+// it may command anything (LinkAuth.h, ARCHITECTURE_AND_ROADMAP.md
+// section 6.2 "5 bis"). A third distinct secret on purpose: OTA
+// replaces the firmware, solo_pass lets someone drive from a phone,
+// this one lets a machine on the LAN drive continuously. Different
+// blast radius each time, so an operator can hand out one without
+// handing out the others.
+inline String getLinkSecret() { return getString("link_secret", ""); }
 
 inline void setSsid(const String& v) { setString("ssid", v); }
 inline void setPassword(const String& v) { setString("pass", v); }
 inline void setOtaPassword(const String& v) { setString("ota_pass", v); }
 inline void setStandalonePassword(const String& v) { setString("solo_pass", v); }
+inline void setLinkSecret(const String& v) { setString("link_secret", v); }
 
 // Clears the WiFi network credentials (SSID/password) but deliberately
 // keeps the OTA password -- forgetting which router to join shouldn't
