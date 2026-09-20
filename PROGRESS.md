@@ -21,10 +21,41 @@
 > 3. Tests **courts, espacés**, moteurs froids : ils se dégradent
 >    d'essai en essai quand on insiste (constaté le 2026-09-20).
 >
-> Ce qui est déjà prouvé et n'a pas à être refait : le firmware est
-> correct, le driver commute, les moteurs tournent, les encodeurs
-> comptent, la mécanique est libre. **Il ne reste qu'un problème
-> d'énergie disponible.**
+> ### ⛔ LE LOGICIEL EST HORS DE CAUSE --- PROUVÉ PAR BISECTION
+>
+> Fin de session 2026-09-20, après avoir tout essayé : **le firmware du
+> commit `d9379a0` --- celui de la session où Rover roulait --- a été
+> reflashé intégralement et les moteurs n'ont pas tourné non plus.**
+> PWM à 255, vitesses à 0, identique au code actuel.
+>
+> | Version testée | Résultat |
+> |---|---|
+> | Code actuel (slow decay) | PWM 255 → 0 tick |
+> | Code actuel (fast decay) | PWM 255 → 0 tick |
+> | Code moteur de `d9379a0` | PWM 255 → 0 tick |
+> | **Firmware entier de `d9379a0`** | **PWM 255 → 0 tick** |
+>
+> **NE PAS CHERCHER DANS LE FIRMWARE.** Le problème est apparu entre la
+> session du 2026-09-15 et celle du 2026-09-20, et il est **électrique**.
+> Ce qui a changé physiquement entre les deux : chenilles montées,
+> capteurs ToF câblés sur `3V3`/`GND`, servos branchés puis débranchés
+> sur l'alimentation, réglages d'alim modifiés plusieurs fois.
+>
+> **Vérifications jamais faites, à faire EN PREMIER :**
+> 1. **Continuité de la masse `GND` ESP32 ↔ `GND` DRV8833** (multimètre
+>    en mode continuité, 5 secondes). Sans masse commune, les signaux
+>    `IN1`/`IN2` n'ont aucune référence : le driver ne commute pas et ne
+>    consomme rien, alors que `VM` et `SLEEP` mesurent correctement ---
+>    **exactement ce qui est observé**. C'est aussi le fil le plus
+>    manipulé pendant la session (bornier `GND` partagé avec les ToF et
+>    les servos).
+> 2. Tension aux bornes du moteur **pendant** qu'il est commandé.
+> 3. Courant débité par l'alim pendant la commande (0 A = le driver ne
+>    conduit pas).
+>
+> Ce qui est vérifié bon : DRV8833 (mesuré au multimètre par
+> l'utilisateur), `VM` à 7,5 V, `SLEEP` à 3V3, mécanique libre à la main,
+> encodeurs fonctionnels (le droit a compté -61 ticks).
 
 
 > Fichier de reprise rapide --- objectif : que je puisse me repérer sans
@@ -38,6 +69,14 @@
 ------------------------------------------------------------------------
 
 ## État actuel (fil ouvert, mis à jour en continu)
+
+- **MOTEURS : NON RÉSOLU en fin de session (2026-09-20)** --- les
+  moteurs ne tournent plus du tout, et **la bisection prouve que ce
+  n'est pas le logiciel** (voir le bandeau en tête de fichier : le
+  firmware de `d9379a0`, reflashé intégralement, échoue identiquement).
+  Le reste de cette entrée documente le chemin parcouru, mais **la
+  conclusion opérationnelle est dans le bandeau** : chercher côté
+  électrique, en commençant par la masse commune.
 
 - **MOTEURS : diagnostic complet, cause non trouvée (2026-09-20)** ---
   la session a éliminé méthodiquement tout ce qui pouvait l'être, et le
