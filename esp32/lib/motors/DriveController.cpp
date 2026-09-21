@@ -147,22 +147,41 @@ void DriveController::update() {
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
-    // forward_blocked is reported, not just acted on: without it, the
-    // local obstacle reflex (setForwardBlocked) looks from the Pi like
-    // "the robot ignores my MOVE" with no way to tell it apart from a
-    // dead motor, a saturated PID or a lost link -- and the Pi is now
-    // deported, so nobody can watch the robot while reading the logs.
+    // Four decimals on the speeds, not two. This robot's whole range is
+    // 0 to 0.03 m/s (ROVER_MAX_WHEEL_SPEED_MPS, measured), so "%.2f"
+    // printed 0.00 for any wheel turning slower than 0.005 m/s -- a
+    // wheel that IS turning, reported as stopped. That is the precise
+    // misreading this project spent weeks on ("left_pwm=255
+    // left_speed=0.00"), and at the old ten-times-too-high ceiling the
+    // format hid it. A number's resolution has to beat the range it
+    // carries.
+    //
+    // The obstacle flags moved out to buildObstacleFields() when this
+    // gained those two decimals: together they reached 129 bytes, one
+    // over ROVER_MAX_FRAME_LEN, and not in some contrived case -- a full
+    // speed reverse (both speeds negative, both PWMs at -255) hits it
+    // exactly. Splitting is the idiomatic answer here rather than a
+    // workaround: STATE fields are merged by the Pi and by the control
+    // page, which is why distance/IMU/environment already arrive as
+    // separate lines.
+    snprintf(out, outLen, "left_speed=%.4f right_speed=%.4f left_pwm=%d right_pwm=%d",
+             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight);
+}
+
+void DriveController::buildObstacleFields(char* out, size_t outLen) const {
     // Three fields, not one, because they answer three different
     // questions that used to be conflated: what the sensors see
     // (obstacle_seen), whether the reflex is armed (obstacle_reflex),
     // and whether forward motion is actually being clamped as a result
-    // (forward_blocked). With the reflex now switchable at runtime, a
-    // single flag could no longer tell "no obstacle" from "obstacle,
-    // but we were told to ignore it".
-    snprintf(out, outLen,
-             "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d "
-             "forward_blocked=%d obstacle_seen=%d obstacle_reflex=%d",
-             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight,
-             forwardBlocked() ? 1 : 0, _obstacleSeen ? 1 : 0,
-             _obstacleReflexEnabled ? 1 : 0);
+    // (forward_blocked). With the reflex switchable at runtime, a single
+    // flag could no longer tell "no obstacle" from "obstacle, but we
+    // were told to ignore it".
+    //
+    // forward_blocked is reported, not just acted on: without it, the
+    // local obstacle reflex looks from the Pi like "the robot ignores my
+    // MOVE" with no way to tell it apart from a dead motor, a saturated
+    // PID or a lost link -- and the Pi is deported, so nobody can watch
+    // the robot while reading the logs.
+    snprintf(out, outLen, "forward_blocked=%d obstacle_seen=%d obstacle_reflex=%d",
+             forwardBlocked() ? 1 : 0, _obstacleSeen ? 1 : 0, _obstacleReflexEnabled ? 1 : 0);
 }

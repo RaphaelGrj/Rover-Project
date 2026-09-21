@@ -70,6 +70,53 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🔴 SEPT RÉGRESSIONS TROUVÉES EN RELISANT MON PROPRE TRAVAIL
+  (2026-09-21)** --- revue de la branche avant flash, puisque ~1000
+  lignes dont une loi de commande moteur n'ont jamais pu tourner sur le
+  vrai matériel. Toutes viennent de la **même cause** : avoir divisé le
+  plafond de vitesse par 10 sans toucher à ce qui supposait l'ancienne
+  échelle.
+  - **La barre de vitesse n'avait que 4 positions utiles.** `MOVE` était
+    émis en `%.2f` sur une plage de 0 à 0,03 m/s : les 21 crans de la
+    barre s'effondraient en **quatre** commandes distinctes, et **sous
+    15 % de barre la commande valait `0.00`** --- le robot ne bougeait
+    pas du tout. Passé à quatre décimales, vérifié en navigateur : 7
+    crans testés, 7 commandes distinctes.
+  - **`left_speed=0.00` serait réapparu pour une roue qui tourne.** Même
+    format `%.2f` sur la télémétrie : toute roue sous 0,005 m/s
+    s'affichait à zéro. C'est *exactement* la lecture erronée qui a
+    coûté des semaines à ce projet, et je l'avais réintroduite.
+  - **Trame trop longue.** Vitesses à quatre décimales + les trois
+    drapeaux d'obstacle = 129 octets, un de trop, atteint par une simple
+    marche arrière à plein régime. Les drapeaux partent maintenant dans
+    leur propre trame, au changement seulement (plus court *et* plus
+    silencieux).
+  - **Une commande perdue n'était jamais réémise (page autonome).**
+    `lastSent` était posé avant que la requête n'aboutisse : un timeout
+    et la commande était considérée comme délivrée, pendant que les
+    keep-alives `h=1` maintenaient le heartbeat. **Un « stop » perdu
+    laissait le robot rouler indéfiniment.** Corrigé (acquittement sur
+    réponse seulement) et vérifié en coupant le lien à chaud.
+  - **Stick tenu + « Activer » = rien.** Le ré-armement ne purgeait pas
+    `lastSent`, donc aucun `MOVE` n'était émis après être sorti de SAFE.
+    `RoverCore.resume()` purgeait son cache pour cette raison exacte ;
+    la page n'avait pas l'équivalent.
+  - **Zone morte à 0,02 m/s**, soit les deux tiers de la plage : rouler
+    à 60 % de barre était rapporté comme « inactif ». Elle est
+    maintenant une **fraction du plafond rapporté par le robot**, donc
+    elle ne peut plus dériver.
+  - **Bascule obstacle optimiste** sans rien pour la corriger, et un
+    commentaire qui prétendait le contraire. Elle revient en arrière si
+    la requête échoue.
+  - **`monkeypatch` gelait `time.monotonic` de la stdlib** pour tout le
+    processus, sous une boucle asyncio vivante.
+  - Trois tests de non-régression ajoutés sur le fond du problème (la
+    résolution du format, la zone morte qui suit le plafond).
+  - **Leçon** : changer une constante de référence d'un ordre de
+    grandeur, c'est changer toutes les échelles qui en dépendent.
+    Formats d'affichage, seuils, tailles de tampon. Aucun de ces sept
+    points n'aurait été trouvé en relisant la ligne modifiée.
+
 - **🔧 OUTIL : `python -m tools.motor_triage` (2026-09-21)** --- une
   commande qui répond à la seule question qui compte : **la panne est-
   elle électrique ou logicielle ?**

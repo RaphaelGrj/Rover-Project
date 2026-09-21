@@ -116,6 +116,21 @@ void publishStateIfChanged() {
     protocol.send("STATE", fields);
 }
 
+// Same idea as publishStateIfChanged, for the obstacle flags: they move
+// on an event (a sensor crossing a threshold, an operator flipping the
+// reflex off), not continuously, so re-sending them 5x a second with the
+// wheel speeds bought nothing -- and once the speeds gained the decimals
+// they needed, the two together overran ROVER_MAX_FRAME_LEN anyway.
+void publishObstacleIfChanged() {
+    static char lastFields[64] = "";
+    char fields[64];
+    drive.buildObstacleFields(fields, sizeof(fields));
+    if (strcmp(fields, lastFields) == 0) return;
+    strncpy(lastFields, fields, sizeof(lastFields) - 1);
+    lastFields[sizeof(lastFields) - 1] = '\0';
+    protocol.send("STATE", fields);
+}
+
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
     // Access control runs BEFORE anything else, heartbeat included.
@@ -304,10 +319,7 @@ void onFrame(const RoverFrame& frame) {
             // A missing on= reads as 1: if a frame ever arrives garbled
             // enough to lose the field, the safe reading is "armed".
             drive.setObstacleReflexEnabled(frame.getInt("on", 1) != 0);
-            char fields2[32];
-            snprintf(fields2, sizeof(fields2), "obstacle_reflex=%d",
-                     drive.obstacleReflexEnabled() ? 1 : 0);
-            protocol.send("STATE", fields2);
+            publishObstacleIfChanged();
         } else if (strcmp(action, "raw_ticks") == 0) {
             // Bring-up only: raw cumulative encoder counts, untouched by
             // the PID loop's 20ms readAndResetTicks() -- lets a hand
@@ -937,6 +949,11 @@ void loop() {
     // the VL53L0X are actually wired and can never immobilize the robot
     // on a phantom reading from a missing sensor.
     drive.setForwardBlocked(sensors.obstacleDetected());
+    // Straight after the sensors feed it, so a crossing is reported on
+    // the same pass rather than a telemetry period later. On change
+    // only, and never gated on ACTIVE: knowing WHY the robot refuses to
+    // go forward matters most exactly when it is not moving.
+    publishObstacleIfChanged();
 
     if (sensors.consumeObstacleEvent()) {
         protocol.send("EVENT", "name=obstacle_detected");
@@ -959,23 +976,23 @@ void loop() {
     }
 
     // Periodic wheel-speed telemetry while ACTIVE (ROVER_PROTOCOL.md §8,
-    // "STATE left_speed=... right_speed=...").
+    // "STATE left_speed=... right_speed=..."). The obstacle flags are
+    // NOT here: they are published on change, and unlike this they are
+    // not gated on ACTIVE -- see publishObstacleIfChanged().
     if (state == RoverState::ACTIVE) {
         unsigned long now = millis();
         if (now - lastTelemetryMs >= ROVER_DRIVE_TELEMETRY_PERIOD_MS) {
             lastTelemetryMs = now;
-            // 128, not 96: adding forward_blocked= (2026-09-15) pushed
-            // the worst case to ~84 bytes, leaving only 12 spare -- the
-            // exact margin that produced this file's three previous
-            // truncation bugs. RoverProtocol::send() now detects a
-            // truncated frame instead of emitting a silently-cut one,
-            // but detection is the backstop, not the plan.
-            // 160, not 128: splitting the old single forward_blocked
-            // into forward_blocked/obstacle_seen/obstacle_reflex
-            // (2026-09-21) added ~36 bytes to the worst case, and this
-            // file has three historical truncation bugs that all came
-            // from a thin margin exactly like that.
-            char fields[160];
+            // 96 for a worst case of 68 ("left_speed=-0.0291
+            // right_speed=-0.0291 left_pwm=-255 right_pwm=-255").
+            // The obstacle flags used to ride along here; together with
+            // the speeds' new decimals the frame reached 129 bytes --
+            // one over ROVER_MAX_FRAME_LEN, on a full speed reverse.
+            // They are their own on-change frame now
+            // (publishObstacleIfChanged), which is both shorter and
+            // quieter. This file has three historical truncation bugs
+            // that all came from a thin margin exactly like that one.
+            char fields[96];
             drive.buildTelemetryFields(fields, sizeof(fields));
             protocol.send("STATE", fields);
         }

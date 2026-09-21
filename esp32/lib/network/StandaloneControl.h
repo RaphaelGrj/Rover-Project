@@ -343,7 +343,15 @@ function throttle(){ return sp.value/100; }
 // testing the number would miss it -- only the rendered string shows
 // the problem. "-0.00" parses fine on the firmware side, but this
 // project reads its own telemetry by eye far too often to leave it in.
-function fmt(x){ var t=x.toFixed(2); return t==='-0.00'?'0.00':t; }
+// Four decimals, not two: the whole speed range is 0 to 0.03 m/s, so
+// two decimals collapsed this bar's 21 positions into FOUR distinct
+// commands and made anything under 15% of the bar round to 0.00 -- the
+// robot simply would not move. A format has to out-resolve the range it
+// carries; two decimals only ever sufficed because the old ceiling was
+// ten times too high. The de-signing is cosmetic: a centred axis is
+// rarely exactly zero (normalising a near-centre touch leaves something
+// like -1e-17), so only the rendered string shows the problem.
+function fmt(x){ var t=x.toFixed(4); return t==='-0.0000'?'0.0000':t; }
 function vel(){ return fmt(-dy*throttle()*VMAX); }
 function rot(){ return fmt(dx*throttle()*RMAX); }
 
@@ -372,34 +380,68 @@ pad.addEventListener('mousemove',function(e){if(pad._d)fromEvent(e);});
 window.addEventListener('mouseup',function(){pad._d=0;release();});
 sp.addEventListener('input',function(){spv.textContent=sp.value+'%';});
 
-function send(q){
+// `commits` is the command this request would deliver, recorded ONLY
+// once the robot has acknowledged it. Recording it up front (which is
+// what this did at first) meant a request lost to a timeout was never
+// retried: the tick below only resends when the command CHANGES, while
+// the h=1 keep-alives went on holding the heartbeat -- so a dropped
+// "stop" left the robot driving on its last target indefinitely. An
+// unacknowledged command now simply goes out again on the next tick.
+function send(q,commits){
   lastReqMs=Date.now();
   var x=new XMLHttpRequest();
   x.open('GET',q,true);
   x.timeout=1500;
-  x.onload=function(){st.textContent=x.responseText;};
+  x.onload=function(){if(commits!==undefined)lastSent=commits;st.textContent=x.responseText;};
   x.onerror=x.ontimeout=function(){st.textContent='-- lien perdu --';};
   x.send();
 }
 function sendMove(extra){
-  lastSent=vel()+','+rot();
-  send('/c?v='+vel()+'&r='+rot()+(extra||''));
+  send('/c?v='+vel()+'&r='+rot()+(extra||''), vel()+','+rot());
 }
 document.getElementById('stop').onclick=function(){release();sendMove('&s=1');};
-document.getElementById('arm').onclick=function(){send('/c?a=1');};
+document.getElementById('arm').onclick=function(){
+  // Forget what was last delivered: entering SAFE cleared the robot's
+  // target (DriveController::stop), so anything remembered here is
+  // stale the moment it re-arms. Without this, a stick still held
+  // produces no MOVE at all after "Activer" -- the command has not
+  // changed, so nothing is sent, and the robot sits there. RoverCore.
+  // resume() drops its own cache for exactly this reason.
+  lastSent='';
+  send('/c?a=1');
+};
 
 // Obstacle reflex switch. The DISTANCES keep being measured and shown
 // either way -- this only stops the robot acting on them, it does not
-// blind it. Optimistic UI (the button flips immediately) because the
-// firmware's own reading comes back in the status line below on the
-// very next poll, so a request that failed corrects itself within
-// 250ms rather than needing its own error path.
+// blind it.
+//
+// The button flips at once and ROLLS BACK if the request does not land,
+// rather than claiming a state the robot never adopted. This page has
+// no telemetry channel to re-read the truth from (unlike the Pi's,
+// which follows STATE obstacle_reflex=), so not rolling back would
+// leave it lying with nothing to correct it. The status line above is
+// the authority either way: it spells out "reflexe obstacle desactive".
+// An ESP32 reboot re-arms the reflex, but it also drops this AP, so
+// that case shows up as "-- lien perdu --" rather than a stale button.
 var obs=document.getElementById('obs'),obsOn=true;
 function paintObs(){
   obs.textContent='Arret sur obstacle : '+(obsOn?'ACTIF':'DESACTIVE');
   obs.className=obsOn?'':'off';
 }
-obs.onclick=function(){obsOn=!obsOn;paintObs();send('/c?o='+(obsOn?1:0));};
+obs.onclick=function(){
+  var wanted=!obsOn;
+  obsOn=wanted;paintObs();
+  var x=new XMLHttpRequest();
+  x.open('GET','/c?o='+(wanted?1:0),true);
+  x.timeout=1500;
+  lastReqMs=Date.now();
+  x.onload=function(){st.textContent=x.responseText;};
+  x.onerror=x.ontimeout=function(){
+    obsOn=!wanted;paintObs();
+    st.textContent='-- commande obstacle perdue --';
+  };
+  x.send();
+};
 
 // 100ms tick, but two different requests come out of it:
 //   - the command changed -> send it now (so the pad still feels instant);

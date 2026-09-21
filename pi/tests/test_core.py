@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import types
 
 import rover_core.core as core_module
 from rover_core.core import RoverBehaviorState, RoverCore
@@ -56,7 +57,7 @@ def test_client_disconnect_sends_stop_and_returns_to_idle():
         await core.client_connected()
         await core.client_disconnected()
         assert core.state == RoverBehaviorState.IDLE
-        assert ("MOVE", {"velocity": "0.00", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "0.0000", "rotation": "0.0000"}) in link.sent
 
     run(body())
 
@@ -124,7 +125,7 @@ def test_move_forward_is_clamped_when_obstacle_is_close():
         core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
         await asyncio.sleep(0)
         core.move(0.2, 0.0)
-        assert ("MOVE", {"velocity": "0.00", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "0.0000", "rotation": "0.0000"}) in link.sent
         # Clamped to a stop -- must not read as MOVING.
         assert core.state != RoverBehaviorState.MOVING
 
@@ -138,7 +139,7 @@ def test_move_backward_is_not_clamped_when_obstacle_is_close():
         core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
         await asyncio.sleep(0)
         core.move(-0.2, 0.0)  # backing away must still work
-        assert ("MOVE", {"velocity": "-0.20", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "-0.2000", "rotation": "0.0000"}) in link.sent
 
     run(body())
 
@@ -150,7 +151,7 @@ def test_rotation_in_place_is_not_clamped_when_obstacle_is_close():
         core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
         await asyncio.sleep(0)
         core.move(0.0, 0.5)  # turning in place must still work
-        assert ("MOVE", {"velocity": "0.00", "rotation": "0.50"}) in link.sent
+        assert ("MOVE", {"velocity": "0.0000", "rotation": "0.5000"}) in link.sent
 
     run(body())
 
@@ -164,7 +165,7 @@ def test_move_forward_is_allowed_once_obstacle_clears():
         core.on_frame("STATE", {"distance_left": "9999"})  # cleared, no separate "cleared" event exists
         await asyncio.sleep(0)
         core.move(0.2, 0.0)
-        assert ("MOVE", {"velocity": "0.20", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "0.2000", "rotation": "0.0000"}) in link.sent
 
     run(body())
 
@@ -263,7 +264,7 @@ def test_identical_moves_are_not_resent_to_the_esp32():
         for _ in range(10):
             core.move(0.2, 0.0)
         moves = [frame for frame in link.sent if frame[0] == "MOVE"]
-        assert moves == [("MOVE", {"velocity": "0.20", "rotation": "0.00"})]
+        assert moves == [("MOVE", {"velocity": "0.2000", "rotation": "0.0000"})]
 
     run(body())
 
@@ -277,8 +278,8 @@ def test_a_changed_move_is_sent_immediately():
         core.move(0.1, 0.0)  # operator moved the speed bar
         moves = [frame for frame in link.sent if frame[0] == "MOVE"]
         assert moves == [
-            ("MOVE", {"velocity": "0.20", "rotation": "0.00"}),
-            ("MOVE", {"velocity": "0.10", "rotation": "0.00"}),
+            ("MOVE", {"velocity": "0.2000", "rotation": "0.0000"}),
+            ("MOVE", {"velocity": "0.1000", "rotation": "0.0000"}),
         ]
 
     run(body())
@@ -295,8 +296,14 @@ def test_an_unchanged_move_is_refreshed_after_the_refresh_period(monkeypatch):
         core.move(0.2, 0.0)
         assert len([f for f in link.sent if f[0] == "MOVE"]) == 1
 
-        clock = time.monotonic() + core_module.MOVE_REFRESH_S + 0.01
-        monkeypatch.setattr(core_module.time, "monotonic", lambda: clock)
+        # Replaces the module REFERENCE inside rover_core.core, not
+        # time.monotonic itself: patching the stdlib attribute freezes
+        # the clock process-wide, including the one the running asyncio
+        # loop schedules on.
+        frozen = time.monotonic() + core_module.MOVE_REFRESH_S + 0.01
+        monkeypatch.setattr(
+            core_module, "time", types.SimpleNamespace(monotonic=lambda: frozen)
+        )
         core.move(0.2, 0.0)
         assert len([f for f in link.sent if f[0] == "MOVE"]) == 2
 
@@ -341,7 +348,7 @@ def test_obstacle_clamp_can_be_disabled_at_runtime():
 
         core.set_obstacle_reflex(False)
         core.move(0.2, 0.0)
-        assert ("MOVE", {"velocity": "0.20", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "0.2000", "rotation": "0.0000"}) in link.sent
         # The firmware's own clamp is independent, so disabling only the
         # Pi's would achieve nothing -- it has to be told too.
         assert ("SYSTEM", {"action": "obstacle_reflex", "on": "0"}) in link.sent
@@ -361,7 +368,7 @@ def test_obstacle_clamp_comes_back_when_re_enabled():
         core.set_obstacle_reflex(True)
         core.move(0.2, 0.0)
         assert ("SYSTEM", {"action": "obstacle_reflex", "on": "1"}) in link.sent
-        assert link.sent[-1] == ("MOVE", {"velocity": "0.00", "rotation": "0.00"})
+        assert link.sent[-1] == ("MOVE", {"velocity": "0.0000", "rotation": "0.0000"})
 
     run(body())
 
@@ -375,6 +382,53 @@ def test_obstacle_clamp_is_armed_by_default():
         core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
         await asyncio.sleep(0)
         core.move(0.2, 0.0)
-        assert ("MOVE", {"velocity": "0.00", "rotation": "0.00"}) in link.sent
+        assert ("MOVE", {"velocity": "0.0000", "rotation": "0.0000"}) in link.sent
+
+    run(body())
+
+
+def test_the_wire_format_resolves_every_step_of_the_speed_bar():
+    """The regression that two decimals caused: this robot's whole range
+    is 0 to 0.03 m/s, so "%.2f" collapsed the control page's 21-position
+    bar into FOUR distinct commands, and anything under 15% of the bar
+    rounded to 0.00 -- the robot did not move at all. A wire format has
+    to out-resolve the range it carries."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        ceiling = core_module.DEFAULT_MAX_SPEED_MPS
+        for percent in range(5, 101, 5):
+            core.move(percent / 100 * ceiling, 0.0)
+        commands = {f[1]["velocity"] for f in link.sent if f[0] == "MOVE"}
+        assert len(commands) == 20, f"only {len(commands)} distinct commands for 20 bar steps"
+        # The bottom of the bar has to be a real command, not a rounded stop.
+        assert float(min(commands, key=float)) > 0.0
+
+    run(body())
+
+
+def test_movement_is_judged_against_this_robots_own_ceiling():
+    """The deadzone used to be an absolute 0.02 m/s, quietly calibrated
+    against a ceiling that turned out to be ten times too high. Against
+    the measured 0.03 it covered two thirds of the range, so driving at
+    60% of the bar still reported as idle."""
+    async def body():
+        core = RoverCore(FakeLink())
+        core.move(core_module.DEFAULT_MAX_SPEED_MPS * 0.2, 0.0)
+        assert core.state == RoverBehaviorState.MOVING
+
+    run(body())
+
+
+def test_the_deadzone_follows_a_recalibrated_ceiling():
+    """A robot that reports a ten-times-higher ceiling must judge the
+    same command as barely moving -- that is the whole point of reading
+    it back instead of hardcoding it."""
+    async def body():
+        core = RoverCore(FakeLink())
+        core.on_frame("STATE", {"max_speed": "0.30"})
+        await asyncio.sleep(0)
+        core.move(core_module.DEFAULT_MAX_SPEED_MPS * 0.2, 0.0)  # 0.006 of a 0.30 range
+        assert core.state != RoverBehaviorState.MOVING
 
     run(body())

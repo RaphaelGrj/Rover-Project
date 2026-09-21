@@ -90,8 +90,15 @@ public:
     void driveRaw(int16_t leftPwm, int16_t rightPwm, unsigned long durationMs);
     bool rawActive() const { return _rawUntilMs != 0; }
 
-    // Fills "left_speed=... right_speed=..." for a STATE frame.
+    // Fills "left_speed=... right_speed=... left_pwm=... right_pwm=..."
+    // for a periodic STATE frame.
     void buildTelemetryFields(char* out, size_t outLen) const;
+
+    // The obstacle flags, as their own frame. Split off from the above
+    // because the two together overran ROVER_MAX_FRAME_LEN once the
+    // speeds gained the resolution they needed -- and they belong apart
+    // anyway: speeds change constantly, these change on an event.
+    void buildObstacleFields(char* out, size_t outLen) const;
 
     // Applies the same gains to both wheels' PID -- see
     // esp32/lib/calibration/CalibrationStore.h and main.cpp's

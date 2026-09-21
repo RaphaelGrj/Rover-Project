@@ -67,10 +67,10 @@ l'espace final ni le `*CS` lui-même.
 Exemple :
 
 ```
-MOVE velocity=0.25 rotation=-0.10 *39
+MOVE velocity=0.0150 rotation=-0.1000 *39
 ```
 
-Contenu utilisé pour le checksum : `MOVE velocity=0.25 rotation=-0.10`.
+Contenu utilisé pour le checksum : `MOVE velocity=0.0150 rotation=-0.1000`.
 
 ### 3.2 Contraintes de trame
 
@@ -101,7 +101,18 @@ AUTH           Raspberry Pi → ESP32
 
 | Type        | Champs                          | Exemple                                  |
 |-------------|----------------------------------|-------------------------------------------|
-| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.25 rotation=-0.10 *39` |
+| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *39` |
+
+⚠️ **Résolution des nombres** : `velocity` et `rotation` sont émis avec
+**quatre décimales**, et ce n'est pas de la coquetterie. La plage de vitesse
+réelle de ce robot est 0 à 0,03 m/s (`ROVER_MAX_WHEEL_SPEED_MPS`, mesurée) :
+avec deux décimales, les 21 positions de la barre de vitesse de l'interface
+s'effondraient en **quatre** commandes distinctes, et tout ce qui était sous
+15 % de barre s'arrondissait à `0.00` --- le robot ne bougeait tout
+simplement pas. Même chose sur `left_speed`/`right_speed`, où `0.00`
+s'affichait pour une roue qui tournait bel et bien. **Un format doit avoir
+plus de résolution que la plage qu'il transporte** ; deux décimales n'ont
+jamais suffi que parce que le plafond était dix fois trop haut.
 | `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *3A`               |
 | `FACE`      | `emotion`                        | `FACE emotion=happy *2E`                  |
 | `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *11`            |
@@ -222,7 +233,8 @@ message ou groupés) :
 
 ```
 STATE battery=82 *1F
-STATE left_speed=0.24 right_speed=0.26 *0A
+STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *0A
+STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *5C
 STATE distance_left=420 distance_right=380 *2C
 STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
 STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
@@ -242,6 +254,15 @@ Pourquoi c'est diffusé et pas seulement disponible sur demande
 conception. Sans ce champ, un timeout heartbeat après une micro-coupure
 WiFi est indiscernable d'un moteur mort --- exactement la confusion qui
 a coûté plusieurs sessions de diagnostic moteur (`PROGRESS.md`).
+
+Les drapeaux d'obstacle voyagent dans **leur propre trame**, au
+changement seulement, séparés des vitesses : ensemble ils dépassaient
+`ROVER_MAX_FRAME_LEN` une fois les vitesses passées à quatre décimales
+(129 octets, atteints par une simple marche arrière à plein régime), et
+ils n'ont de toute façon pas le même rythme --- les vitesses changent en
+permanence, ceux-là sur événement. Contrairement aux vitesses, ils ne
+sont **pas** conditionnés à l'état `ACTIVE` : savoir *pourquoi* le robot
+refuse d'avancer compte surtout quand il n'avance pas.
 
 `state` / `estop` / `max_speed` sont publiés ensemble au changement
 seulement (plus une fois au boot). `max_speed` accompagne l'état parce

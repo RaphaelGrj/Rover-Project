@@ -37,10 +37,23 @@ logger = logging.getLogger(__name__)
 # while a client is actively connected.
 HEARTBEAT_PERIOD_S = 0.15
 
-# Below this, a MOVE's velocity/rotation counts as "not really moving"
-# for behavior-state purposes (a client sending 0.00/0.00 while idle
-# shouldn't read as MOVING).
-MOVEMENT_DEADZONE = 0.02
+# Below this FRACTION of what the robot can actually do, a MOVE counts
+# as "not really moving" for behavior-state purposes (a client sending
+# zeroes while idle shouldn't read as MOVING).
+#
+# A fraction, not an absolute, because the absolute one (0.02 m/s) was
+# silently calibrated against a speed ceiling that turned out to be ten
+# times too high: against the measured 0.03 m/s it covered two thirds of
+# the range, so driving flat out at 60% of the bar still reported as
+# idle. Anything expressed in m/s here has to track
+# ROVER_MAX_WHEEL_SPEED_MPS, and tracking it by hand is exactly how that
+# happened -- so this follows whatever ceiling the robot reports.
+MOVEMENT_DEADZONE_FRACTION = 0.05
+
+# Fallback until the robot has reported its own (STATE max_speed=),
+# mirroring ROVER_MAX_WHEEL_SPEED_MPS / ROVER_WHEEL_BASE_M.
+DEFAULT_MAX_SPEED_MPS = 0.03
+WHEEL_BASE_M = 0.15
 
 # How long an unchanged MOVE is allowed to go unrepeated before being
 # re-sent anyway (2026-09-21). The control page sends its axes at a fixed
@@ -243,6 +256,26 @@ class RoverCore:
             return False
         return left < OBSTACLE_THRESHOLD_MM or right < OBSTACLE_THRESHOLD_MM
 
+    def _is_really_moving(self, velocity: float, rotation: float) -> bool:
+        """Judged against what THIS robot can do, not an absolute.
+
+        The ceiling is calibrated per robot and reported in telemetry
+        (SYSTEM action=set_speed, STATE max_speed=), so reading it back
+        is the only way this threshold cannot drift out of step with it.
+        The rotation ceiling follows from the unicycle model, exactly as
+        the control page derives its own."""
+        try:
+            max_speed = float(self.last_state.get("max_speed", DEFAULT_MAX_SPEED_MPS))
+        except (TypeError, ValueError):
+            max_speed = DEFAULT_MAX_SPEED_MPS
+        if max_speed <= 0.0:
+            max_speed = DEFAULT_MAX_SPEED_MPS
+        max_rotation = (2.0 * max_speed) / WHEEL_BASE_M
+        return (
+            abs(velocity) > max_speed * MOVEMENT_DEADZONE_FRACTION
+            or abs(rotation) > max_rotation * MOVEMENT_DEADZONE_FRACTION
+        )
+
     def set_obstacle_reflex(self, enabled: bool) -> bool:
         """Arms or disarms the obstacle clamp, on BOTH layers.
 
@@ -273,20 +306,28 @@ class RoverCore:
             # turning in place both stay available, the Pi still decides
             # what to do next.
             velocity = 0.0
-        # Rounded first, then compared: what goes on the wire is two
-        # decimals, so two velocities that only differ in the third are
-        # the same frame and there is nothing to gain by sending it twice
-        # (see MOVE_REFRESH_S).
+        # Four decimals, not two, and that is not fussiness: this robot's
+        # whole speed range is 0 to 0.03 m/s (ROVER_MAX_WHEEL_SPEED_MPS,
+        # measured), so "%.2f" collapsed the control page's 21-position
+        # speed bar into FOUR distinct commands -- and anything under 15%
+        # of the bar rounded to 0.00, i.e. the robot simply did not move.
+        # The format has to have more resolution than the range it
+        # carries; two decimals were only ever enough because the ceiling
+        # used to be ten times too high.
+        #
+        # Rounded first, then compared, so two velocities that only
+        # differ beyond the wire's resolution are the same frame and
+        # there is nothing to gain by sending it twice (MOVE_REFRESH_S).
         # +0.0 turns a -0.0 back into 0.0 (IEEE754), so a centred axis
-        # is logged as "0.00" rather than "-0.00" -- cosmetic, but this
-        # telemetry gets read by eye constantly during motor bring-up.
-        command = (round(velocity, 2) + 0.0, round(rotation, 2) + 0.0)
+        # is logged as "0.0000" rather than "-0.0000" -- cosmetic, but
+        # this telemetry gets read by eye constantly during bring-up.
+        command = (round(velocity, 4) + 0.0, round(rotation, 4) + 0.0)
         now = time.monotonic()
         if command != self._last_move or now - self._last_move_sent_at >= MOVE_REFRESH_S:
             self._last_move = command
             self._last_move_sent_at = now
-            self.link.send("MOVE", {"velocity": f"{command[0]:.2f}", "rotation": f"{command[1]:.2f}"})
-        if abs(velocity) > MOVEMENT_DEADZONE or abs(rotation) > MOVEMENT_DEADZONE:
+            self.link.send("MOVE", {"velocity": f"{command[0]:.4f}", "rotation": f"{command[1]:.4f}"})
+        if self._is_really_moving(velocity, rotation):
             self._set_state(RoverBehaviorState.MOVING)
         elif self._client_count > 0:
             self._set_state(RoverBehaviorState.INTERACTING)
