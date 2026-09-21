@@ -59,7 +59,27 @@ constexpr float ROVER_WHEEL_BASE_M = 0.15f;
 // but not high-precision; revisit with a multi-turn measurement once a
 // real wheel is mounted if odometry accuracy matters later.
 constexpr float ROVER_ENCODER_TICKS_PER_REV = 1073.0f;
-constexpr float ROVER_MAX_WHEEL_SPEED_MPS = 0.3f;
+// MEASURED, not chosen (2026-09-21). The old value here was 0.3 m/s,
+// which this robot has never come close to and cannot reach: the
+// 2026-09-20 cold bring-up counted 3125 ticks in 10s at PWM 255, and
+// with ROVER_ENCODER_TICKS_PER_REV ticks and a 100.0mm wheel
+// circumference that is 17.5 rpm = 0.029 m/s. 0.3 was therefore ten
+// times the achievable speed, which made EVERY commanded speed an
+// unreachable setpoint: the error never closed, the integral parked on
+// its limit and the PWM sat pinned at 255 forever. "left_pwm=255
+// left_speed=0.00" was read as a dead motor for weeks; it was the
+// arithmetic working exactly as written.
+//
+// Rounded up slightly from the measurement so full bar asks for a
+// little more than the wheel can give, rather than a little less.
+//
+// This is a first honest figure from ONE measurement on a chassis that
+// may have been partly loaded, not a specification -- so it is
+// overridable at runtime and persisted (SYSTEM action=set_speed,
+// CalibrationStore), the same way the PID gains are. Re-measure with
+// reset_ticks / motor_raw left=255 right=255 ms=10000 / raw_ticks, cold,
+// wheels up and then on the ground, and set it from that.
+constexpr float ROVER_MAX_WHEEL_SPEED_MPS = 0.03f;
 // Sanity cap on MOVE's rotation field, independent of velocity -- keeps a
 // malformed/unexpectedly large command from commanding an unbounded spin
 // (the per-wheel PID output is clamped anyway, but this keeps the target
@@ -111,6 +131,21 @@ constexpr float ROVER_TICK_SIGN_RIGHT = -1.0f;
 constexpr float ROVER_PID_KP = 180.0f;
 constexpr float ROVER_PID_KI = 300.0f;
 constexpr float ROVER_PID_KD = 0.0f;
+// Feed-forward: PWM per m/s of commanded speed, so the duty a wheel
+// needs is sent straight out instead of being rediscovered by the
+// integrator one 20ms step at a time. 255 / 0.03 = 8500, i.e. full
+// scale on the speed bar asks for full duty immediately -- which is
+// exactly what SYSTEM action=motor_raw left=255 already does by hand.
+//
+// Before this term existed, the integral was the ONLY route to a usable
+// duty, and on a chassis needing 200+ PWM to break away that meant ~5s
+// of held joystick at 40% of the bar before anything moved (~10s at
+// 20%) -- indistinguishable from a dead motor on a short test.
+//
+// Keep it consistent with ROVER_MAX_WHEEL_SPEED_MPS: this is 255
+// divided by that. Runtime-settable and persisted like the gains
+// (SYSTEM action=set_pid kff=...).
+constexpr float ROVER_PID_KFF = 8500.0f;
 
 // How often DriveController recomputes PID output / reads encoders.
 constexpr unsigned long ROVER_DRIVE_UPDATE_PERIOD_MS = 20;

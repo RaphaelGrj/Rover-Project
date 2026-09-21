@@ -300,9 +300,34 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             try:
                 data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning("ignoring malformed control message: %r", msg.data)
+                continue
+
+            # Explicit re-arm from the page's "Activer" button. Handled
+            # before the drive fields and then `continue`d: it is a
+            # command of its own, not a MOVE carrying an extra key, and
+            # an ESP32 in SAFE would discard any MOVE sent with it
+            # anyway (main.cpp).
+            if isinstance(data, dict) and data.get("action") == "resume":
+                logger.info("control client requested a resume (%s)", request.remote)
+                core.resume()
+                continue
+
+            # Obstacle-reflex switch, same shape. Logged at info level
+            # on purpose: disabling a safety clamp is the kind of thing
+            # that must be findable in a log afterwards, next to
+            # whatever happened next.
+            if isinstance(data, dict) and data.get("action") == "obstacle_reflex":
+                enabled = bool(data.get("enabled", True))
+                logger.info("control client set obstacle reflex to %s (%s)", enabled, request.remote)
+                core.set_obstacle_reflex(enabled)
+                continue
+
+            try:
                 velocity = float(data["velocity"])
                 rotation = float(data["rotation"])
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            except (ValueError, KeyError, TypeError):
                 logger.warning("ignoring malformed control message: %r", msg.data)
                 continue
             core.move(velocity, rotation)

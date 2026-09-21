@@ -34,7 +34,7 @@ void DriveController::setTarget(float velocityMps, float rotationRadPerSec) {
     if (isnan(velocityMps) || isinf(velocityMps)) velocityMps = 0.0f;
     if (isnan(rotationRadPerSec) || isinf(rotationRadPerSec)) rotationRadPerSec = 0.0f;
 
-    _targetVelocity = constrain(velocityMps, -ROVER_MAX_WHEEL_SPEED_MPS, ROVER_MAX_WHEEL_SPEED_MPS);
+    _targetVelocity = constrain(velocityMps, -_maxSpeedMps, _maxSpeedMps);
     _targetRotation = constrain(rotationRadPerSec, -ROVER_MAX_ROTATION_RAD_S, ROVER_MAX_ROTATION_RAD_S);
 }
 
@@ -71,12 +71,41 @@ void DriveController::driveRaw(int16_t leftPwm, int16_t rightPwm, unsigned long 
     _motorR.setSpeed(rightPwm);
 }
 
+bool DriveController::consumeEncoderStorm(const char** wheelNameOut) {
+    if (_pendingStormLeft) {
+        _pendingStormLeft = false;
+        *wheelNameOut = "left";
+        return true;
+    }
+    if (_pendingStormRight) {
+        _pendingStormRight = false;
+        *wheelNameOut = "right";
+        return true;
+    }
+    return false;
+}
+
 void DriveController::update() {
     unsigned long now = millis();
+
+    // Checked before anything else, and regardless of the raw-drive
+    // branch below: an encoder input that has started oscillating is
+    // starving this very loop, so the sooner its interrupt goes away
+    // the sooner everything else runs again.
+    if (_encL.pollStorm(now)) _pendingStormLeft = true;
+    if (_encR.pollStorm(now)) _pendingStormRight = true;
 
     // Raw bring-up drive owns the motors while it lasts: running the
     // PID underneath would fight it for the same H-bridge.
     if (_rawUntilMs != 0) {
+        // Keep the PID's clock moving while the raw drive owns the
+        // motors. Without this, _lastUpdateMs stayed frozen for the
+        // whole test and the first PID pass afterwards saw a dt of up
+        // to 15 SECONDS: the integral term went straight to its clamp
+        // and fired a full-duty kick on a robot the operator believed
+        // was stopped. Harmless-looking arithmetic, very much not a
+        // harmless output.
+        _lastUpdateMs = now;
         if ((long)(now - _rawUntilMs) < 0) return;
         _rawUntilMs = 0;
         stop();
@@ -93,7 +122,7 @@ void DriveController::update() {
     // Forward only -- reversing away and turning in place stay
     // available. See setForwardBlocked() for the full reasoning.
     float velocity = _targetVelocity;
-    if (_forwardBlocked && velocity > 0.0f) velocity = 0.0f;
+    if (forwardBlocked() && velocity > 0.0f) velocity = 0.0f;
 
     // Unicycle model: linear velocity + rotation -> per-wheel target speed
     // (ARCHITECTURE_AND_ROADMAP.md section 12).
@@ -118,11 +147,41 @@ void DriveController::update() {
 }
 
 void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
+    // Four decimals on the speeds, not two. This robot's whole range is
+    // 0 to 0.03 m/s (ROVER_MAX_WHEEL_SPEED_MPS, measured), so "%.2f"
+    // printed 0.00 for any wheel turning slower than 0.005 m/s -- a
+    // wheel that IS turning, reported as stopped. That is the precise
+    // misreading this project spent weeks on ("left_pwm=255
+    // left_speed=0.00"), and at the old ten-times-too-high ceiling the
+    // format hid it. A number's resolution has to beat the range it
+    // carries.
+    //
+    // The obstacle flags moved out to buildObstacleFields() when this
+    // gained those two decimals: together they reached 129 bytes, one
+    // over ROVER_MAX_FRAME_LEN, and not in some contrived case -- a full
+    // speed reverse (both speeds negative, both PWMs at -255) hits it
+    // exactly. Splitting is the idiomatic answer here rather than a
+    // workaround: STATE fields are merged by the Pi and by the control
+    // page, which is why distance/IMU/environment already arrive as
+    // separate lines.
+    snprintf(out, outLen, "left_speed=%.4f right_speed=%.4f left_pwm=%d right_pwm=%d",
+             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight);
+}
+
+void DriveController::buildObstacleFields(char* out, size_t outLen) const {
+    // Three fields, not one, because they answer three different
+    // questions that used to be conflated: what the sensors see
+    // (obstacle_seen), whether the reflex is armed (obstacle_reflex),
+    // and whether forward motion is actually being clamped as a result
+    // (forward_blocked). With the reflex switchable at runtime, a single
+    // flag could no longer tell "no obstacle" from "obstacle, but we
+    // were told to ignore it".
+    //
     // forward_blocked is reported, not just acted on: without it, the
-    // local obstacle reflex (setForwardBlocked) looks from the Pi like
-    // "the robot ignores my MOVE" with no way to tell it apart from a
-    // dead motor, a saturated PID or a lost link -- and the Pi is now
-    // deported, so nobody can watch the robot while reading the logs.
-    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d forward_blocked=%d",
-             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight, _forwardBlocked ? 1 : 0);
+    // local obstacle reflex looks from the Pi like "the robot ignores my
+    // MOVE" with no way to tell it apart from a dead motor, a saturated
+    // PID or a lost link -- and the Pi is deported, so nobody can watch
+    // the robot while reading the logs.
+    snprintf(out, outLen, "forward_blocked=%d obstacle_seen=%d obstacle_reflex=%d",
+             forwardBlocked() ? 1 : 0, _obstacleSeen ? 1 : 0, _obstacleReflexEnabled ? 1 : 0);
 }

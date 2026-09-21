@@ -41,16 +41,64 @@
   #telemetry div:empty { display: none; }
   #stage {
     display: flex; align-items: center; justify-content: center;
+    gap: 1.2em;
     height: 100%;
   }
   /* Joystick base: fixed circle the stick moves inside of. */
   #joystick-base {
     position: relative;
-    width: min(70vw, 70vh); height: min(70vw, 70vh);
+    width: min(58vw, 58vh); height: min(58vw, 58vh);
     border-radius: 50%;
     background: #161b22;
     border: 2px solid #30363d;
   }
+  /* Speed bar: the joystick's companion, not an afterthought -- it is
+     what decides how fast Rover goes now that the stick only decides
+     where. Sits right next to the pad so one thumb can reach both. */
+  #speed-column {
+    display: flex; flex-direction: column; align-items: center; gap: 0.5em;
+  }
+  #speed-bar {
+    /* Vertical range input: writing-mode is the standard way (Chrome
+       121+, Safari 17.4+), -webkit-appearance the older WebKit/Blink
+       one. Both are declared because this page is opened from whatever
+       browser the phone in hand happens to run. */
+    writing-mode: vertical-lr; direction: rtl;
+    -webkit-appearance: slider-vertical;
+    width: 2.4em; height: min(50vw, 50vh);
+    accent-color: #58a6ff;
+    touch-action: none;
+  }
+  #speed-value {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.85em; color: #e6edf3; text-align: center;
+  }
+  #speed-label { font-size: 0.7em; color: #7d8590; }
+  /* Re-arm button: an ESP32 in SAFE ignores every MOVE until an
+     explicit SYSTEM action=resume (main.cpp), and until this button
+     existed the only way to send one was to close and reopen the page
+     (RoverCore.client_connected). */
+  #arm {
+    padding: 0.6em 0.9em; font-size: 0.85em;
+    background: #238636; color: #fff; border: 0; border-radius: 6px;
+  }
+  #arm.needed { background: #f85149; animation: arm-pulse 1s ease-in-out infinite; }
+  @keyframes arm-pulse { 50% { opacity: 0.55; } }
+  /* Armed = quiet grey (the normal, safe state should not shout).
+     Disarmed = amber, because a disabled safety clamp must never look
+     like business as usual. */
+  #obstacle-toggle {
+    padding: 0.6em 0.9em; font-size: 0.8em; line-height: 1.2;
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 6px; white-space: nowrap;
+  }
+  #obstacle-toggle.disarmed { background: #9e6a03; color: #fff; border-color: #bb8009; }
+  #esp-state {
+    display: inline-block; margin-left: 0.6em; padding: 0.1em 0.6em;
+    border-radius: 1em; font-size: 0.85em; background: #21262d; color: #7d8590;
+  }
+  #esp-state.esp-SAFE, #esp-state.esp-ERROR { background: #f8514933; color: #f85149; }
+  #esp-state.esp-ACTIVE { background: #3fb95033; color: #3fb950; }
   #joystick-stick {
     position: absolute; left: 50%; top: 50%;
     width: 34%; height: 34%;
@@ -111,7 +159,7 @@
 </style>
 </head>
 <body>
-<div id="status" class="disconnected"><span id="status-text">Connexion...</span><span id="behavior-state"></span></div>
+<div id="status" class="disconnected"><span id="status-text">Connexion...</span><span id="behavior-state"></span><span id="esp-state"></span></div>
 <div id="top-links">
   <a id="ar-link" href="/ar">RA</a>
   <a id="audio-link" href="/audio">Voix</a>
@@ -131,20 +179,49 @@
   <div id="joystick-base">
     <div id="joystick-stick"></div>
   </div>
+  <div id="speed-column">
+    <div id="speed-value">40%</div>
+    <input id="speed-bar" type="range" min="0" max="100" step="5" value="40" orient="vertical"
+           aria-label="Vitesse">
+    <div id="speed-label">vitesse</div>
+    <button id="arm" type="button">Activer</button>
+    <button id="obstacle-toggle" type="button">Obstacle : ON</button>
+  </div>
 </div>
 <div id="head-pad-base">
   <div id="head-pad-stick"></div>
 </div>
-<div id="hint">Manette (Gamepad API) prioritaire si branchée, sinon joysticks tactiles. Stick droit / pad orange = regard.</div>
+<div id="hint">Barre = vitesse, joystick = direction. Pad orange = regard. Manette prioritaire si branchée.</div>
 
 <script>
 "use strict";
 
-// Must stay <= the ESP32's own clamps (motion_config.h:
-// ROVER_MAX_WHEEL_SPEED_MPS / ROVER_MAX_ROTATION_RAD_S) -- these are
-// just the UI's own ceiling, the firmware clamps again regardless.
-const MAX_VELOCITY_MPS = 0.3;
-const MAX_ROTATION_RAD_S = 1.5;
+// Reached at 100% on the speed bar, not by pushing the stick further:
+// since 2026-09-21 the stick carries DIRECTION only (see readAxes()).
+//
+// The fallback matches ROVER_MAX_WHEEL_SPEED_MPS, but the robot's own
+// figure wins as soon as it reports one (STATE max_speed=): the ceiling
+// is calibrated per robot now (SYSTEM action=set_speed), so a hardcoded
+// constant here would go stale the moment anyone re-measures -- and a
+// ceiling above what the wheels can do is not cosmetic, it makes every
+// command an unreachable setpoint that pins the PWM at 255.
+const DEFAULT_MAX_VELOCITY_MPS = 0.03;
+let maxVelocityMps = DEFAULT_MAX_VELOCITY_MPS;
+
+// Mirrors ROVER_WHEEL_BASE_M (motion_config.h). Rotation is DERIVED from
+// the speed ceiling rather than set independently: the unicycle model
+// gives each wheel v ± rotation * wheelbase/2, so the fastest spin the
+// wheels can actually deliver is 2 * maxSpeed / wheelbase. The old
+// standalone 1.5 rad/s asked each wheel for 0.11 m/s -- nearly four
+// times what this chassis can do -- so every turn saturated.
+const WHEEL_BASE_M = 0.15;
+function maxRotationRadS() {
+  return (2 * maxVelocityMps) / WHEEL_BASE_M;
+}
+// Below this fraction of the pad/stick radius the input counts as
+// centred. A direction-only stick has no small commands to ease into,
+// so without a deadzone the slightest touch is a full-throttle start.
+const DIRECTION_DEADZONE = 0.25;
 // Mirrors ROVER_HEAD_PITCH_MIN/MAX_DEG and ROVER_HEAD_YAW_MIN/MAX_DEG
 // (esp32/include/head_config.h) -- the ESP32 clamps again regardless,
 // this just keeps the pad's range meaningful rather than mostly dead.
@@ -166,6 +243,11 @@ const eventLineEl = document.getElementById("event-line");
 const errorLineEl = document.getElementById("error-line");
 const videoFeedEl = document.getElementById("video-feed");
 const videoUnavailableEl = document.getElementById("video-unavailable");
+const speedBarEl = document.getElementById("speed-bar");
+const speedValueEl = document.getElementById("speed-value");
+const armButtonEl = document.getElementById("arm");
+const espStateEl = document.getElementById("esp-state");
+const obstacleToggleEl = document.getElementById("obstacle-toggle");
 
 // This page was itself only reachable because the URL carried a valid
 // ?token= (rover_control/server.py's auth_middleware, checked on every
@@ -227,8 +309,41 @@ function updateObstacleLine() {
     return;
   }
   const sides = [closeLeft && "gauche", closeRight && "droite"].filter(Boolean).join(" + ");
-  obstacleLineEl.textContent = `⚠ obstacle proche (${sides})`;
+  // The distances themselves are never hidden -- disabling the reflex
+  // stops the robot acting on them, it does not blind it. What changes
+  // is the second half of the line, so a warning can no longer be read
+  // as "and that is why it won't move" when it isn't.
+  const armed = mergedState.obstacle_reflex !== "0";
+  obstacleLineEl.textContent = armed
+    ? `⚠ obstacle proche (${sides}) -- marche avant bloquee`
+    : `⚠ obstacle proche (${sides}) -- arret sur obstacle DESACTIVE`;
 }
+
+// The firmware's own reading is what drives this button, never the
+// click: a page that assumed its request landed would quietly disagree
+// with the robot after a dropped frame or an ESP32 reboot (which re-arms
+// the reflex, since it is deliberately not persisted).
+// The robot's calibrated ceiling, when it reports one. Also relabels the
+// bar, because "40%" alone says nothing about how fast that actually is
+// on a chassis whose top speed is a few centimetres per second.
+function updateSpeedCeiling() {
+  const reported = Number(mergedState.max_speed);
+  if (Number.isFinite(reported) && reported > 0) maxVelocityMps = reported;
+  speedValueEl.textContent =
+    `${speedBarEl.value}% (${(speedBarEl.value / 100 * maxVelocityMps).toFixed(3)} m/s)`;
+}
+
+function updateObstacleToggle() {
+  const armed = mergedState.obstacle_reflex !== "0";
+  obstacleToggleEl.textContent = armed ? "Obstacle : ON" : "Obstacle : OFF";
+  obstacleToggleEl.classList.toggle("disarmed", !armed);
+}
+
+obstacleToggleEl.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const armed = mergedState.obstacle_reflex !== "0";
+  ws.send(JSON.stringify({ action: "obstacle_reflex", enabled: !armed }));
+});
 
 // STATE is a standing status (always shows the latest merged fields);
 // EVENT/ERROR are transient occurrences (ROVER_PROTOCOL.md §8: distinct
@@ -237,12 +352,31 @@ function updateObstacleLine() {
 // forever. ROVER_STATE is a synthetic type (not part of Rover Protocol
 // itself -- see RoverCore._set_state) carrying the Pi's own high-level
 // behavior state.
+// The ESP32's own hardware state machine (BOOT/READY/ACTIVE/SAFE/ERROR,
+// board_config.h) -- NOT the Pi's behavior state next to it, the two are
+// deliberately separate (ARCHITECTURE_AND_ROADMAP.md §20). Worth showing
+// because a robot in SAFE silently ignores every MOVE: without this, a
+// heartbeat timeout after a WiFi hiccup looks exactly like a dead motor.
+function updateEspStateChip() {
+  const espState = mergedState.state;
+  espStateEl.textContent = espState ? "ESP32: " + espState : "";
+  espStateEl.className = espState ? "esp-" + espState : "";
+  // Only SAFE is something the operator can clear from here. ERROR is
+  // not resumable (main.cpp), and a held E-stop makes the firmware
+  // refuse the resume outright -- promising otherwise would be a lie.
+  const needsArming = espState === "SAFE" && mergedState.estop !== "1";
+  armButtonEl.classList.toggle("needed", needsArming);
+}
+
 function handleEsp32Message(data) {
   if (data.type === "STATE") {
     mergedState = { ...mergedState, ...data };
     delete mergedState.type;
     stateLineEl.textContent = "etat: " + formatFields(mergedState);
     updateObstacleLine();
+    updateEspStateChip();
+    updateObstacleToggle();
+    updateSpeedCeiling();
   } else if (data.type === "EVENT") {
     eventLineEl.textContent = "evenement: " + formatFields(data);
     clearTimeout(eventClearTimer);
@@ -273,6 +407,8 @@ function connect() {
     mergedState = {};
     stateLineEl.textContent = "";
     obstacleLineEl.textContent = "";
+    updateEspStateChip();
+    updateObstacleToggle();
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();
@@ -287,6 +423,31 @@ connect();
 function sendCommand(velocity, rotation, headPitch, headYaw) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ velocity, rotation, head_pitch: headPitch, head_yaw: headYaw }));
+}
+
+// SYSTEM action=resume, via the Pi (rover_control/server.py ->
+// RoverCore.resume). The Pi already sends one when a control client
+// connects, but that is a one-shot: anything that drops the ESP32 into
+// SAFE *afterwards* -- a heartbeat timeout from a WiFi hiccup, a
+// released E-stop -- used to leave the page connected, the joystick
+// alive and the robot deaf until someone reloaded the tab.
+armButtonEl.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ action: "resume" }));
+});
+
+// --- Speed bar: how fast, decided here and only here ------------------
+// The joystick used to set both direction and magnitude, so speed
+// changed with every drift of the thumb and each drift was another
+// distinct MOVE for the ESP32 to chew on. Splitting them gives a speed
+// that holds still while driving -- which is also what makes the
+// duplicate-MOVE suppression in RoverCore.move() actually bite.
+speedBarEl.addEventListener("input", updateSpeedCeiling);
+// Once at startup too, so the bar reads in m/s from the first frame
+// rather than only after the robot's first STATE arrives.
+updateSpeedCeiling();
+function throttle() {
+  return Number(speedBarEl.value) / 100;
 }
 
 // --- Touch/mouse joystick (Pointer Events: one API for both) ----------
@@ -402,17 +563,36 @@ function readGamepadAxes() {
   return null;
 }
 
+// --- Direction only: the stick says WHERE, the bar says HOW FAST ------
+// Normalising to unit length is the whole change: half-way out and all
+// the way out now drive at the same speed, the one on the bar. Below the
+// deadzone it is a clean stop rather than a crawl. Applies to the gamepad
+// too, so both input paths obey the same bar instead of disagreeing about
+// what a half-pushed stick means.
+function directionFromAxes(axes) {
+  const magnitude = Math.hypot(axes.x, axes.y);
+  if (magnitude < DIRECTION_DEADZONE) return { x: 0, y: 0 };
+  return { x: axes.x / magnitude, y: axes.y / magnitude };
+}
+
 // --- Fixed-rate send loop: always send the latest axes, even if
 // unchanged, so a stuck/idle client is an explicit "0,0" rather than
-// silence (the ESP32-side safety timeout doesn't care either way, but
-// this keeps intent unambiguous for anyone watching the link). ---
+// silence. Kept at SEND_PERIOD_MS on purpose even though most of those
+// messages now repeat themselves: this cadence is what proves the
+// *browser* is still alive, and it is RoverCore.move() that drops the
+// duplicates before they reach the ESP32 (one place, on the link that
+// actually needed relief). Cutting it here instead would have let a
+// frozen page keep the robot rolling on its last command. ---
 
 setInterval(() => {
   const gamepad = readGamepadAxes();
-  const axes = gamepad || touchAxes;
-  const velocity = -axes.y * MAX_VELOCITY_MPS; // stick up (negative y) = forward
-  const rotation = axes.x * MAX_ROTATION_RAD_S;
+  const direction = directionFromAxes(gamepad || touchAxes);
+  const speed = throttle();
+  const velocity = -direction.y * speed * maxVelocityMps; // stick up = forward
+  const rotation = direction.x * speed * maxRotationRadS();
 
+  // The head pad keeps its proportional behaviour: it aims at an angle,
+  // it is not a speed, so "how far you push it" IS the command.
   const headAxesX = gamepad ? gamepad.headX : headTouchAxes.x;
   const headAxesY = gamepad ? gamepad.headY : headTouchAxes.y;
   const headPitch = -headAxesY * MAX_HEAD_PITCH_DEG; // stick/pad up = look up

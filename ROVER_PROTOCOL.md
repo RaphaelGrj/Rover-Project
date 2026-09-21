@@ -67,10 +67,10 @@ l'espace final ni le `*CS` lui-même.
 Exemple :
 
 ```
-MOVE velocity=0.25 rotation=-0.10 *39
+MOVE velocity=0.0150 rotation=-0.1000 *39
 ```
 
-Contenu utilisé pour le checksum : `MOVE velocity=0.25 rotation=-0.10`.
+Contenu utilisé pour le checksum : `MOVE velocity=0.0150 rotation=-0.1000`.
 
 ### 3.2 Contraintes de trame
 
@@ -101,7 +101,18 @@ AUTH           Raspberry Pi → ESP32
 
 | Type        | Champs                          | Exemple                                  |
 |-------------|----------------------------------|-------------------------------------------|
-| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.25 rotation=-0.10 *39` |
+| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *39` |
+
+⚠️ **Résolution des nombres** : `velocity` et `rotation` sont émis avec
+**quatre décimales**, et ce n'est pas de la coquetterie. La plage de vitesse
+réelle de ce robot est 0 à 0,03 m/s (`ROVER_MAX_WHEEL_SPEED_MPS`, mesurée) :
+avec deux décimales, les 21 positions de la barre de vitesse de l'interface
+s'effondraient en **quatre** commandes distinctes, et tout ce qui était sous
+15 % de barre s'arrondissait à `0.00` --- le robot ne bougeait tout
+simplement pas. Même chose sur `left_speed`/`right_speed`, où `0.00`
+s'affichait pour une roue qui tournait bel et bien. **Un format doit avoir
+plus de résolution que la plage qu'il transporte** ; deux décimales n'ont
+jamais suffi que parce que le plafond était dix fois trop haut.
 | `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *3A`               |
 | `FACE`      | `emotion`                        | `FACE emotion=happy *2E`                  |
 | `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *11`            |
@@ -118,16 +129,19 @@ ne reçoivent pas d'ACK.
 | `action=`  | Effet                                                        |
 |------------|---------------------------------------------------------------|
 | `ping`     | l'ESP32 répond `SYSTEM action=pong`                           |
-| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9) --- refusé tant que l'E-stop physique est enfoncé (`estop_pressed`, §7.2) |
+| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9) --- refusé tant que l'E-stop physique est enfoncé, et ce refus est **rapporté** (`ERROR code=estop_held`, §7.3) au lieu d'être ignoré en silence. Sans objet (donc sans erreur) si l'ESP32 est déjà `ACTIVE`. C'est la **seule** façon de ré-armer les moteurs : un `MOVE` reçu en `SAFE` est jeté, un `HEARTBEAT` ne ré-arme rien |
 | `diag`     | diagnostic série : l'ESP32 répond `STATE uptime_ms=... free_heap=... state=... board=... protocol=...` |
-| `set_pid`  | calibre les gains PID moteur à chaud, persistés en NVS (survit au reboot) : `SYSTEM action=set_pid kp=180 ki=300 kd=0` --- un champ omis garde sa valeur actuelle. Répond `STATE pid_kp=... pid_ki=... pid_kd=...`, ou `ERROR code=invalid_pid_gains` si une valeur est négative/NaN/infinie |
-| `get_pid`  | répond `STATE pid_kp=... pid_ki=... pid_kd=...` avec les gains actuellement actifs |
+| `set_pid`  | calibre les gains PID moteur à chaud, persistés en NVS (survit au reboot) : `SYSTEM action=set_pid kp=180 ki=300 kd=0 kff=8500` --- un champ omis garde sa valeur actuelle. `kff` est le terme de **feed-forward** (PWM par m/s) : c'est lui qui décide si une consigne produit un rapport cyclique utile tout de suite ou plusieurs secondes plus tard (voir `WheelPID::update`). Répond `STATE pid_kp=... pid_ki=... pid_kd=... pid_kff=...`, ou `ERROR code=invalid_pid_gains` si une valeur est négative/NaN/infinie |
+| `get_pid`  | répond `STATE pid_kp=... pid_ki=... pid_kd=... pid_kff=...` avec les gains actuellement actifs |
 | `reset_pid` | revient aux gains compilés par défaut (`motion_config.h`) et oublie la valeur sauvegardée en NVS |
 | `wifi_setup` | ouvre le portail de configuration WiFi/OTA (point d'accès temporaire `Rover-Setup-XXXX`, voir `esp32/OTA.md`) --- accessible depuis un PC ou un smartphone, se ferme seul après 10 min d'inactivité |
 | `wifi_status` | répond `STATE wifi_mode=...` : `setup` (portail ouvert), `wifi` avec `ip=...` (connecté au réseau, OTA pas encore configurée), `ota` avec `ip=...` (connecté, OTA active), ou `off` |
 | `wifi_forget` | efface le SSID/mot de passe WiFi enregistrés en NVS (garde le mot de passe OTA) |
 | `standalone` / `standalone_off` | entre/sort du pilotage autonome (point d'accès WPA2 + page joystick, §6.3 de l'architecture) |
 | `motor_raw` | **bring-up uniquement** : `SYSTEM action=motor_raw left=200 right=200 ms=2000` applique un rapport cyclique fixe directement au pont en H, **sans PID ni encodeur**, et s'arrête tout seul (15 s max). Indispensable pour diagnostiquer une roue immobile : la sortie du PID sature à 255 *parce que* rien ne tourne, donc un blocage mécanique, un driver mort et un encodeur inversé y sont indiscernables. Refusé hors de l'état `ACTIVE` |
+| `set_speed` / `reset_speed` | plafond de vitesse qu'un `MOVE` peut demander, en m/s, persisté en NVS : `SYSTEM action=set_speed max=0.045`. **Constante critique, pas cosmétique** : un plafond supérieur à ce que les roues savent faire rend *toute* consigne inatteignable, l'erreur ne se referme jamais, l'intégrale se bloque sur sa borne et le PWM reste collé à 255 --- la barre de vitesse n'a alors plus aucune autorité. `ERROR code=invalid_max_speed` si la valeur est nulle, négative, NaN ou infinie. Se mesure avec `reset_ticks` → `motor_raw left=255 right=255 ms=10000` → `raw_ticks`, à froid. `reset_speed` revient à la valeur compilée |
+| `obstacle_reflex` | arme/désarme le réflexe d'obstacle local : `SYSTEM action=obstacle_reflex on=0`. **Ne touche pas aux capteurs** --- les distances continuent d'être mesurées et publiées, seul le blocage de la marche avant change. Un `on=` absent vaut `1` (si une trame arrive assez abîmée pour perdre le champ, la lecture sûre est « armé »). Répond `STATE obstacle_reflex=...`. **Non persisté** : un garde-fou désactivé ne doit pas survivre à une coupure de courant, chaque démarrage repart armé. ⚠ Le Pi a son **propre** clamp (§6.2 question 5) et les deux sont indépendants ; `RoverCore.set_obstacle_reflex()` les désarme ensemble, désarmer un seul des deux ne change rien |
+| `raw_ticks` / `reset_ticks` | **bring-up uniquement** : compteurs d'encodeur bruts, intouchés par la boucle PID. Répond `STATE raw_ticks_left= raw_ticks_right= raw_edges_left= raw_edges_right=`. Les `raw_edges_` sont le nombre d'appels d'interruption depuis le boot, **jamais décrémentés** --- c'est leur rapport aux `raw_ticks_` qui compte : des *edges* qui grimpent pendant que les *ticks* stagnent signifie une entrée qui flotte (GPIO34-39 n'ont aucun pull-up interne) et une ISR qui affame la `loop()` chargée de piloter les moteurs. Les ticks seuls ne distinguent pas ce cas d'une roue simplement immobile |
 | `pintest` | **bring-up uniquement** : `SYSTEM action=pintest pin=13 level=1` force une broche (servos ou entrées moteur seulement) à un niveau logique continu, bien plus lisible au multimètre qu'un PWM. Réarme le PWM moteur après coup, `digitalWrite` détachant la broche du LEDC |
 | `head_origin` / `head_status` | `head_origin` fige les angles servo courants comme position de référence de la tête et les persiste en NVS ; tout angle logique est ensuite mesuré depuis là, ce qui rend un remontage de palonnier rattrapable sans reflasher. `head_status` renvoie `head_enabled=`, `head_a_att=`, `head_b_att=`, `head_a_deg=`, `head_b_deg=`, `head_org_a=`, `head_org_b=` |
 | `servo` | **bring-up uniquement** : `which=a\|b` pilote un servo en relâchant l'autre, `which=ab a= b=` les deux indépendamment, `which=pair angle=` les deux depuis l'origine, `which=off` relâche tout (aucune impulsion, aucun couple) |
@@ -219,11 +233,51 @@ message ou groupés) :
 
 ```
 STATE battery=82 *1F
-STATE left_speed=0.24 right_speed=0.26 *0A
+STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *0A
+STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *5C
 STATE distance_left=420 distance_right=380 *2C
 STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
 STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
+STATE state=SAFE estop=0 max_speed=0.030 *33
 ```
+
+`state=` / `estop=` : l'état de la machine à états de l'ESP32 (§9) et
+l'état du bouton d'arrêt d'urgence. Émis **au changement uniquement**
+(plus une fois au boot), donc coût nul en régime établi --- le Pi
+fusionne les champs `STATE` et les rejoue aux clients qui se connectent
+plus tard, une trame par transition suffit. À ne pas confondre avec
+l'état comportemental du Pi (`ROVER_STATE`, §20 de l'architecture) : ce
+sont deux machines distinctes.
+
+Pourquoi c'est diffusé et pas seulement disponible sur demande
+(`action=diag`) : un robot en `SAFE` ignore tous les `MOVE` par
+conception. Sans ce champ, un timeout heartbeat après une micro-coupure
+WiFi est indiscernable d'un moteur mort --- exactement la confusion qui
+a coûté plusieurs sessions de diagnostic moteur (`PROGRESS.md`).
+
+Les drapeaux d'obstacle voyagent dans **leur propre trame**, au
+changement seulement, séparés des vitesses : ensemble ils dépassaient
+`ROVER_MAX_FRAME_LEN` une fois les vitesses passées à quatre décimales
+(129 octets, atteints par une simple marche arrière à plein régime), et
+ils n'ont de toute façon pas le même rythme --- les vitesses changent en
+permanence, ceux-là sur événement. Contrairement aux vitesses, ils ne
+sont **pas** conditionnés à l'état `ACTIVE` : savoir *pourquoi* le robot
+refuse d'avancer compte surtout quand il n'avance pas.
+
+`state` / `estop` / `max_speed` sont publiés ensemble au changement
+seulement (plus une fois au boot). `max_speed` accompagne l'état parce
+qu'une page de pilotage ne peut pas dimensionner sa barre de vitesse
+sans lui : le plafond est calibré par robot (`action=set_speed`), donc
+une constante codée en dur dans l'UI périme dès la première nouvelle
+mesure.
+
+`forward_blocked` / `obstacle_seen` / `obstacle_reflex` répondent à
+trois questions distinctes, autrefois confondues en un seul champ :
+ce que les capteurs voient, si le réflexe est armé, et si la marche
+avant est **effectivement** bridée en conséquence. Depuis que le réflexe
+est débrayable à chaud (`action=obstacle_reflex`), un drapeau unique ne
+pouvait plus distinguer « pas d'obstacle » de « obstacle, mais on nous a
+dit de l'ignorer ».
 
 `distance_left`/`distance_right` sont en millimètres ; `9999` signifie
 "capteur indisponible" (échec `begin()` ou perte depuis), `8190`
@@ -262,6 +316,9 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `unauthenticated`      | trame reçue avant un `AUTH` valide sur un lien réseau, ou secret faux (§5.2) |
 | `link_secret_not_set`  | `AUTH` reçue mais aucun secret enregistré côté robot (§5.2) |
 | `tx_truncated`         | trame sortante trop longue, abandonnée plutôt qu'émise tronquée |
+| `estop_held`           | `SYSTEM action=resume` reçue alors que l'E-stop physique est enfoncé (§5.1) |
+| `invalid_max_speed`    | `SYSTEM action=set_speed` avec une valeur nulle, négative, NaN ou infinie |
+| `encoder_storm`        | un encodeur émettait des fronts à un rythme physiquement impossible (entrée qui flotte) et a **désarmé sa propre interruption** pour ne plus affamer la `loop()` qui pilote les moteurs. Champ `wheel=left\|right`. Ne se réarme qu'avec `SYSTEM action=reset_ticks`, une fois le câblage repris |
 
 ```
 ERROR code=motor_overcurrent *3D

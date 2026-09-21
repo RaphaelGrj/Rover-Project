@@ -76,6 +76,61 @@ unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
 unsigned long lastBatteryTelemetryMs = 0;
 
+// Publishes the ESP32's own state machine (board_config.h) to whoever
+// is listening, on CHANGE only.
+//
+// Why it exists: a robot in SAFE ignores every MOVE by design, and
+// until now the only way to learn that from the outside was to ask for
+// it (SYSTEM action=diag) or to catch the one EVENT that caused it. Miss
+// that event -- a client connecting after the fact, a frame lost on the
+// WiFi link -- and "the motors do not turn" is indistinguishable from a
+// dead driver. Seven sessions of motor diagnosis are the argument for
+// making this visible for free.
+//
+// Edge-driven, not periodic, so the steady-state cost is zero frames:
+// the Pi merges STATE fields and replays them to late-joining clients
+// (rover_core/core.py), so one frame per transition is enough to keep
+// every UI correct.
+void publishStateIfChanged() {
+    static RoverState lastPublished = RoverState::BOOT;
+    static bool lastEstop = false;
+    static float lastMaxSpeed = -1.0f;
+    static bool everPublished = false;
+    bool estopNow = estop.isPressed();
+    float maxSpeedNow = drive.maxSpeed();
+    if (everPublished && lastPublished == state && lastEstop == estopNow &&
+        lastMaxSpeed == maxSpeedNow) {
+        return;
+    }
+    lastPublished = state;
+    lastEstop = estopNow;
+    lastMaxSpeed = maxSpeedNow;
+    everPublished = true;
+    // max_speed rides along because a control page cannot scale its own
+    // speed bar sensibly without it: the ceiling is calibrated per robot
+    // now (SYSTEM action=set_speed), so a hardcoded UI constant would go
+    // stale the moment someone re-measures.
+    char fields[64];
+    snprintf(fields, sizeof(fields), "state=%s estop=%d max_speed=%.3f",
+             roverStateName(state), estopNow ? 1 : 0, maxSpeedNow);
+    protocol.send("STATE", fields);
+}
+
+// Same idea as publishStateIfChanged, for the obstacle flags: they move
+// on an event (a sensor crossing a threshold, an operator flipping the
+// reflex off), not continuously, so re-sending them 5x a second with the
+// wheel speeds bought nothing -- and once the speeds gained the decimals
+// they needed, the two together overran ROVER_MAX_FRAME_LEN anyway.
+void publishObstacleIfChanged() {
+    static char lastFields[64] = "";
+    char fields[64];
+    drive.buildObstacleFields(fields, sizeof(fields));
+    if (strcmp(fields, lastFields) == 0) return;
+    strncpy(lastFields, fields, sizeof(lastFields) - 1);
+    lastFields[sizeof(lastFields) - 1] = '\0';
+    protocol.send("STATE", fields);
+}
+
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
     // Access control runs BEFORE anything else, heartbeat included.
@@ -131,13 +186,23 @@ void onFrame(const RoverFrame& frame) {
 
         if (strcmp(action, "ping") == 0) {
             protocol.send("SYSTEM", "action=pong");
-        } else if (strcmp(action, "resume") == 0 && state == RoverState::SAFE && !estop.isPressed()) {
+        } else if (strcmp(action, "resume") == 0) {
             // A resume must never override a physically-held E-stop --
             // that would defeat the entire point of a hardware safety
             // layer. Only the heartbeat-timeout SAFE can be resumed this
             // way; releasing the button is necessary but not itself
             // sufficient (still requires this same explicit resume).
-            state = RoverState::ACTIVE;
+            //
+            // The refusal is now REPORTED rather than silently dropped
+            // (2026-09-21): an ignored resume and an accepted one looked
+            // identical from the Pi, so "I pressed Activer and nothing
+            // happened" had no answer. Not an error when we are already
+            // ACTIVE -- the caller got what it asked for.
+            if (estop.isPressed()) {
+                protocol.sendError("estop_held");
+            } else if (state == RoverState::SAFE) {
+                state = RoverState::ACTIVE;
+            }
         } else if (strcmp(action, "diag") == 0) {
             char fields[96];
             buildDiagnosticsFields(fields, sizeof(fields), state);
@@ -149,35 +214,44 @@ void onFrame(const RoverFrame& frame) {
             float kp = frame.getFloat("kp", drive.pidKp());
             float ki = frame.getFloat("ki", drive.pidKi());
             float kd = frame.getFloat("kd", drive.pidKd());
+            // kff is the feed-forward gain (PWM per m/s), see
+            // WheelPID::update -- tunable here like the rest, since it
+            // is the term that decides whether a commanded speed
+            // produces a usable duty at once or seconds later.
+            float kff = frame.getFloat("kff", drive.pidKff());
             if (isnan(kp) || isinf(kp) || isnan(ki) || isinf(ki) || isnan(kd) || isinf(kd) ||
-                kp < 0.0f || ki < 0.0f || kd < 0.0f) {
+                isnan(kff) || isinf(kff) ||
+                kp < 0.0f || ki < 0.0f || kd < 0.0f || kff < 0.0f) {
                 protocol.sendError("invalid_pid_gains");
             } else {
-                drive.setPidGains(kp, ki, kd);
+                drive.setPidGains(kp, ki, kd, kff);
                 CalibrationStore::setFloat("pid_kp", kp);
                 CalibrationStore::setFloat("pid_ki", ki);
                 CalibrationStore::setFloat("pid_kd", kd);
-                char fields2[64];
-                snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f", kp, ki, kd);
+                CalibrationStore::setFloat("pid_kff", kff);
+                char fields2[96];
+                snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                         kp, ki, kd, kff);
                 protocol.send("STATE", fields2);
             }
         } else if (strcmp(action, "get_pid") == 0) {
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
-                     drive.pidKp(), drive.pidKi(), drive.pidKd());
+            char fields2[96];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                     drive.pidKp(), drive.pidKi(), drive.pidKd(), drive.pidKff());
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "reset_pid") == 0) {
             // Reverts to the compiled-in placeholders (motion_config.h)
             // and forgets the NVS override, rather than just resetting
             // the in-memory value -- a reboot after this must not bring
             // the old override back.
-            drive.setPidGains(ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            drive.setPidGains(ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD, ROVER_PID_KFF);
             CalibrationStore::remove("pid_kp");
             CalibrationStore::remove("pid_ki");
             CalibrationStore::remove("pid_kd");
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
-                     ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            CalibrationStore::remove("pid_kff");
+            char fields2[96];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                     ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD, ROVER_PID_KFF);
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "motor_raw") == 0) {
             // Bring-up only: fixed duty straight to the H-bridge, no
@@ -207,15 +281,73 @@ void onFrame(const RoverFrame& frame) {
                          leftPwm, rightPwm, ms);
                 protocol.send("STATE", fields2);
             }
+        } else if (strcmp(action, "set_speed") == 0) {
+            // Re-calibrates the top speed a MOVE may ask for, without a
+            // reflash -- same reasoning as set_pid, and for a constant
+            // that turned out to matter just as much: a ceiling above
+            // what the wheels can actually do makes every command an
+            // unreachable setpoint, pins the PWM at 255 and leaves the
+            // speed bar with no authority at all (see
+            // ROVER_MAX_WHEEL_SPEED_MPS).
+            //
+            //   SYSTEM action=set_speed max=0.045
+            //
+            // Measure it with reset_ticks -> motor_raw left=255
+            // right=255 ms=10000 -> raw_ticks, cold.
+            float maxMps = frame.getFloat("max", -1.0f);
+            if (isnan(maxMps) || isinf(maxMps) || maxMps <= 0.0f) {
+                protocol.sendError("invalid_max_speed");
+            } else {
+                drive.setMaxSpeed(maxMps);
+                CalibrationStore::setFloat("max_speed", drive.maxSpeed());
+                publishStateIfChanged();
+            }
+        } else if (strcmp(action, "reset_speed") == 0) {
+            drive.setMaxSpeed(ROVER_MAX_WHEEL_SPEED_MPS);
+            CalibrationStore::remove("max_speed");
+            publishStateIfChanged();
+        } else if (strcmp(action, "obstacle_reflex") == 0) {
+            // Arms/disarms the LOCAL obstacle reflex
+            // (DriveController::setObstacleReflexEnabled) without
+            // touching the sensors: distances keep being measured and
+            // reported either way, only the clamp on forward motion
+            // changes. See that method for why a safety clamp is
+            // allowed a switch at all, and why this is not persisted.
+            //
+            //   SYSTEM action=obstacle_reflex on=0
+            //
+            // A missing on= reads as 1: if a frame ever arrives garbled
+            // enough to lose the field, the safe reading is "armed".
+            drive.setObstacleReflexEnabled(frame.getInt("on", 1) != 0);
+            publishObstacleIfChanged();
         } else if (strcmp(action, "raw_ticks") == 0) {
             // Bring-up only: raw cumulative encoder counts, untouched by
             // the PID loop's 20ms readAndResetTicks() -- lets a hand
             // rotation of a known number of turns be counted precisely,
             // to measure the real ROVER_ENCODER_TICKS_PER_REV instead of
             // the motion_config.h placeholder. See action=reset_ticks.
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "raw_ticks_left=%ld raw_ticks_right=%ld",
-                     drive.rawTicksLeft(), drive.rawTicksRight());
+            // Edge counts alongside the tick counts, because the two
+            // answer different questions and only their RATIO catches
+            // the failure mode that matters here. A tick counter can
+            // sit near zero for two opposite reasons: nothing is
+            // turning, or a floating input is toggling so fast that the
+            // +1/-1 decisions cancel out. GPIO34-39 have no internal
+            // pull-up (Encoder::begin), so a connector that has worked
+            // loose -- which this robot has form for -- leaves the pin
+            // floating and the ISR firing continuously, starving the
+            // very loop() that drives the motors. Edges climbing while
+            // ticks stay flat is that, unambiguously.
+            // 128, not 96: four counters at their full width need 107
+            // bytes, and 96 would have cut the last one -- on the very
+            // command whose worst case (an edge counter running away on
+            // a floating input) is also its EXPECTED case. Same class of
+            // bug as the three truncations already noted in this file,
+            // caught here by counting instead of by hardware.
+            char fields2[128];
+            snprintf(fields2, sizeof(fields2),
+                     "raw_ticks_left=%ld raw_ticks_right=%ld raw_edges_left=%lu raw_edges_right=%lu",
+                     drive.rawTicksLeft(), drive.rawTicksRight(),
+                     drive.rawEdgesLeft(), drive.rawEdgesRight());
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "reset_ticks") == 0) {
             drive.resetRawTicks();
@@ -551,8 +683,13 @@ void setup() {
     drive.setPidGains(
         CalibrationStore::getFloat("pid_kp", ROVER_PID_KP),
         CalibrationStore::getFloat("pid_ki", ROVER_PID_KI),
-        CalibrationStore::getFloat("pid_kd", ROVER_PID_KD)
+        CalibrationStore::getFloat("pid_kd", ROVER_PID_KD),
+        CalibrationStore::getFloat("pid_kff", ROVER_PID_KFF)
     );
+    // Same treatment for the speed ceiling: the compiled default is one
+    // measurement (see ROVER_MAX_WHEEL_SPEED_MPS), and re-measuring it
+    // must not need a reflash.
+    drive.setMaxSpeed(CalibrationStore::getFloat("max_speed", ROVER_MAX_WHEEL_SPEED_MPS));
     head.begin();
     // Servo horn positions survive reboots; the mechanical origin they
     // imply must too (HeadController::loadOrigin).
@@ -622,18 +759,27 @@ void setup() {
         drive.stop();
         state = RoverState::SAFE;
     };
+    standalone.onObstacleReflex = [](bool enabled) {
+        // Same switch the Pi reaches through SYSTEM action=obstacle_reflex
+        // -- one setting, one owner, no second code path that could end
+        // up disagreeing with the first.
+        drive.setObstacleReflexEnabled(enabled);
+    };
     standalone.statusProvider = []() {
-        const char* name = "?";
-        switch (state) {
-            case RoverState::BOOT:   name = "BOOT";   break;
-            case RoverState::READY:  name = "READY";  break;
-            case RoverState::ACTIVE: name = "ACTIVE"; break;
-            case RoverState::SAFE:   name = "SAFE";   break;
-            case RoverState::ERROR:  name = "ERROR";  break;
+        // Shown verbatim on the page: without this, an obstacle reflex
+        // reads as "the robot ignores my joystick". Three cases, not
+        // two, since the reflex became switchable -- "a sensor sees
+        // something but we were told to drive anyway" is worth saying
+        // out loud rather than looking identical to a clear path.
+        String status = roverStateName(state);
+        if (drive.forwardBlocked()) {
+            status += " | obstacle: marche avant bloquee";
+        } else if (drive.obstacleSeen()) {
+            status += " | obstacle vu, reflexe DESACTIVE";
+        } else if (!drive.obstacleReflexEnabled()) {
+            status += " | reflexe obstacle desactive";
         }
-        // Shown verbatim on the page: without forward_blocked, an
-        // obstacle reflex reads as "the robot ignores my joystick".
-        return String(name) + (drive.forwardBlocked() ? " | obstacle: marche avant bloquee" : "");
+        return status;
     };
 
     char fields[64];
@@ -655,6 +801,9 @@ void setup() {
 
     buzzer.play(BuzzerSound::BOOT);
     state = RoverState::READY;
+    // First publication, so a Pi that was already listening knows what
+    // it is talking to without asking (see publishStateIfChanged).
+    publishStateIfChanged();
 }
 
 void loop() {
@@ -739,6 +888,11 @@ void loop() {
     }
     wasEstopPressed = estop.isPressed();
 
+    // After every transition above (heartbeat timeout, E-stop) and
+    // before the telemetry below -- on change only, so this costs
+    // nothing while the state holds still.
+    publishStateIfChanged();
+
     if (battery.hasReading()) {
         if (battery.consumeLowBatteryEvent()) {
             protocol.send("EVENT", "name=low_battery");
@@ -766,6 +920,18 @@ void loop() {
         snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=%s", failedSensor);
         protocol.send("ERROR", errFields);
     }
+    // An encoder that just disabled itself (Encoder::pollStorm): a
+    // floating input firing continuously starves this loop, so the
+    // interrupt is dropped and the fact is reported rather than left to
+    // look like a wheel that simply stopped counting. Re-armed only by
+    // SYSTEM action=reset_ticks, once the wiring has been seen to.
+    const char* stormedWheel;
+    while (drive.consumeEncoderStorm(&stormedWheel)) {
+        char errFields[48];
+        snprintf(errFields, sizeof(errFields), "code=encoder_storm wheel=%s", stormedWheel);
+        protocol.send("ERROR", errFields);
+    }
+
     // LOCAL obstacle reflex -- the ESP32 refuses to drive further into an
     // obstacle by itself, without consulting the Pi. Level-driven (not
     // the edge event below) so the block holds for as long as the
@@ -783,6 +949,11 @@ void loop() {
     // the VL53L0X are actually wired and can never immobilize the robot
     // on a phantom reading from a missing sensor.
     drive.setForwardBlocked(sensors.obstacleDetected());
+    // Straight after the sensors feed it, so a crossing is reported on
+    // the same pass rather than a telemetry period later. On change
+    // only, and never gated on ACTIVE: knowing WHY the robot refuses to
+    // go forward matters most exactly when it is not moving.
+    publishObstacleIfChanged();
 
     if (sensors.consumeObstacleEvent()) {
         protocol.send("EVENT", "name=obstacle_detected");
@@ -805,18 +976,23 @@ void loop() {
     }
 
     // Periodic wheel-speed telemetry while ACTIVE (ROVER_PROTOCOL.md §8,
-    // "STATE left_speed=... right_speed=...").
+    // "STATE left_speed=... right_speed=..."). The obstacle flags are
+    // NOT here: they are published on change, and unlike this they are
+    // not gated on ACTIVE -- see publishObstacleIfChanged().
     if (state == RoverState::ACTIVE) {
         unsigned long now = millis();
         if (now - lastTelemetryMs >= ROVER_DRIVE_TELEMETRY_PERIOD_MS) {
             lastTelemetryMs = now;
-            // 128, not 96: adding forward_blocked= (2026-09-15) pushed
-            // the worst case to ~84 bytes, leaving only 12 spare -- the
-            // exact margin that produced this file's three previous
-            // truncation bugs. RoverProtocol::send() now detects a
-            // truncated frame instead of emitting a silently-cut one,
-            // but detection is the backstop, not the plan.
-            char fields[128];
+            // 96 for a worst case of 68 ("left_speed=-0.0291
+            // right_speed=-0.0291 left_pwm=-255 right_pwm=-255").
+            // The obstacle flags used to ride along here; together with
+            // the speeds' new decimals the frame reached 129 bytes --
+            // one over ROVER_MAX_FRAME_LEN, on a full speed reverse.
+            // They are their own on-change frame now
+            // (publishObstacleIfChanged), which is both shorter and
+            // quieter. This file has three historical truncation bugs
+            // that all came from a thin margin exactly like that one.
+            char fields[96];
             drive.buildTelemetryFields(fields, sizeof(fields));
             protocol.send("STATE", fields);
         }

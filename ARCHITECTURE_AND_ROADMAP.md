@@ -659,6 +659,97 @@ que le resume du Pi refuse. Sans ça, un robot allumé sans Pi resterait
 en `READY` à vie et le mode serait inutilisable dans le cas même pour
 lequel il existe.
 
+### Barre de vitesse + joystick de direction (2026-09-21)
+
+Les **deux** pages de pilotage (celle servie par l'ESP32 ici, et celle du
+Pi `pi/rover_control/static/index.html`) séparent désormais ce qui était
+confondu :
+
+-   la **barre latérale** décide de la **vitesse**, et d'elle seule ;
+-   le **joystick** décide de la **direction**, et d'elle seule --- la
+    commande est le vecteur **normalisé** à longueur 1, donc à mi-course
+    ou à fond de course on roule à la même vitesse, celle de la barre.
+    En-dessous d'une zone morte (25 % du rayon) c'est un arrêt franc,
+    pas un rampement : une commande « direction seule » n'a aucun petit
+    régime dans lequel s'engager progressivement.
+
+**Pourquoi** : avec l'ancien schéma, la vitesse changeait à chaque
+dérive du pouce, et *chaque dérive était une nouvelle valeur flottante*
+envoyée à l'ESP32 plusieurs fois par seconde. Une vitesse fixe rend une
+ligne droite égale à **une commande répétée**, pas à un flux de
+commandes légèrement différentes.
+
+Ce que ça permet côté lien, et où le gain est réellement pris :
+
+-   **Pi → ESP32** : `RoverCore.move()` ne réémet plus une `MOVE`
+    identique à la précédente (rafraîchie quand même toutes les 0,5 s,
+    voir `MOVE_REFRESH_S` --- un ESP32 qui aurait redémarré ou qui sort
+    de `SAFE` ne doit pas rester sur une consigne périmée). La page,
+    elle, **continue** d'émettre à cadence fixe : c'est cette cadence
+    qui prouve que le *navigateur* est vivant, et la couper aurait
+    permis à une page figée de laisser le robot rouler sur sa dernière
+    commande. Le filtrage est donc fait à un seul endroit, sur le lien
+    qui en avait besoin.
+-   **Navigateur → ESP32** (mode autonome) : la page n'envoie `v`/`r`
+    que lorsque la commande change, et sinon un simple `GET /c?h=1`,
+    qui ne fait qu'alimenter le heartbeat sans re-cibler le PID ---
+    l'équivalent exact d'une trame `HEARTBEAT` du Pi, qui maintient
+    `ACTIVE` sans redire le dernier `MOVE`. Le nombre de requêtes, lui,
+    reste plancheré par le timeout heartbeat (500 ms) : ce n'est pas là
+    que se gagne quelque chose, et c'est assumé.
+
+### Réflexe d'obstacle débrayable (2026-09-21)
+
+Les deux pages ont un bouton **« arrêt sur obstacle » ON/OFF**. C'est
+une entorse assumée au principe « on ne débranche pas un garde-fou », et
+elle se justifie :
+
+-   le réflexe est devenu actif le **2026-09-20**, le jour même où les
+    moteurs ont cessé de tourner. Un ToF qui voit une chenille, un
+    câble, ou le sol devant lui met la marche avant à zéro **en
+    silence** --- indiscernable, vu de l'extérieur, des moteurs morts
+    qu'on traque depuis des semaines ;
+-   pouvoir retirer un suspect du tableau en une pression vaut plus,
+    pendant un bring-up, qu'un réflexe qu'on ne peut pas interroger.
+
+Les garanties qui l'encadrent :
+
+-   **les capteurs ne sont pas touchés.** Les distances continuent
+    d'être mesurées, publiées et affichées. Le bouton empêche d'*agir*
+    sur ce qui est vu, il n'aveugle pas le robot ;
+-   **rien n'est persisté.** Un garde-fou désactivé ne survit pas à une
+    coupure de courant : chaque démarrage repart armé. C'est l'inverse
+    du choix fait pour les gains PID (`CalibrationStore`), et la
+    différence est nette --- un gain est un réglage, ceci est un
+    garde-fou ;
+-   **le bouton suit le robot, pas le clic.** L'UI affiche la valeur
+    rapportée par le firmware (`STATE obstacle_reflex=`), donc une trame
+    perdue ou un reboot ESP32 ne peut pas laisser la page prétendre que
+    le réflexe est désactivé alors qu'il est armé ;
+-   **les deux clamps se désarment ensemble.** Il y en a deux
+    indépendants par conception (§6.2 question 5, le Pi *et* le
+    firmware) ; n'en désactiver qu'un ne changerait rien, donc
+    `RoverCore.set_obstacle_reflex()` envoie aussi l'instruction au
+    firmware. Si cette trame se perd, le firmware continue de brider :
+    les deux couches se désynchronisent **du côté sûr**.
+
+La télémétrie distingue désormais trois choses qu'un drapeau unique
+confondait : `obstacle_seen` (ce que voit le capteur),
+`obstacle_reflex` (armé ou non) et `forward_blocked` (marche avant
+effectivement bridée).
+
+### Bouton « Activer » aussi côté Pi
+
+Un ESP32 en `SAFE` jette toutes les `MOVE` (voulu, §27 règle 6) et seul
+un `SYSTEM action=resume` le ré-arme. Le Pi en envoyait un à la connexion
+d'un client --- **une seule fois**. Tout ce qui faisait retomber le robot
+en `SAFE` *ensuite* (un timeout heartbeat après une micro-coupure WiFi
+suffit : la fenêtre est de 500 ms) laissait donc la page connectée, le
+joystick vivant, et le robot sourd jusqu'à ce que quelqu'un recharge
+l'onglet. La page du Pi a maintenant le même bouton « Activer » que la
+page autonome, et affiche l'état matériel de l'ESP32 (`STATE state=`,
+§7.1 du protocole) pour qu'un `SAFE` se voie au lieu de se deviner.
+
 ### Contrôle d'accès : WPA2 obligatoire
 
 L'AP est en **WPA2 et le mode refuse de démarrer sans mot de passe

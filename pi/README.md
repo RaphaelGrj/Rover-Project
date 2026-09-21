@@ -329,6 +329,42 @@ module `dom-overlay`, uniquement exercé ici via le chemin de repli 2D
 - `rover_ai/` : fournisseur IA interchangeable (voir ci-dessus).
   `rover_control/ai_panel.py` : logique du panneau web (config + test) ;
   `rover_control/static/ai.html` : la page elle-même.
+- `tools/` : instruments de bring-up, voir ci-dessous.
+
+## Outils de bring-up (`pi/tools/`)
+
+### `motor_triage` --- « la panne est-elle électrique ou logicielle ? »
+
+```
+python -m tools.motor_triage --port /dev/ttyUSB0
+```
+
+Déroule tout seul la séquence qui tranche (`resume` → `reset_ticks` →
+`motor_raw` → `raw_ticks`) et imprime un **verdict**. Le pivot, c'est
+`motor_raw` : il écrit le rapport cyclique **directement sur le pont en
+H**, sans PID, sans feed-forward, sans plafond de vitesse et sans
+réflexe d'obstacle. Si les roues ne tournent pas sous cette commande,
+plus rien en amont du pont en H ne peut être mis en cause.
+
+Verdicts possibles, avec à chaque fois la manipulation suivante :
+**électrique** (masse commune en premier), **E-stop enfoncé** (GPIO25,
+vestige du plan TB6612FNG), **entrée encodeur qui flotte** (fronts qui
+grimpent pendant que les ticks stagnent), **un seul côté répond**, ou
+**moteurs fonctionnels** --- auquel cas il mesure la vitesse réelle à
+plein régime et propose le `SYSTEM action=set_speed` correspondant si
+`ROVER_MAX_WHEEL_SPEED_MPS` s'en écarte.
+
+Codes de sortie : `0` le matériel répond, `1` une panne est identifiée,
+`2` non concluant (rien n'a pu être testé). ⚠️ Envoie le **duty maximal
+aux deux moteurs** : robot calé, roues en l'air, moteurs froids (ils se
+dégradent d'essai en essai quand on insiste).
+
+### `motor_test` / `move_diagnostic`
+
+`motor_test` est une console interactive (`move`, `stop`, `resume`,
+gains PID…). `move_diagnostic` est son équivalent non interactif :
+script fixe, affiche toutes les trames reçues et compte les redémarrages
+--- pratique pour repérer une boucle de reset.
 
 ## Sécurité : ce qui est garanti où
 

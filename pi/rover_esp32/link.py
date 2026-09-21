@@ -59,6 +59,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 
 import serial
 import serial.threaded
@@ -74,6 +75,29 @@ logger = logging.getLogger(__name__)
 # successful connection.
 RECONNECT_MIN_DELAY_S = 0.5
 RECONNECT_MAX_DELAY_S = 5.0
+
+# How long the robot may stay completely silent before this gives up on
+# the connection and builds a new one.
+#
+# Why a timer is needed at all: TCP only reports a peer that says
+# goodbye. An ESP32 that loses power, crashes, or simply walks out of
+# WiFi range sends no FIN and no RST, so the socket stays open and
+# perfectly healthy-looking forever -- reads just keep timing out
+# empty, which is not an error. The Pi would then heartbeat into a void
+# for hours: no reconnection, no HEARTBEAT reaching the robot, motors
+# stopped in SAFE, and a UI still showing "connected". Exactly the
+# "robot looks fine but will not move" this project keeps chasing.
+#
+# 5s because the firmware publishes sensor telemetry every 500ms
+# unconditionally (ROVER_SENSOR_TELEMETRY_PERIOD_MS, and loop() does not
+# gate it on ACTIVE/SAFE), so silence this long is ten missed cycles --
+# far past jitter, well short of an operator noticing. Pass
+# receive_timeout_s=None to a RoverLink to disable it, for a peer that
+# legitimately never speaks first.
+RECEIVE_TIMEOUT_S = 5.0
+# How often the supervisor wakes to check that timer while waiting on
+# the reader thread. Only bounds how late the detection is, nothing else.
+RECEIVE_CHECK_PERIOD_S = 0.5
 
 
 def resolve_link_secret() -> str | None:
@@ -95,6 +119,14 @@ class _LineHandler(serial.threaded.LineReader):
     def __init__(self, link: "RoverLink") -> None:
         super().__init__()
         self._link = link
+
+    def data_received(self, data: bytes) -> None:
+        """Any byte at all is proof the peer is alive, so the receive
+        watchdog is fed here rather than in handle_line(): a robot
+        emitting malformed frames is a robot that is still there, and
+        recycling that connection would fix nothing."""
+        self._link._note_rx()
+        super().data_received(data)
 
     def handle_line(self, line: str) -> None:
         try:
@@ -133,9 +165,18 @@ class RoverLink:
     callers are free to ignore.
     """
 
-    def __init__(self, port: str, baudrate: int = 115200, secret: str | None = None) -> None:
+    def __init__(self, port: str, baudrate: int = 115200, secret: str | None = None,
+                 receive_timeout_s: float | None = RECEIVE_TIMEOUT_S) -> None:
         self._port = port
         self._baudrate = baudrate
+        # None disables the receive watchdog entirely -- see
+        # RECEIVE_TIMEOUT_S. Kept injectable mainly so tests can use a
+        # short one without sleeping through the real thing.
+        self._receive_timeout_s = receive_timeout_s
+        # Plain float, no lock: CPython assignment and read of a float
+        # attribute are each atomic, and a watchdog reading a value one
+        # cycle stale would at worst check again 0.5s later.
+        self._last_rx_at = 0.0
         # None = send no AUTH frame at all, which is what the USB cable
         # wants (the ESP32 requires none there). See resolve_link_secret.
         self._secret = secret
@@ -243,16 +284,17 @@ class RoverLink:
             logger.info("ESP32 link up on %s", self._port)
 
             reader.start()
+            # A fresh connection starts with a clean slate, otherwise the
+            # watchdog below would judge it on silence that belongs to
+            # the previous one.
+            self._note_rx()
             # Only now, with the reader running, so the robot's reply
             # ("STATE link=authenticated", or ERROR code=unauthenticated
             # / link_secret_not_set) is actually seen and logged rather
             # than sitting unread in a buffer. Sent on every connection
             # because the ESP32 forgets it on every disconnection.
             self._authenticate()
-            # Returns when the transport fails (pyserial's ReaderThread
-            # exits its loop on SerialException) or when stop() closed
-            # it deliberately.
-            reader.join()
+            self._pump_until_dead(reader)
 
             with self._lock:
                 self._serial = None
@@ -264,6 +306,43 @@ class RoverLink:
                 # reboot, or one client slot already taken) would spin
                 # this loop as fast as the network allows.
                 self._stopping.wait(RECONNECT_MIN_DELAY_S)
+
+    def _note_rx(self) -> None:
+        self._last_rx_at = time.monotonic()
+
+    def _pump_until_dead(self, reader: serial.threaded.ReaderThread) -> None:
+        """Returns once this connection is finished with -- because the
+        transport failed (pyserial's ReaderThread exits its loop on
+        SerialException), because stop() closed it, or because the robot
+        went silent for longer than the receive watchdog allows.
+
+        That last case is the one plain join() could not see: a peer
+        that dies without closing its socket produces no exception ever,
+        so waiting on the reader thread alone waits forever. See
+        RECEIVE_TIMEOUT_S."""
+        if self._receive_timeout_s is None:
+            reader.join()
+            return
+
+        while True:
+            reader.join(timeout=RECEIVE_CHECK_PERIOD_S)
+            if not reader.is_alive() or self._stopping.is_set():
+                return
+            silence = time.monotonic() - self._last_rx_at
+            if silence > self._receive_timeout_s:
+                # Not an error: over WiFi this is how a robot that lost
+                # power or roamed away actually looks. Worth a warning
+                # because it is also what a half-open NAT/firewall state
+                # looks like, and those are worth noticing in a log.
+                logger.warning(
+                    "no data from the ESP32 for %.1fs on %s, dropping the link and reconnecting",
+                    silence, self._port,
+                )
+                # Closes the port, which makes the reader thread fall out
+                # of its read loop; the supervisor then rebuilds
+                # everything from scratch, AUTH included.
+                reader.close()
+                return
 
     def _authenticate(self) -> None:
         """Best-effort, like send(): a failure here is reported and left

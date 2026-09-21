@@ -70,6 +70,381 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🔴 SEPT RÉGRESSIONS TROUVÉES EN RELISANT MON PROPRE TRAVAIL
+  (2026-09-21)** --- revue de la branche avant flash, puisque ~1000
+  lignes dont une loi de commande moteur n'ont jamais pu tourner sur le
+  vrai matériel. Toutes viennent de la **même cause** : avoir divisé le
+  plafond de vitesse par 10 sans toucher à ce qui supposait l'ancienne
+  échelle.
+  - **La barre de vitesse n'avait que 4 positions utiles.** `MOVE` était
+    émis en `%.2f` sur une plage de 0 à 0,03 m/s : les 21 crans de la
+    barre s'effondraient en **quatre** commandes distinctes, et **sous
+    15 % de barre la commande valait `0.00`** --- le robot ne bougeait
+    pas du tout. Passé à quatre décimales, vérifié en navigateur : 7
+    crans testés, 7 commandes distinctes.
+  - **`left_speed=0.00` serait réapparu pour une roue qui tourne.** Même
+    format `%.2f` sur la télémétrie : toute roue sous 0,005 m/s
+    s'affichait à zéro. C'est *exactement* la lecture erronée qui a
+    coûté des semaines à ce projet, et je l'avais réintroduite.
+  - **Trame trop longue.** Vitesses à quatre décimales + les trois
+    drapeaux d'obstacle = 129 octets, un de trop, atteint par une simple
+    marche arrière à plein régime. Les drapeaux partent maintenant dans
+    leur propre trame, au changement seulement (plus court *et* plus
+    silencieux).
+  - **Une commande perdue n'était jamais réémise (page autonome).**
+    `lastSent` était posé avant que la requête n'aboutisse : un timeout
+    et la commande était considérée comme délivrée, pendant que les
+    keep-alives `h=1` maintenaient le heartbeat. **Un « stop » perdu
+    laissait le robot rouler indéfiniment.** Corrigé (acquittement sur
+    réponse seulement) et vérifié en coupant le lien à chaud.
+  - **Stick tenu + « Activer » = rien.** Le ré-armement ne purgeait pas
+    `lastSent`, donc aucun `MOVE` n'était émis après être sorti de SAFE.
+    `RoverCore.resume()` purgeait son cache pour cette raison exacte ;
+    la page n'avait pas l'équivalent.
+  - **Zone morte à 0,02 m/s**, soit les deux tiers de la plage : rouler
+    à 60 % de barre était rapporté comme « inactif ». Elle est
+    maintenant une **fraction du plafond rapporté par le robot**, donc
+    elle ne peut plus dériver.
+  - **Bascule obstacle optimiste** sans rien pour la corriger, et un
+    commentaire qui prétendait le contraire. Elle revient en arrière si
+    la requête échoue.
+  - **`monkeypatch` gelait `time.monotonic` de la stdlib** pour tout le
+    processus, sous une boucle asyncio vivante.
+  - Trois tests de non-régression ajoutés sur le fond du problème (la
+    résolution du format, la zone morte qui suit le plafond).
+  - **Leçon** : changer une constante de référence d'un ordre de
+    grandeur, c'est changer toutes les échelles qui en dépendent.
+    Formats d'affichage, seuils, tailles de tampon. Aucun de ces sept
+    points n'aurait été trouvé en relisant la ligne modifiée.
+
+- **🔧 OUTIL : `python -m tools.motor_triage` (2026-09-21)** --- une
+  commande qui répond à la seule question qui compte : **la panne est-
+  elle électrique ou logicielle ?**
+  - Le pivot est `motor_raw` : duty écrit **directement sur le pont en
+    H**, sans PID, sans feed-forward, sans plafond de vitesse, sans
+    réflexe d'obstacle. Zéro tick sous cette commande ⇒ plus rien en
+    amont du pont en H ne peut être mis en cause.
+  - La réponse était disponible depuis le début, mais seulement pour qui
+    lance cinq commandes `SYSTEM` dans le bon ordre et lit la télémétrie
+    correctement. **Sept sessions sans que cette séquence soit passée
+    proprement de bout en bout** --- et le seul chiffre que tout le
+    monde regardait (`left_pwm=255`) ne prouvait rien, puisque le PID
+    sature *parce que* rien ne bouge.
+  - Six verdicts, chacun avec la manipulation suivante : **électrique**
+    (masse commune d'abord), **E-stop enfoncé** (GPIO25), **entrée
+    encodeur qui flotte**, **un seul côté répond** (avec le rappel que
+    gauche/droite sont inversés ensemble dans le câblage), **moteurs
+    fonctionnels**, ou non concluant. Codes de sortie 0/1/2.
+  - Sur un verdict « fonctionnels », il **mesure** la vitesse réelle à
+    plein régime et propose le `SYSTEM action=set_speed` qui recale
+    `ROVER_MAX_WHEEL_SPEED_MPS` si elle s'en écarte. Les constantes sont
+    **lues dans `motion_config.h`**, pas recopiées : cette session est
+    partie d'une constante fausse d'un facteur 10 que personne n'avait
+    vue, l'outil ne peut donc pas être en désaccord avec le firmware.
+  - Vérifié pour de vrai : les sept chemins ont été exécutés contre un
+    faux ESP32 (électrique, sain, un seul côté, tempête d'encodeur,
+    E-stop, robot muet, lien injoignable), et l'arbre de décision est
+    couvert par `pi/tests/test_motor_triage.py`.
+  - Au passage : `move_diagnostic.py` contenait encore un chemin Windows
+    en dur (`C:\Users\rapha\...`), il ne tournait plus depuis que le Pi
+    est la machine qui l'exécute. Corrigé.
+
+- **🟢 CORRIGÉ : plafond de vitesse, feed-forward, anti-windup
+  (2026-09-21)** --- le diagnostic de la session précédente est
+  maintenant réparé, et une **deuxième anomalie sérieuse** est sortie au
+  passage.
+  - **`ROVER_MAX_WHEEL_SPEED_MPS` : 0,30 → 0,03 m/s**, c'est-à-dire la
+    vitesse réellement mesurée à plein régime. La rotation suit :
+    elle est désormais **dérivée**, pas choisie --- le modèle unicycle
+    donne `2 × vmax / empattement` = 0,4 rad/s, là où l'ancien
+    1,5 rad/s demandait 0,11 m/s à chaque roue, presque **quatre fois**
+    ce que le châssis peut donner. Toute rotation saturait.
+  - **Feed-forward `ROVER_PID_KFF = 8500`** (PWM par m/s, soit
+    255 / 0,03). Le rapport cyclique nécessaire à une vitesse est connu
+    d'avance ; le faire redécouvrir à l'intégrateur par pas de 20 ms
+    était la cause de la rampe de 5 s. **Mesuré sur banc natif** : plein
+    barre atteint PWM 200 **immédiatement**, contre *jamais* avant.
+  - **⚠️ ANOMALIE TROUVÉE EN CORRIGEANT : le robot ne s'arrêtait pas
+    quand on relâchait le joystick.** Recentrer le stick ne fait que
+    mettre la consigne à zéro --- ça ne passe pas par `stop()` comme le
+    bouton STOP, le SAFE ou l'E-stop. L'intégrale accumulée pour tenir
+    la vitesse précédente restait, et se vidait à la vitesse de
+    l'erreur. **Mesuré sur banc : 81 secondes de plein régime après
+    avoir lâché.** Invisible jusqu'ici uniquement parce que les roues ne
+    tournaient pas ; ça aurait mordu le jour même où elles s'y seraient
+    mises.
+    - Corrigé par trois choses : l'**anti-windup** (intégration
+      conditionnelle : on n'intègre plus vers une butée déjà atteinte),
+      le **feed-forward** (l'intégrale n'a plus à porter le régime
+      permanent, donc elle reste près de zéro), et surtout une règle
+      explicite --- **consigne nulle ⇒ intégrale remise à zéro**.
+      « S'arrêter » est une intention, pas une consigne à asservir.
+    - Mesure après correction : **0,00 s** de dérive après relâchement,
+      *y compris* avec `kff=0`. L'anti-windup seul ne suffisait pas (il
+      restait 39 s), c'est la combinaison qui règle le problème.
+  - **Tout est recalibrable sans reflasher** : `SYSTEM action=set_speed
+    max=0.045` (persisté en NVS) et `set_pid kff=...`, même mécanique
+    que les gains PID. La page du Pi **suit** le plafond rapporté par le
+    robot (`STATE max_speed=`) et affiche la barre en m/s réels, donc
+    plus de constante d'UI qui périme. La page autonome garde une
+    constante (elle ne peut pas l'apprendre) --- à tenir à jour à la
+    main.
+  - Vérifié sur banc natif compilé avec `g++` (les tests Unity du dépôt
+    tournent aussi localement via un shim) : 9/9 au vert, dont trois
+    nouveaux couvrant exactement ces pathologies.
+
+- **🟢 CORRIGÉ : le lien Pi↔ESP32 ne détectait pas une mort silencieuse
+  (2026-09-21)** --- trouvé en réparant la CI, et c'est un vrai bug de
+  production qui **colle au symptôme « les moteurs ne tournent pas »**.
+  - TCP ne signale qu'un pair qui dit au revoir. Un ESP32 qui perd
+    l'alimentation, plante, ou sort de portée WiFi n'envoie **ni FIN ni
+    RST** : le socket reste ouvert et parfaitement sain, les lectures
+    expirent à vide --- ce qui n'est pas une erreur. Le Pi envoyait donc
+    son heartbeat dans le vide indéfiniment : aucune reconnexion, plus
+    aucun HEARTBEAT ne parvenant au robot, moteurs arrêtés en `SAFE`, et
+    une UI affichant toujours « connecté ».
+  - Corrigé par un **chien de garde en réception** : le firmware publie
+    de la télémétrie capteur toutes les 500 ms quoi qu'il arrive, donc
+    5 s de silence = 10 cycles manqués = lien mort. On ferme et on
+    reconstruit, AUTH comprise. Désactivable (`receive_timeout_s=None`).
+  - Deux tests couvrent les deux moitiés du contrat : un robot muet est
+    recyclé, un robot qui parle **n'est pas** recyclé (une boucle de
+    reconnexion serait pire que le bug).
+
+- **🟢 CORRIGÉ : 3 tests `test_link` rouges depuis toujours --- le code
+  testé était sain, c'est le harnais qui mentait (2026-09-21)**.
+  - `FakeEsp32.hang_up()` faisait `close()` pendant que son propre
+    thread était bloqué dans `recv()` sur **le même socket**. Sous
+    Linux, fermer un descripteur ne réveille pas un thread déjà bloqué
+    dessus, et l'appel bloqué **maintient la description de fichier
+    ouverte : aucun FIN n'est jamais envoyé**. Le client voyait un
+    socket sain et silencieux et avait raison de ne pas reconnecter.
+  - `shutdown(SHUT_RDWR)` avant `close()` : le FIN part tout de suite et
+    réveille le `recv()` bloqué. **15/15 au vert**, CI Python réparée.
+  - À retenir : trois tests de reconnexion ont passé leur vie en rouge
+    en accusant un code correct. Un harnais qui simule une panne doit
+    être vérifié comme le reste.
+
+- **Garde-fou anti-tempête d'interruptions encodeur (2026-09-21)** ---
+  détection passive la session dernière, protection active maintenant :
+  au-delà de 20 000 fronts/s (impossible physiquement --- ce châssis en
+  produit ~320/s), l'encodeur **désarme sa propre interruption** et émet
+  `ERROR code=encoder_storm wheel=left|right`. On échange la mesure de
+  vitesse contre un robot qui continue de tourner, là où une `loop()`
+  affamée ne fait plus rien du tout. Ne se réarme qu'avec
+  `SYSTEM action=reset_ticks` : la cause est un fil, un réarmement
+  automatique ne ferait que la cacher.
+
+- **🔴 TROUVÉ : la consigne de vitesse est INATTEIGNABLE, le PID est
+  saturé en permanence (2026-09-21)** --- c'est le résultat le plus
+  important de la session, et il **réinterprète des semaines de
+  diagnostic**.
+  - Calcul, à partir de vos propres mesures : circonférence de roue
+    `π × 0,03183 = 100,0 mm` ; mesure du 2026-09-20 à froid,
+    **3125 ticks en 10 s à PWM 255** → `312 ticks/s ÷ 1073 = 0,291 tr/s`
+    = **17,5 tr/min** = **0,029 m/s**.
+  - Or `ROVER_MAX_WHEEL_SPEED_MPS = 0,30 m/s`, soit **10,3 × la vitesse
+    réellement atteinte à plein régime**. Demander 0,30 m/s revient à
+    demander **180 tr/min** à l'arbre de sortie.
+  - **Conséquence** : toute consigne au-dessus de ~0,03 m/s est
+    inatteignable → l'erreur ne redescend jamais → l'intégrale part à sa
+    borne → **le PWM reste collé à 255 indéfiniment**. Vérifié en
+    simulant la boucle fermée : consigne 0,12 m/s → saturé à 255 sur
+    100 % du régime établi ; consigne **0,025 m/s** (sous le plafond
+    mesuré) → **PWM 109, la boucle régule enfin**.
+  - **Donc `left_pwm=255 left_speed=0.00` n'est PAS un symptôme de
+    panne** : c'est la sortie normale de cette configuration. Ce chiffre
+    a été lu comme une preuve de moteur mort pendant des semaines ; il
+    ne prouve rien du tout.
+  - ⚠ Nuance honnête : les 17,5 tr/min viennent d'une mesure faite sur
+    un châssis peut-être partiellement chargé, donc le vrai plafond à
+    vide est sans doute plus élevé. Même faux d'un facteur 3, on reste à
+    un ordre de grandeur de 0,30 m/s. **À trancher par la mesure** :
+    `SYSTEM action=reset_ticks`, puis `motor_raw left=255 right=255
+    ms=10000`, puis `raw_ticks` --- à froid, roues en l'air *puis* au
+    sol. `ROVER_MAX_WHEEL_SPEED_MPS` doit ensuite être ramené à ce qui
+    est réellement atteignable, sinon la barre de vitesse n'a **aucune
+    autorité** : elle ne change que la durée de la rampe, pas le régime
+    final.
+  - **Non corrigé ici** : changer cette constante change le
+    comportement en mouvement du robot, ça se règle sur la mesure, pas à
+    l'aveugle.
+
+- **Bouton « arrêt sur obstacle » ON/OFF (2026-09-21)** --- demandé, et
+  c'est aussi un outil de diagnostic.
+  - Présent sur **les deux** pages. Les **distances restent mesurées,
+    publiées et affichées** dans tous les cas : le bouton empêche le
+    robot d'*agir* sur ce qu'il voit, il ne l'aveugle pas.
+  - Côté firmware `SYSTEM action=obstacle_reflex on=0|1`
+    (`DriveController::setObstacleReflexEnabled`). ⚠ Il y a **deux**
+    clamps indépendants (firmware + Pi, §6.2 question 5) : n'en
+    désactiver qu'un ne change rien, donc `RoverCore.set_obstacle_reflex()`
+    fait les deux d'un coup.
+  - **Non persisté, volontairement** : un garde-fou désactivé ne doit
+    pas survivre à une coupure de courant. Chaque démarrage repart armé
+    --- et le bouton de l'UI suit **la valeur rapportée par le robot**,
+    jamais le clic, pour qu'un reboot ESP32 ne laisse pas la page
+    mentir.
+  - La télémétrie distingue maintenant trois choses autrefois
+    confondues : `obstacle_seen` (ce que voit le capteur),
+    `obstacle_reflex` (armé ou non), `forward_blocked` (marche avant
+    effectivement bridée).
+
+- **Deux suspects restants, désormais diagnosticables en 2 secondes
+  (2026-09-21)** --- tous deux collent au symptôme « rien ne tourne »,
+  aucun n'est mécanique ni lié au driver :
+  1. **E-stop fantôme sur GPIO25.** `ROVER_PIN_ESTOP = 25` --- or
+     `motion_config.h` note que GPIO25 était le `PWMB` du plan TB6612FNG
+     abandonné. **S'il reste un fil de ce plan reliant GPIO25 à la masse
+     ou à une entrée du driver, l'E-stop lit « enfoncé » en permanence** :
+     dès la première `loop()` le front est détecté, l'état passe en
+     `SAFE`, les moteurs sont coupés, et *tout* `resume` est refusé.
+     Symptôme identique à des moteurs morts. Jusqu'à cette session ce
+     refus était **totalement silencieux** ; il répond maintenant
+     `ERROR code=estop_held`, et `STATE estop=1` le dit sans qu'on
+     demande rien.
+  2. **Tempête d'interruptions encodeur.** GPIO34-39 n'ont **aucun
+     pull-up interne** (`Encoder::begin` le documente). Un connecteur
+     desserré --- ce robot a des antécédents, cf. « connexion gauche
+     faible/intermittente » --- laisse la broche flotter et l'ISR se
+     déclencher en continu, ce qui **affame la `loop()` qui pilote les
+     moteurs**. Les ticks ne le montrent pas : les `+1`/`−1` s'annulent,
+     le compteur reste près de zéro, exactement comme une roue immobile.
+     Nouveau compteur `raw_edges_left`/`raw_edges_right` (jamais
+     décrémenté) dans `SYSTEM action=raw_ticks` : **des edges qui
+     grimpent pendant que les ticks stagnent, c'est ça, sans ambiguïté**.
+  - Bonus de la publication `STATE state=` au boot : une boucle de reset
+    du watchdog (3 s) se voit maintenant comme des `state=READY`
+    répétés, au lieu de passer inaperçue.
+  - Confirmé inerte : `RoverState::ERROR` n'est **jamais** affecté nulle
+    part dans le firmware, ce chemin ne peut pas bloquer quoi que ce
+    soit.
+
+- **PILOTAGE : barre de vitesse + joystick de direction (2026-09-21)**
+  --- les deux pages (celle du Pi, `pi/rover_control/static/index.html`,
+  et celle servie par l'ESP32 en mode autonome) séparent désormais
+  *combien vite* de *vers où* :
+  - **barre latérale = vitesse**, seule ; **joystick = direction**,
+    seule. La commande est le vecteur **normalisé** (longueur 1), donc
+    à mi-course ou à fond de course on roule à la même vitesse. Zone
+    morte de 25 % du rayon : une commande « direction seule » n'a aucun
+    petit régime dans lequel s'engager progressivement, sans zone morte
+    le moindre effleurement serait un départ pleine vitesse.
+  - **Conséquence recherchée** : une ligne droite est désormais **une
+    commande répétée**, plus un flux de flottants légèrement différents.
+    C'est ce qui rend le filtrage des doublons efficace.
+  - **Où le gain est réellement pris, et où il ne l'est pas** :
+    `RoverCore.move()` ne réémet plus une `MOVE` identique (rafraîchie
+    quand même toutes les 0,5 s, `MOVE_REFRESH_S` --- un ESP32 qui a
+    redémarré ou qui sort de `SAFE` ne doit pas rester sur une consigne
+    périmée). La page, elle, **continue** d'émettre à cadence fixe :
+    c'est cette cadence qui prouve que le *navigateur* est vivant, et la
+    couper aurait permis à une page figée de laisser le robot rouler sur
+    sa dernière commande. En mode autonome, la page n'envoie `v`/`r`
+    qu'au changement et sinon un `GET /c?h=1` qui alimente le heartbeat
+    sans re-cibler le PID. ⚠ Le **nombre de requêtes** reste plancheré
+    par le timeout heartbeat (500 ms) : ce n'est pas là que ça se gagne,
+    et c'est assumé.
+
+- **`SYSTEM action=resume` : envoyé, mais UNE SEULE FOIS --- corrigé
+  (2026-09-21)** --- vérification demandée, et c'est un vrai défaut.
+  - Ce qui existait : `RoverCore.client_connected()` envoie bien un
+    `resume` à la connexion d'un client de contrôle (et
+    `pi/tools/motor_test.py` a sa commande `resume`). C'est correct au
+    démarrage.
+  - **Le trou** : c'est un coup unique. Tout ce qui refait tomber
+    l'ESP32 en `SAFE` *ensuite* --- **un timeout heartbeat suffit, et la
+    fenêtre n'est que de 500 ms sur un lien WiFi** --- laissait la page
+    connectée, le joystick vivant, le heartbeat battant… et **toutes les
+    `MOVE` jetées en silence**. Seul un rechargement de l'onglet
+    (donc une reconnexion) rendait le robot pilotable. Un robot muet qui
+    a l'air en pleine forme : exactement le symptôme « les moteurs ne
+    tournent pas » qu'on traque depuis des semaines.
+  - **Corrigé** : bouton « Activer » sur la page du Pi (elle n'en avait
+    pas, contrairement à la page autonome) → `RoverCore.resume()`, et
+    l'état matériel de l'ESP32 est maintenant **affiché** (nouveau champ
+    `STATE state=... estop=...`, émis au changement uniquement, voir
+    `ROVER_PROTOCOL.md` §7.1). Un `SAFE` se voit au lieu de se deviner,
+    et le bouton clignote quand il sert à quelque chose.
+  - **Côté firmware** : un `resume` refusé parce que l'E-stop est
+    enfoncé répond maintenant `ERROR code=estop_held` au lieu d'être
+    ignoré sans un mot --- « j'ai appuyé sur Activer et rien ne s'est
+    passé » avait zéro réponse possible avant.
+
+- **Heartbeat : présent et correct (2026-09-21)** --- vérification
+  demandée, rien à corriger.
+  - Pi → ESP32 : `HEARTBEAT` toutes les **150 ms**
+    (`HEARTBEAT_PERIOD_S`), tâche lancée à la connexion du premier
+    client et annulée au départ du dernier. Timeout firmware : **500 ms**
+    (`ROVER_HEARTBEAT_TIMEOUT_MS`), soit ~3 battements de marge.
+  - Page autonome → ESP32 : au moins une requête toutes les **250 ms**
+    (commande ou `h=1`), même marge.
+  - `HeartbeatMonitor` ne se déclenche jamais avant le premier battement
+    reçu (`_started`), donc un robot allumé sans Pi ne tombe pas en
+    `SAFE` tout seul --- il reste en `READY`, où les `MOVE` sont **aussi**
+    ignorées (voir ci-dessous).
+  - ⚠ À savoir : **sans client de contrôle connecté, personne ne bat**.
+    C'est voulu (la sécurité ne dépend pas du Pi), mais ça veut dire
+    qu'un `MOVE` envoyé à la main sans heartbeat ne bouge rien plus de
+    500 ms. `pi/tools/motor_test.py` bat en arrière-plan pour ça.
+
+- **Audit « qu'est-ce qui, dans le code, peut empêcher les moteurs de
+  tourner » (2026-09-21)** --- passe complète, par ordre de probabilité :
+  1. **⚠ La rampe du PID est lente au point d'être trompeuse.** Gains
+     180/300/0, intégrale bornée à ±1. Roue bloquée, consigne à 40 % de
+     la barre (0,12 m/s) : `sortie = 21,6 + 36·t`. Il faut donc **~5 s**
+     de joystick maintenu pour atteindre PWM 200, et **~6,5 s** pour 255
+     --- or le seuil de démarrage mesuré sur ce châssis est justement de
+     200-255. **Une poussée de 2 s ne dépasse pas PWM ~93 : rien ne
+     bouge, et ça ressemble trait pour trait à un moteur mort.** À fond
+     de barre (0,30 m/s) c'est ~1,6 s pour 200 ; à 20 % de barre,
+     **10,5 s**. Chiffres simulés depuis le code de `WheelPID::update`,
+     pas estimés. ⚠ Conséquence directe pour la barre de vitesse :
+     **un réglage bas est indiscernable d'un robot en panne** sur un
+     test court --- tester à fond de barre d'abord. Le correctif propre est
+     un terme de **feed-forward** (`pwm = kff·consigne + PID`), pas un
+     gain plus gros --- monter Kp/Ki a déjà été essayé le 2026-09-20 et
+     a produit une oscillation +255/−255. **Non implémenté ici** : c'est
+     une modification de la loi de commande, elle se règle sur le vrai
+     robot, pas à l'aveugle.
+  2. **Le réflexe d'obstacle est devenu actif le 2026-09-20**, le jour
+     même où les moteurs ont cessé de tourner. Un ToF qui voit quoi que
+     ce soit à **moins de 150 mm** (une chenille, un câble, le sol si le
+     capteur pique du nez, un mur pendant un test sur établi) met
+     `forward_blocked=1` et la marche avant est mise à zéro --- **des
+     deux côtés**, dans le firmware *et* dans `RoverCore.move()`. La
+     rotation et la marche arrière restent disponibles, ce qui donne le
+     symptôme très particulier « il tourne mais n'avance pas ».
+     Vérifiable directement : `forward_blocked=` dans la télémétrie, et
+     la page autonome l'écrit en clair. À écarter en deux secondes,
+     mais personne ne l'a fait depuis que les capteurs sont câblés.
+  3. **`MOVE` est ignorée hors de l'état `ACTIVE`** (voulu, §27 règle 6)
+     --- voir le point `resume` ci-dessus, c'était le trou le plus sale.
+  4. **Un coup de PWM parasite après `motor_raw`, corrigé.**
+     `DriveController::update()` ne rafraîchissait pas `_lastUpdateMs`
+     pendant qu'une commande brute tenait les moteurs : la première
+     passe PID suivante voyait un `dt` de **jusqu'à 15 secondes**,
+     l'intégrale partait directement à sa borne et envoyait un
+     plein régime sur un robot que l'opérateur croyait à l'arrêt.
+  5. **Écarté --- conflits de broches et de canaux LEDC** : aucun
+     doublon sur l'ensemble des `ROVER_PIN_*` (moteurs 26/27/32/33,
+     encodeurs 34-39 en entrée seule, écran, I2C, E-stop 25, XSHUT 4,
+     I2S 16/17/14). Moteurs sur canaux LEDC 0-3 (timers 0 et 1), servos
+     sur 4-5 (timer 2) : pas de timer partagé, donc pas de fréquence
+     volée. Buzzer désactivé, aucun canal. `pintest` détache bien le
+     LEDC mais rappelle `drive.begin()` derrière, le PWM revient.
+  6. **Écarté --- E-stop, batterie, watchdog** : `INPUT_PULLUP` donc une
+     broche non câblée lit « relâché » ; `BatteryMonitor` n'a aucun
+     chemin vers `SAFE` (il n'émet que des EVENT) ; le watchdog est
+     nourri à chaque `loop()`.
+  - **Conclusion** : rien dans le code n'*interdit* aux moteurs de
+    tourner, ce que la bisection du 2026-09-20 avait déjà prouvé. Mais
+    les points 1 et 2 fabriquent un « ça ne tourne pas » parfaitement
+    convaincant lors d'un test court, et le point 3 en fabriquait un
+    définitif après la moindre micro-coupure WiFi. **Le bandeau en tête
+    de fichier reste valable : la piste électrique (masse commune) reste
+    à faire en premier.**
+
 - **MOTEURS : NON RÉSOLU en fin de session (2026-09-20)** --- les
   moteurs ne tournent plus du tout, et **la bisection prouve que ce
   n'est pas le logiciel** (voir le bandeau en tête de fichier : le

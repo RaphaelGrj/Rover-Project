@@ -19,8 +19,13 @@ import argparse
 import sys
 import threading
 import time
+from pathlib import Path
 
-sys.path.insert(0, r"C:\Users\rapha\Rover-Project\pi")
+# Was one developer's hardcoded Windows path until 2026-09-21, which
+# stopped working the day the deported Pi became the machine running
+# this. Derived from __file__ instead, so it works from anywhere, on
+# either OS.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rover_esp32.link import RoverLink  # noqa: E402
 

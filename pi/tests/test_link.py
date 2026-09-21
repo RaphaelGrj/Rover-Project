@@ -95,10 +95,29 @@ class FakeEsp32:
         client.sendall((encode_frame(frame_type, fields) + "\n").encode("ascii"))
 
     def hang_up(self) -> None:
-        """Drops the current client, simulating a WiFi/TCP failure."""
+        """Drops the current client, simulating a WiFi/TCP failure.
+
+        shutdown() BEFORE close(), and the order is the whole point.
+        _read_loop is sitting in recv() on this very socket, and on
+        Linux closing a descriptor does not wake a thread already
+        blocked on it -- the blocked syscall keeps the underlying file
+        description alive, so no FIN is ever sent. The client then sees
+        a perfectly healthy, merely silent socket and (correctly) never
+        reconnects, which is how three reconnection tests spent their
+        life red while the code under test was fine. shutdown() sends
+        the FIN immediately and wakes the blocked recv(), regardless of
+        who else is holding the socket.
+
+        EBADF/ENOTCONN are ignored: the peer may have gone first, in
+        which case there is nothing left to shut down and that is a
+        successful hang-up, not a failure."""
         with self._lock:
             client, self._client = self._client, None
         if client is not None:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             client.close()
 
     def close(self) -> None:
@@ -371,3 +390,47 @@ def test_resolve_link_secret_reads_the_environment(monkeypatch):
 
     monkeypatch.setenv("ROVER_LINK_SECRET", "correct-horse")
     assert resolve_link_secret() == "correct-horse"
+
+
+def test_a_silent_robot_is_dropped_and_reconnected():
+    """The failure TCP cannot report: an ESP32 that loses power, crashes
+    or roams out of WiFi range sends no FIN and no RST. The socket stays
+    open and healthy-looking forever, reads just time out empty -- which
+    is not an error -- so without a receive watchdog the Pi heartbeats
+    into a void indefinitely, never reconnects, and the robot sits in
+    SAFE with the UI still claiming "connected"."""
+    # This server accepts and then says nothing at all, ever, which is
+    # precisely a robot that has died without closing its socket.
+    server = FakeEsp32()
+    link = RoverLink(server.url, receive_timeout_s=0.5)
+    try:
+        link.start()
+        assert _wait_until(lambda: server.connections == 1), "link never came up"
+        # Nothing is ever sent by this server, and nothing hangs up: the
+        # only thing that can end this connection is the watchdog.
+        assert _wait_until(lambda: server.connections == 2), "silent link was never recycled"
+    finally:
+        link.stop()
+        server.close()
+
+
+def test_a_talking_robot_is_left_alone():
+    """The other half of the contract: the watchdog must not recycle a
+    link that is merely idle in the drive sense. The firmware publishes
+    sensor telemetry every 500ms whatever the state, so traffic is the
+    normal condition and a reconnect loop here would be far worse than
+    the bug it fixes."""
+    server = FakeEsp32()
+    link = RoverLink(server.url, receive_timeout_s=0.5)
+    try:
+        link.start()
+        assert _wait_until(lambda: server.connections == 1), "link never came up"
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            server.send_frame("STATE", {"distance_left": "420"})
+            time.sleep(0.1)
+        assert server.connections == 1, "a talking link was recycled anyway"
+        assert link.is_connected
+    finally:
+        link.stop()
+        server.close()
