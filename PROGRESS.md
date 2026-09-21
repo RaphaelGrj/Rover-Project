@@ -70,6 +70,38 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🔧 OUTIL : `python -m tools.motor_triage` (2026-09-21)** --- une
+  commande qui répond à la seule question qui compte : **la panne est-
+  elle électrique ou logicielle ?**
+  - Le pivot est `motor_raw` : duty écrit **directement sur le pont en
+    H**, sans PID, sans feed-forward, sans plafond de vitesse, sans
+    réflexe d'obstacle. Zéro tick sous cette commande ⇒ plus rien en
+    amont du pont en H ne peut être mis en cause.
+  - La réponse était disponible depuis le début, mais seulement pour qui
+    lance cinq commandes `SYSTEM` dans le bon ordre et lit la télémétrie
+    correctement. **Sept sessions sans que cette séquence soit passée
+    proprement de bout en bout** --- et le seul chiffre que tout le
+    monde regardait (`left_pwm=255`) ne prouvait rien, puisque le PID
+    sature *parce que* rien ne bouge.
+  - Six verdicts, chacun avec la manipulation suivante : **électrique**
+    (masse commune d'abord), **E-stop enfoncé** (GPIO25), **entrée
+    encodeur qui flotte**, **un seul côté répond** (avec le rappel que
+    gauche/droite sont inversés ensemble dans le câblage), **moteurs
+    fonctionnels**, ou non concluant. Codes de sortie 0/1/2.
+  - Sur un verdict « fonctionnels », il **mesure** la vitesse réelle à
+    plein régime et propose le `SYSTEM action=set_speed` qui recale
+    `ROVER_MAX_WHEEL_SPEED_MPS` si elle s'en écarte. Les constantes sont
+    **lues dans `motion_config.h`**, pas recopiées : cette session est
+    partie d'une constante fausse d'un facteur 10 que personne n'avait
+    vue, l'outil ne peut donc pas être en désaccord avec le firmware.
+  - Vérifié pour de vrai : les sept chemins ont été exécutés contre un
+    faux ESP32 (électrique, sain, un seul côté, tempête d'encodeur,
+    E-stop, robot muet, lien injoignable), et l'arbre de décision est
+    couvert par `pi/tests/test_motor_triage.py`.
+  - Au passage : `move_diagnostic.py` contenait encore un chemin Windows
+    en dur (`C:\Users\rapha\...`), il ne tournait plus depuis que le Pi
+    est la machine qui l'exécute. Corrigé.
+
 - **🟢 CORRIGÉ : plafond de vitesse, feed-forward, anti-windup
   (2026-09-21)** --- le diagnostic de la session précédente est
   maintenant réparé, et une **deuxième anomalie sérieuse** est sortie au
