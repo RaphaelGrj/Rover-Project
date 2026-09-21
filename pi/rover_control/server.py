@@ -300,9 +300,24 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             try:
                 data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                logger.warning("ignoring malformed control message: %r", msg.data)
+                continue
+
+            # Explicit re-arm from the page's "Activer" button. Handled
+            # before the drive fields and then `continue`d: it is a
+            # command of its own, not a MOVE carrying an extra key, and
+            # an ESP32 in SAFE would discard any MOVE sent with it
+            # anyway (main.cpp).
+            if isinstance(data, dict) and data.get("action") == "resume":
+                logger.info("control client requested a resume (%s)", request.remote)
+                core.resume()
+                continue
+
+            try:
                 velocity = float(data["velocity"])
                 rotation = float(data["rotation"])
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            except (ValueError, KeyError, TypeError):
                 logger.warning("ignoring malformed control message: %r", msg.data)
                 continue
             core.move(velocity, rotation)

@@ -76,6 +76,35 @@ unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
 unsigned long lastBatteryTelemetryMs = 0;
 
+// Publishes the ESP32's own state machine (board_config.h) to whoever
+// is listening, on CHANGE only.
+//
+// Why it exists: a robot in SAFE ignores every MOVE by design, and
+// until now the only way to learn that from the outside was to ask for
+// it (SYSTEM action=diag) or to catch the one EVENT that caused it. Miss
+// that event -- a client connecting after the fact, a frame lost on the
+// WiFi link -- and "the motors do not turn" is indistinguishable from a
+// dead driver. Seven sessions of motor diagnosis are the argument for
+// making this visible for free.
+//
+// Edge-driven, not periodic, so the steady-state cost is zero frames:
+// the Pi merges STATE fields and replays them to late-joining clients
+// (rover_core/core.py), so one frame per transition is enough to keep
+// every UI correct.
+void publishStateIfChanged() {
+    static RoverState lastPublished = RoverState::BOOT;
+    static bool lastEstop = false;
+    static bool everPublished = false;
+    bool estopNow = estop.isPressed();
+    if (everPublished && lastPublished == state && lastEstop == estopNow) return;
+    lastPublished = state;
+    lastEstop = estopNow;
+    everPublished = true;
+    char fields[48];
+    snprintf(fields, sizeof(fields), "state=%s estop=%d", roverStateName(state), estopNow ? 1 : 0);
+    protocol.send("STATE", fields);
+}
+
 // Called by RoverProtocol for every validated incoming frame.
 void onFrame(const RoverFrame& frame) {
     // Access control runs BEFORE anything else, heartbeat included.
@@ -131,13 +160,23 @@ void onFrame(const RoverFrame& frame) {
 
         if (strcmp(action, "ping") == 0) {
             protocol.send("SYSTEM", "action=pong");
-        } else if (strcmp(action, "resume") == 0 && state == RoverState::SAFE && !estop.isPressed()) {
+        } else if (strcmp(action, "resume") == 0) {
             // A resume must never override a physically-held E-stop --
             // that would defeat the entire point of a hardware safety
             // layer. Only the heartbeat-timeout SAFE can be resumed this
             // way; releasing the button is necessary but not itself
             // sufficient (still requires this same explicit resume).
-            state = RoverState::ACTIVE;
+            //
+            // The refusal is now REPORTED rather than silently dropped
+            // (2026-09-21): an ignored resume and an accepted one looked
+            // identical from the Pi, so "I pressed Activer and nothing
+            // happened" had no answer. Not an error when we are already
+            // ACTIVE -- the caller got what it asked for.
+            if (estop.isPressed()) {
+                protocol.sendError("estop_held");
+            } else if (state == RoverState::SAFE) {
+                state = RoverState::ACTIVE;
+            }
         } else if (strcmp(action, "diag") == 0) {
             char fields[96];
             buildDiagnosticsFields(fields, sizeof(fields), state);
@@ -623,17 +662,10 @@ void setup() {
         state = RoverState::SAFE;
     };
     standalone.statusProvider = []() {
-        const char* name = "?";
-        switch (state) {
-            case RoverState::BOOT:   name = "BOOT";   break;
-            case RoverState::READY:  name = "READY";  break;
-            case RoverState::ACTIVE: name = "ACTIVE"; break;
-            case RoverState::SAFE:   name = "SAFE";   break;
-            case RoverState::ERROR:  name = "ERROR";  break;
-        }
         // Shown verbatim on the page: without forward_blocked, an
         // obstacle reflex reads as "the robot ignores my joystick".
-        return String(name) + (drive.forwardBlocked() ? " | obstacle: marche avant bloquee" : "");
+        return String(roverStateName(state)) +
+               (drive.forwardBlocked() ? " | obstacle: marche avant bloquee" : "");
     };
 
     char fields[64];
@@ -655,6 +687,9 @@ void setup() {
 
     buzzer.play(BuzzerSound::BOOT);
     state = RoverState::READY;
+    // First publication, so a Pi that was already listening knows what
+    // it is talking to without asking (see publishStateIfChanged).
+    publishStateIfChanged();
 }
 
 void loop() {
@@ -738,6 +773,11 @@ void loop() {
         buzzer.play(BuzzerSound::ESTOP);
     }
     wasEstopPressed = estop.isPressed();
+
+    // After every transition above (heartbeat timeout, E-stop) and
+    // before the telemetry below -- on change only, so this costs
+    // nothing while the state holds still.
+    publishStateIfChanged();
 
     if (battery.hasReading()) {
         if (battery.consumeLowBatteryEvent()) {

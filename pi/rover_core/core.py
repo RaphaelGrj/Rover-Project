@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from enum import Enum, auto
 from typing import Callable
 
@@ -40,6 +41,23 @@ HEARTBEAT_PERIOD_S = 0.15
 # for behavior-state purposes (a client sending 0.00/0.00 while idle
 # shouldn't read as MOVING).
 MOVEMENT_DEADZONE = 0.02
+
+# How long an unchanged MOVE is allowed to go unrepeated before being
+# re-sent anyway (2026-09-21). The control page sends its axes at a fixed
+# cadence whether or not anything moved -- deliberately, since that is
+# what proves the *browser* is still alive -- but forwarding every one of
+# those to the ESP32 meant ~10 identical MOVE frames a second for a robot
+# driving in a straight line. Since the UI switched to a fixed speed bar
+# plus a direction-only joystick, a steady drive really is one repeated
+# command, so dropping the repeats is most of the traffic.
+#
+# Not dropped forever, for two reasons: an ESP32 that rebooted, or that
+# was resumed out of SAFE (where MOVE is ignored outright, main.cpp),
+# would otherwise sit on a stale target until the operator happened to
+# move the stick. Safety does not rest on this either way -- HEARTBEAT
+# keeps its own cadence (HEARTBEAT_PERIOD_S) and is what stops the motors
+# when a client goes away.
+MOVE_REFRESH_S = 0.5
 
 # How long ERROR is held as the behavior state before falling back,
 # absent a new ERROR -- mirrors the control UI's own ERROR line timeout
@@ -100,6 +118,10 @@ class RoverCore:
         self.state = RoverBehaviorState.IDLE
         self._error_clear_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        # Last MOVE actually put on the wire, and when -- see
+        # MOVE_REFRESH_S and move().
+        self._last_move: tuple[float, float] | None = None
+        self._last_move_sent_at = 0.0
         # Multiple control clients (e.g. a phone and a laptop tab at
         # once) are allowed; only stop heartbeating once the *last* one
         # leaves, not the first.
@@ -225,7 +247,19 @@ class RoverCore:
             # turning in place both stay available, the Pi still decides
             # what to do next.
             velocity = 0.0
-        self.link.send("MOVE", {"velocity": f"{velocity:.2f}", "rotation": f"{rotation:.2f}"})
+        # Rounded first, then compared: what goes on the wire is two
+        # decimals, so two velocities that only differ in the third are
+        # the same frame and there is nothing to gain by sending it twice
+        # (see MOVE_REFRESH_S).
+        # +0.0 turns a -0.0 back into 0.0 (IEEE754), so a centred axis
+        # is logged as "0.00" rather than "-0.00" -- cosmetic, but this
+        # telemetry gets read by eye constantly during motor bring-up.
+        command = (round(velocity, 2) + 0.0, round(rotation, 2) + 0.0)
+        now = time.monotonic()
+        if command != self._last_move or now - self._last_move_sent_at >= MOVE_REFRESH_S:
+            self._last_move = command
+            self._last_move_sent_at = now
+            self.link.send("MOVE", {"velocity": f"{command[0]:.2f}", "rotation": f"{command[1]:.2f}"})
         if abs(velocity) > MOVEMENT_DEADZONE or abs(rotation) > MOVEMENT_DEADZONE:
             self._set_state(RoverBehaviorState.MOVING)
         elif self._client_count > 0:
@@ -253,6 +287,31 @@ class RoverCore:
         (head_config.h), and it's already gated on ACTIVE there too."""
         self.link.send("HEAD", {"pitch": f"{pitch_deg:.1f}", "yaw": f"{yaw_deg:.1f}"})
 
+    def resume(self) -> bool:
+        """SYSTEM action=resume -- the only thing that brings the ESP32
+        out of SAFE (main.cpp; a MOVE arriving during SAFE is ignored on
+        purpose, and HEARTBEAT alone does not re-arm anything either).
+
+        Exposed as its own method, and reachable from the control UI,
+        because client_connected()'s resume is a one-shot: a heartbeat
+        timeout mid-session (a WiFi hiccup on the deported link is all it
+        takes, the firmware's window is 500ms) drops the robot into SAFE
+        with the page still connected, the joystick still moving and
+        every MOVE silently discarded. Before this, the only cure was to
+        reload the page.
+
+        The firmware still refuses while the E-stop is physically held
+        (that is the entire point of a hardware layer), so this asks --
+        it does not force anything. Returns whether the frame reached
+        the link at all (False = link down); whether the robot actually
+        re-armed comes back separately, as STATE state=... .."""
+        # The ESP32 cleared its target when it entered SAFE
+        # (DriveController::stop), so anything remembered here is stale
+        # the moment we re-arm: forget it, and let the next MOVE through
+        # even if the stick has not moved since.
+        self._last_move = None
+        return bool(self.link.send("SYSTEM", {"action": "resume"}))
+
     async def client_connected(self) -> None:
         """A control client just took over. Explicitly resume (covers
         both "was already SAFE from a previous disconnect" and "first
@@ -267,7 +326,7 @@ class RoverCore:
         # already happening.
         if self.state not in (RoverBehaviorState.MOVING, RoverBehaviorState.ERROR):
             self._set_state(RoverBehaviorState.INTERACTING)
-        self.link.send("SYSTEM", {"action": "resume"})
+        self.resume()
         if self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
@@ -285,6 +344,13 @@ class RoverCore:
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
+        # Forget the last command first, so the stop below is always
+        # actually transmitted rather than suppressed as a duplicate
+        # (move(), MOVE_REFRESH_S). It would be a duplicate only when the
+        # ESP32's target is already zero, so this changes nothing in
+        # practice -- but a stop frame is not where a reader should have
+        # to work that out.
+        self._last_move = None
         self.move(0.0, 0.0)
         if self.state != RoverBehaviorState.ERROR:
             self._set_state(RoverBehaviorState.IDLE)

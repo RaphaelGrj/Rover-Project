@@ -6,6 +6,7 @@ ever calls `.send(frame_type, fields)` on it.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import rover_core.core as core_module
 from rover_core.core import RoverBehaviorState, RoverCore
@@ -15,8 +16,13 @@ class FakeLink:
     def __init__(self) -> None:
         self.sent: list[tuple[str, dict[str, str] | None]] = []
 
-    def send(self, frame_type: str, fields: dict[str, str] | None = None) -> None:
+    # Returns True like the real RoverLink.send() does (it reports
+    # link-down as False rather than raising) -- RoverCore.resume()
+    # checks that return value, so a fake that answered None would make
+    # every resume look like a dead link.
+    def send(self, frame_type: str, fields: dict[str, str] | None = None) -> bool:
         self.sent.append((frame_type, fields))
+        return True
 
 
 def run(coro):
@@ -242,5 +248,82 @@ def test_state_frames_merge_instead_of_replacing():
             "distance_left": "9999", "distance_right": "9999",
             "accel_x": "0.00", "accel_y": "0.00",
         }
+
+    run(body())
+
+
+def test_identical_moves_are_not_resent_to_the_esp32():
+    """The control page sends its axes at a fixed cadence whether or not
+    anything changed (that cadence is what proves the browser is alive),
+    but a robot driving straight ahead does not need the same MOVE ten
+    times a second -- see MOVE_REFRESH_S."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        for _ in range(10):
+            core.move(0.2, 0.0)
+        moves = [frame for frame in link.sent if frame[0] == "MOVE"]
+        assert moves == [("MOVE", {"velocity": "0.20", "rotation": "0.00"})]
+
+    run(body())
+
+
+def test_a_changed_move_is_sent_immediately():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.move(0.2, 0.0)
+        core.move(0.2, 0.0)
+        core.move(0.1, 0.0)  # operator moved the speed bar
+        moves = [frame for frame in link.sent if frame[0] == "MOVE"]
+        assert moves == [
+            ("MOVE", {"velocity": "0.20", "rotation": "0.00"}),
+            ("MOVE", {"velocity": "0.10", "rotation": "0.00"}),
+        ]
+
+    run(body())
+
+
+def test_an_unchanged_move_is_refreshed_after_the_refresh_period(monkeypatch):
+    """Suppressing duplicates forever would leave a rebooted (or
+    just-resumed) ESP32 sitting on a stale target until the operator
+    happened to touch the stick."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.move(0.2, 0.0)
+        core.move(0.2, 0.0)
+        assert len([f for f in link.sent if f[0] == "MOVE"]) == 1
+
+        clock = time.monotonic() + core_module.MOVE_REFRESH_S + 0.01
+        monkeypatch.setattr(core_module.time, "monotonic", lambda: clock)
+        core.move(0.2, 0.0)
+        assert len([f for f in link.sent if f[0] == "MOVE"]) == 2
+
+    run(body())
+
+
+def test_resume_sends_the_system_frame_and_unblocks_the_next_move():
+    """An ESP32 in SAFE discards MOVE outright (main.cpp) and clears its
+    target, so whatever was last sent is stale the moment it re-arms --
+    the next MOVE has to go out even if the stick never moved."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.move(0.2, 0.0)
+        core.resume()
+        core.move(0.2, 0.0)
+        assert ("SYSTEM", {"action": "resume"}) in link.sent
+        assert len([f for f in link.sent if f[0] == "MOVE"]) == 2
+
+    run(body())
+
+
+def test_resume_reports_a_down_link_instead_of_claiming_success():
+    async def body():
+        link = FakeLink()
+        link.send = lambda *args, **kwargs: False  # link down, see RoverLink.send
+        core = RoverCore(link)
+        assert core.resume() is False
 
     run(body())

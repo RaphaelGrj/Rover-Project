@@ -659,6 +659,57 @@ que le resume du Pi refuse. Sans ça, un robot allumé sans Pi resterait
 en `READY` à vie et le mode serait inutilisable dans le cas même pour
 lequel il existe.
 
+### Barre de vitesse + joystick de direction (2026-09-21)
+
+Les **deux** pages de pilotage (celle servie par l'ESP32 ici, et celle du
+Pi `pi/rover_control/static/index.html`) séparent désormais ce qui était
+confondu :
+
+-   la **barre latérale** décide de la **vitesse**, et d'elle seule ;
+-   le **joystick** décide de la **direction**, et d'elle seule --- la
+    commande est le vecteur **normalisé** à longueur 1, donc à mi-course
+    ou à fond de course on roule à la même vitesse, celle de la barre.
+    En-dessous d'une zone morte (25 % du rayon) c'est un arrêt franc,
+    pas un rampement : une commande « direction seule » n'a aucun petit
+    régime dans lequel s'engager progressivement.
+
+**Pourquoi** : avec l'ancien schéma, la vitesse changeait à chaque
+dérive du pouce, et *chaque dérive était une nouvelle valeur flottante*
+envoyée à l'ESP32 plusieurs fois par seconde. Une vitesse fixe rend une
+ligne droite égale à **une commande répétée**, pas à un flux de
+commandes légèrement différentes.
+
+Ce que ça permet côté lien, et où le gain est réellement pris :
+
+-   **Pi → ESP32** : `RoverCore.move()` ne réémet plus une `MOVE`
+    identique à la précédente (rafraîchie quand même toutes les 0,5 s,
+    voir `MOVE_REFRESH_S` --- un ESP32 qui aurait redémarré ou qui sort
+    de `SAFE` ne doit pas rester sur une consigne périmée). La page,
+    elle, **continue** d'émettre à cadence fixe : c'est cette cadence
+    qui prouve que le *navigateur* est vivant, et la couper aurait
+    permis à une page figée de laisser le robot rouler sur sa dernière
+    commande. Le filtrage est donc fait à un seul endroit, sur le lien
+    qui en avait besoin.
+-   **Navigateur → ESP32** (mode autonome) : la page n'envoie `v`/`r`
+    que lorsque la commande change, et sinon un simple `GET /c?h=1`,
+    qui ne fait qu'alimenter le heartbeat sans re-cibler le PID ---
+    l'équivalent exact d'une trame `HEARTBEAT` du Pi, qui maintient
+    `ACTIVE` sans redire le dernier `MOVE`. Le nombre de requêtes, lui,
+    reste plancheré par le timeout heartbeat (500 ms) : ce n'est pas là
+    que se gagne quelque chose, et c'est assumé.
+
+### Bouton « Activer » aussi côté Pi
+
+Un ESP32 en `SAFE` jette toutes les `MOVE` (voulu, §27 règle 6) et seul
+un `SYSTEM action=resume` le ré-arme. Le Pi en envoyait un à la connexion
+d'un client --- **une seule fois**. Tout ce qui faisait retomber le robot
+en `SAFE` *ensuite* (un timeout heartbeat après une micro-coupure WiFi
+suffit : la fenêtre est de 500 ms) laissait donc la page connectée, le
+joystick vivant, et le robot sourd jusqu'à ce que quelqu'un recharge
+l'onglet. La page du Pi a maintenant le même bouton « Activer » que la
+page autonome, et affiche l'état matériel de l'ESP32 (`STATE state=`,
+§7.1 du protocole) pour qu'un `SAFE` se voie au lieu de se deviner.
+
 ### Contrôle d'accès : WPA2 obligatoire
 
 L'AP est en **WPA2 et le mode refuse de démarrer sans mot de passe

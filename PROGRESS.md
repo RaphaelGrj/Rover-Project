@@ -70,6 +70,131 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **PILOTAGE : barre de vitesse + joystick de direction (2026-09-21)**
+  --- les deux pages (celle du Pi, `pi/rover_control/static/index.html`,
+  et celle servie par l'ESP32 en mode autonome) séparent désormais
+  *combien vite* de *vers où* :
+  - **barre latérale = vitesse**, seule ; **joystick = direction**,
+    seule. La commande est le vecteur **normalisé** (longueur 1), donc
+    à mi-course ou à fond de course on roule à la même vitesse. Zone
+    morte de 25 % du rayon : une commande « direction seule » n'a aucun
+    petit régime dans lequel s'engager progressivement, sans zone morte
+    le moindre effleurement serait un départ pleine vitesse.
+  - **Conséquence recherchée** : une ligne droite est désormais **une
+    commande répétée**, plus un flux de flottants légèrement différents.
+    C'est ce qui rend le filtrage des doublons efficace.
+  - **Où le gain est réellement pris, et où il ne l'est pas** :
+    `RoverCore.move()` ne réémet plus une `MOVE` identique (rafraîchie
+    quand même toutes les 0,5 s, `MOVE_REFRESH_S` --- un ESP32 qui a
+    redémarré ou qui sort de `SAFE` ne doit pas rester sur une consigne
+    périmée). La page, elle, **continue** d'émettre à cadence fixe :
+    c'est cette cadence qui prouve que le *navigateur* est vivant, et la
+    couper aurait permis à une page figée de laisser le robot rouler sur
+    sa dernière commande. En mode autonome, la page n'envoie `v`/`r`
+    qu'au changement et sinon un `GET /c?h=1` qui alimente le heartbeat
+    sans re-cibler le PID. ⚠ Le **nombre de requêtes** reste plancheré
+    par le timeout heartbeat (500 ms) : ce n'est pas là que ça se gagne,
+    et c'est assumé.
+
+- **`SYSTEM action=resume` : envoyé, mais UNE SEULE FOIS --- corrigé
+  (2026-09-21)** --- vérification demandée, et c'est un vrai défaut.
+  - Ce qui existait : `RoverCore.client_connected()` envoie bien un
+    `resume` à la connexion d'un client de contrôle (et
+    `pi/tools/motor_test.py` a sa commande `resume`). C'est correct au
+    démarrage.
+  - **Le trou** : c'est un coup unique. Tout ce qui refait tomber
+    l'ESP32 en `SAFE` *ensuite* --- **un timeout heartbeat suffit, et la
+    fenêtre n'est que de 500 ms sur un lien WiFi** --- laissait la page
+    connectée, le joystick vivant, le heartbeat battant… et **toutes les
+    `MOVE` jetées en silence**. Seul un rechargement de l'onglet
+    (donc une reconnexion) rendait le robot pilotable. Un robot muet qui
+    a l'air en pleine forme : exactement le symptôme « les moteurs ne
+    tournent pas » qu'on traque depuis des semaines.
+  - **Corrigé** : bouton « Activer » sur la page du Pi (elle n'en avait
+    pas, contrairement à la page autonome) → `RoverCore.resume()`, et
+    l'état matériel de l'ESP32 est maintenant **affiché** (nouveau champ
+    `STATE state=... estop=...`, émis au changement uniquement, voir
+    `ROVER_PROTOCOL.md` §7.1). Un `SAFE` se voit au lieu de se deviner,
+    et le bouton clignote quand il sert à quelque chose.
+  - **Côté firmware** : un `resume` refusé parce que l'E-stop est
+    enfoncé répond maintenant `ERROR code=estop_held` au lieu d'être
+    ignoré sans un mot --- « j'ai appuyé sur Activer et rien ne s'est
+    passé » avait zéro réponse possible avant.
+
+- **Heartbeat : présent et correct (2026-09-21)** --- vérification
+  demandée, rien à corriger.
+  - Pi → ESP32 : `HEARTBEAT` toutes les **150 ms**
+    (`HEARTBEAT_PERIOD_S`), tâche lancée à la connexion du premier
+    client et annulée au départ du dernier. Timeout firmware : **500 ms**
+    (`ROVER_HEARTBEAT_TIMEOUT_MS`), soit ~3 battements de marge.
+  - Page autonome → ESP32 : au moins une requête toutes les **250 ms**
+    (commande ou `h=1`), même marge.
+  - `HeartbeatMonitor` ne se déclenche jamais avant le premier battement
+    reçu (`_started`), donc un robot allumé sans Pi ne tombe pas en
+    `SAFE` tout seul --- il reste en `READY`, où les `MOVE` sont **aussi**
+    ignorées (voir ci-dessous).
+  - ⚠ À savoir : **sans client de contrôle connecté, personne ne bat**.
+    C'est voulu (la sécurité ne dépend pas du Pi), mais ça veut dire
+    qu'un `MOVE` envoyé à la main sans heartbeat ne bouge rien plus de
+    500 ms. `pi/tools/motor_test.py` bat en arrière-plan pour ça.
+
+- **Audit « qu'est-ce qui, dans le code, peut empêcher les moteurs de
+  tourner » (2026-09-21)** --- passe complète, par ordre de probabilité :
+  1. **⚠ La rampe du PID est lente au point d'être trompeuse.** Gains
+     180/300/0, intégrale bornée à ±1. Roue bloquée, consigne à 40 % de
+     la barre (0,12 m/s) : `sortie = 21,6 + 36·t`. Il faut donc **~5 s**
+     de joystick maintenu pour atteindre PWM 200, et **~6,5 s** pour 255
+     --- or le seuil de démarrage mesuré sur ce châssis est justement de
+     200-255. **Une poussée de 2 s ne dépasse pas PWM ~93 : rien ne
+     bouge, et ça ressemble trait pour trait à un moteur mort.** À fond
+     de barre (0,30 m/s) c'est ~1,6 s pour 200 ; à 20 % de barre,
+     **10,5 s**. Chiffres simulés depuis le code de `WheelPID::update`,
+     pas estimés. ⚠ Conséquence directe pour la barre de vitesse :
+     **un réglage bas est indiscernable d'un robot en panne** sur un
+     test court --- tester à fond de barre d'abord. Le correctif propre est
+     un terme de **feed-forward** (`pwm = kff·consigne + PID`), pas un
+     gain plus gros --- monter Kp/Ki a déjà été essayé le 2026-09-20 et
+     a produit une oscillation +255/−255. **Non implémenté ici** : c'est
+     une modification de la loi de commande, elle se règle sur le vrai
+     robot, pas à l'aveugle.
+  2. **Le réflexe d'obstacle est devenu actif le 2026-09-20**, le jour
+     même où les moteurs ont cessé de tourner. Un ToF qui voit quoi que
+     ce soit à **moins de 150 mm** (une chenille, un câble, le sol si le
+     capteur pique du nez, un mur pendant un test sur établi) met
+     `forward_blocked=1` et la marche avant est mise à zéro --- **des
+     deux côtés**, dans le firmware *et* dans `RoverCore.move()`. La
+     rotation et la marche arrière restent disponibles, ce qui donne le
+     symptôme très particulier « il tourne mais n'avance pas ».
+     Vérifiable directement : `forward_blocked=` dans la télémétrie, et
+     la page autonome l'écrit en clair. À écarter en deux secondes,
+     mais personne ne l'a fait depuis que les capteurs sont câblés.
+  3. **`MOVE` est ignorée hors de l'état `ACTIVE`** (voulu, §27 règle 6)
+     --- voir le point `resume` ci-dessus, c'était le trou le plus sale.
+  4. **Un coup de PWM parasite après `motor_raw`, corrigé.**
+     `DriveController::update()` ne rafraîchissait pas `_lastUpdateMs`
+     pendant qu'une commande brute tenait les moteurs : la première
+     passe PID suivante voyait un `dt` de **jusqu'à 15 secondes**,
+     l'intégrale partait directement à sa borne et envoyait un
+     plein régime sur un robot que l'opérateur croyait à l'arrêt.
+  5. **Écarté --- conflits de broches et de canaux LEDC** : aucun
+     doublon sur l'ensemble des `ROVER_PIN_*` (moteurs 26/27/32/33,
+     encodeurs 34-39 en entrée seule, écran, I2C, E-stop 25, XSHUT 4,
+     I2S 16/17/14). Moteurs sur canaux LEDC 0-3 (timers 0 et 1), servos
+     sur 4-5 (timer 2) : pas de timer partagé, donc pas de fréquence
+     volée. Buzzer désactivé, aucun canal. `pintest` détache bien le
+     LEDC mais rappelle `drive.begin()` derrière, le PWM revient.
+  6. **Écarté --- E-stop, batterie, watchdog** : `INPUT_PULLUP` donc une
+     broche non câblée lit « relâché » ; `BatteryMonitor` n'a aucun
+     chemin vers `SAFE` (il n'émet que des EVENT) ; le watchdog est
+     nourri à chaque `loop()`.
+  - **Conclusion** : rien dans le code n'*interdit* aux moteurs de
+    tourner, ce que la bisection du 2026-09-20 avait déjà prouvé. Mais
+    les points 1 et 2 fabriquent un « ça ne tourne pas » parfaitement
+    convaincant lors d'un test court, et le point 3 en fabriquait un
+    définitif après la moindre micro-coupure WiFi. **Le bandeau en tête
+    de fichier reste valable : la piste électrique (masse commune) reste
+    à faire en premier.**
+
 - **MOTEURS : NON RÉSOLU en fin de session (2026-09-20)** --- les
   moteurs ne tournent plus du tout, et **la bisection prouve que ce
   n'est pas le logiciel** (voir le bandeau en tête de fichier : le

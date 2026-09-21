@@ -118,7 +118,7 @@ ne reçoivent pas d'ACK.
 | `action=`  | Effet                                                        |
 |------------|---------------------------------------------------------------|
 | `ping`     | l'ESP32 répond `SYSTEM action=pong`                           |
-| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9) --- refusé tant que l'E-stop physique est enfoncé (`estop_pressed`, §7.2) |
+| `resume`   | sortie de l'état `SAFE` vers `ACTIVE` (voir §9) --- refusé tant que l'E-stop physique est enfoncé, et ce refus est **rapporté** (`ERROR code=estop_held`, §7.3) au lieu d'être ignoré en silence. Sans objet (donc sans erreur) si l'ESP32 est déjà `ACTIVE`. C'est la **seule** façon de ré-armer les moteurs : un `MOVE` reçu en `SAFE` est jeté, un `HEARTBEAT` ne ré-arme rien |
 | `diag`     | diagnostic série : l'ESP32 répond `STATE uptime_ms=... free_heap=... state=... board=... protocol=...` |
 | `set_pid`  | calibre les gains PID moteur à chaud, persistés en NVS (survit au reboot) : `SYSTEM action=set_pid kp=180 ki=300 kd=0` --- un champ omis garde sa valeur actuelle. Répond `STATE pid_kp=... pid_ki=... pid_kd=...`, ou `ERROR code=invalid_pid_gains` si une valeur est négative/NaN/infinie |
 | `get_pid`  | répond `STATE pid_kp=... pid_ki=... pid_kd=...` avec les gains actuellement actifs |
@@ -223,7 +223,22 @@ STATE left_speed=0.24 right_speed=0.26 *0A
 STATE distance_left=420 distance_right=380 *2C
 STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
 STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
+STATE state=SAFE estop=0 *33
 ```
+
+`state=` / `estop=` : l'état de la machine à états de l'ESP32 (§9) et
+l'état du bouton d'arrêt d'urgence. Émis **au changement uniquement**
+(plus une fois au boot), donc coût nul en régime établi --- le Pi
+fusionne les champs `STATE` et les rejoue aux clients qui se connectent
+plus tard, une trame par transition suffit. À ne pas confondre avec
+l'état comportemental du Pi (`ROVER_STATE`, §20 de l'architecture) : ce
+sont deux machines distinctes.
+
+Pourquoi c'est diffusé et pas seulement disponible sur demande
+(`action=diag`) : un robot en `SAFE` ignore tous les `MOVE` par
+conception. Sans ce champ, un timeout heartbeat après une micro-coupure
+WiFi est indiscernable d'un moteur mort --- exactement la confusion qui
+a coûté plusieurs sessions de diagnostic moteur (`PROGRESS.md`).
 
 `distance_left`/`distance_right` sont en millimètres ; `9999` signifie
 "capteur indisponible" (échec `begin()` ou perte depuis), `8190`
@@ -262,6 +277,7 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `unauthenticated`      | trame reçue avant un `AUTH` valide sur un lien réseau, ou secret faux (§5.2) |
 | `link_secret_not_set`  | `AUTH` reçue mais aucun secret enregistré côté robot (§5.2) |
 | `tx_truncated`         | trame sortante trop longue, abandonnée plutôt qu'émise tronquée |
+| `estop_held`           | `SYSTEM action=resume` reçue alors que l'E-stop physique est enfoncé (§5.1) |
 
 ```
 ERROR code=motor_overcurrent *3D

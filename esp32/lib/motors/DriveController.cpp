@@ -77,6 +77,14 @@ void DriveController::update() {
     // Raw bring-up drive owns the motors while it lasts: running the
     // PID underneath would fight it for the same H-bridge.
     if (_rawUntilMs != 0) {
+        // Keep the PID's clock moving while the raw drive owns the
+        // motors. Without this, _lastUpdateMs stayed frozen for the
+        // whole test and the first PID pass afterwards saw a dt of up
+        // to 15 SECONDS: the integral term went straight to its clamp
+        // and fired a full-duty kick on a robot the operator believed
+        // was stopped. Harmless-looking arithmetic, very much not a
+        // harmless output.
+        _lastUpdateMs = now;
         if ((long)(now - _rawUntilMs) < 0) return;
         _rawUntilMs = 0;
         stop();
