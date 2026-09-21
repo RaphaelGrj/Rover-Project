@@ -1,61 +1,81 @@
 # ROVER --- État actuel (résumé de reprise)
 
-> # 🚨 OBJECTIF IMPÉRATIF DE LA PROCHAINE SESSION
-> # **ROVER DOIT SE DÉPLACER.**
+> # ✅ ROVER SE DÉPLACE --- blocage moteur levé le 2026-09-21
 >
-> **C'est une obligation, pas un souhait.** Le déplacement traîne depuis
-> le 2026-09-01 --- sept sessions à diagnostiquer des moteurs qui ne
-> tournent pas, pendant que tout le reste du projet avance.
+> Le blocage qui traînait depuis le 2026-09-01 (sept sessions) est
+> résolu : moteurs, encodeurs, pont en H et alimentation répondent tous,
+> et le Rover avance/recule/tourne réellement, roues au sol.
 >
-> **Ne rien entreprendre d'autre tant que ce n'est pas fait** : pas de
-> nouveau sous-système, pas de refactorisation, pas d'audio, pas de
-> caméra, pas de tête. Le premier test de la session est un test moteur,
-> et le dernier aussi.
+> **Root cause NON éclaircie --- à noter pour ne pas se faire piéger :**
+> la session du 2026-09-20 avait prouvé par bisection que ce n'était pas
+> le firmware et soupçonnait la masse `GND` ESP32 ↔ `GND` DRV8833
+> (jamais vérifiée). Cette session n'a **pas** vérifié cette continuité
+> --- le firmware de la branche `claude/joystick-speed-bar-ui-3a42ll` a
+> simplement été flashé et les moteurs ont répondu du premier coup à
+> `motor_raw`. Donc soit (a) un fil s'est ressoudé/rebranché entre-temps
+> sans que personne ne le note, soit (b) l'hypothèse GND n'était pas la
+> bonne cause. **Si le symptôme "PWM 255 → 0 tick" revient un jour, faire
+> la vérification GND avant toute autre piste** : elle n'a toujours
+> jamais été faite pour de vrai.
 >
-> **Point de départ imposé, à froid, avant toute autre manipulation**
-> (détail dans « Prochaines étapes ») :
-> 1. Mesurer la **tension aux bornes d'un moteur pendant qu'il force** ---
->    c'est la seule piste restante et elle n'a jamais été faite.
-> 2. Alimentation **≥ 3 A**, et vérifier qu'elle ne passe pas en
->    limitation au démarrage.
-> 3. Tests **courts, espacés**, moteurs froids : ils se dégradent
->    d'essai en essai quand on insiste (constaté le 2026-09-20).
+> **Ce qui a réellement débloqué le déplacement, dans l'ordre :**
+> 1. Nouvel outil `pi/tools/motor_triage.py` (branche fusionnée ce jour) :
+>    un duty fixe envoyé au pont en H sans PID a immédiatement montré que
+>    le matériel répond (9 / 144 ticks gauche/droite en 3s, roues en
+>    l'air) --- la panne électrique de 2026-09-20 n'était plus là.
+> 2. **Calibration `max_speed` bien trop basse, et un piège logiciel
+>    découvert avec** : le triage recommande de recaler `max_speed` sur
+>    la vitesse mesurée à vide, roues en l'air (ici 0,00028 m/s --- la
+>    roue gauche était quasi bloquée dans ce test précis). Appliqué tel
+>    quel, ce réglage clampe `_targetVelocity` (avant/arrière,
+>    `DriveController::setTarget`) à une valeur ridicule, mais **ne
+>    touche pas la rotation** : `_targetRotation` est bornée par la
+>    constante indépendante `ROVER_MAX_ROTATION_RAD_S` (4.0, fixe,
+>    `motion_config.h`), sans lien avec `max_speed`. Résultat observé :
+>    tourner fonctionnait (mal), avancer ne faisait strictement rien
+>    (PWM avant ~4/255 relevé en télémétrie). **Un vrai calibrage à
+>    l'air libre, sur roue quasi grippée, n'est pas une mesure fiable de
+>    la vitesse atteignable en charge** --- s'en méfier si `motor_triage`
+>    est réutilisé.
+>    - Bug annexe trouvé et corrigé (commit `bc3887d`) : la commande
+>      suggérée par l'outil formatait la vitesse en `%.3f`, ce qui
+>      arrondit silencieusement tout en dessous de 0,0005 m/s à
+>      `0.000` --- exactement ce cas, donc la commande recommandée aurait
+>      remis `max_speed` à zéro au lieu de le corriger.
+>    - Bug non corrigé, à garder en tête : la télémétrie firmware
+>      (`main.cpp:114`, `%.3f` aussi, préexistant sur `main`, pas
+>      introduit par la branche fusionnée) affiche `0.000` pour tout
+>      `max_speed` sous 0,0005, et le JS de `index.html`
+>      (`updateSpeedCeiling`) ignore un `max_speed` lu comme `0`
+>      (`reported > 0` échoue) --- donc une calibration très basse ne se
+>      propage jamais à l'UI, qui retombe sur son défaut codé en dur
+>      (0,03) pour calculer la rotation. C'est ce qui a produit
+>      l'incohérence avant/rotation observée. Pas bloquant tant que
+>      `max_speed` reste raisonnable (c'est le cas depuis, remis à 0,15),
+>      mais latent.
+> 3. Remis `max_speed=0,15` (`SYSTEM action=set_speed`, persiste en NVS
+>    via `CalibrationStore` --- **ne revient PAS à 0,03 après reboot**,
+>    y penser si un futur test semble "trop rapide" ou "trop lent" sans
+>    raison). Choisi car la rotation avait déjà mesuré ~0,20-0,23 m/s
+>    réels en charge à duty plein, très au-dessus du défaut compilé.
+> 4. **Chenilles démontées par l'utilisateur pour isoler la cause** :
+>    rotation nettement meilleure sans, déplacement avant confirmé.
+>    Écart gauche/droite mesuré ensuite à duty 255 sans chenilles :
+>    **~1-2 % seulement** (0,225-0,230 m/s des deux côtés), contre un
+>    facteur ~16x constaté plus tôt roues en l'air avec chenilles ---
+>    la boucle PID par roue (gains partagés, retour encodeur
+>    indépendant) absorbe déjà cet écart résiduel, pas besoin de trim
+>    logiciel par roue.
+> 5. **Impression 3D en cours** (lancée par l'utilisateur en fin de
+>    session) de nouvelles pièces pour réduire l'effort mécanique sur le
+>    moteur côté chenilles avant remontage --- à re-tester (balance
+>    gauche/droite + vitesse max réelle en charge) une fois montées.
 >
-> ### ⛔ LE LOGICIEL EST HORS DE CAUSE --- PROUVÉ PAR BISECTION
->
-> Fin de session 2026-09-20, après avoir tout essayé : **le firmware du
-> commit `d9379a0` --- celui de la session où Rover roulait --- a été
-> reflashé intégralement et les moteurs n'ont pas tourné non plus.**
-> PWM à 255, vitesses à 0, identique au code actuel.
->
-> | Version testée | Résultat |
-> |---|---|
-> | Code actuel (slow decay) | PWM 255 → 0 tick |
-> | Code actuel (fast decay) | PWM 255 → 0 tick |
-> | Code moteur de `d9379a0` | PWM 255 → 0 tick |
-> | **Firmware entier de `d9379a0`** | **PWM 255 → 0 tick** |
->
-> **NE PAS CHERCHER DANS LE FIRMWARE.** Le problème est apparu entre la
-> session du 2026-09-15 et celle du 2026-09-20, et il est **électrique**.
-> Ce qui a changé physiquement entre les deux : chenilles montées,
-> capteurs ToF câblés sur `3V3`/`GND`, servos branchés puis débranchés
-> sur l'alimentation, réglages d'alim modifiés plusieurs fois.
->
-> **Vérifications jamais faites, à faire EN PREMIER :**
-> 1. **Continuité de la masse `GND` ESP32 ↔ `GND` DRV8833** (multimètre
->    en mode continuité, 5 secondes). Sans masse commune, les signaux
->    `IN1`/`IN2` n'ont aucune référence : le driver ne commute pas et ne
->    consomme rien, alors que `VM` et `SLEEP` mesurent correctement ---
->    **exactement ce qui est observé**. C'est aussi le fil le plus
->    manipulé pendant la session (bornier `GND` partagé avec les ToF et
->    les servos).
-> 2. Tension aux bornes du moteur **pendant** qu'il est commandé.
-> 3. Courant débité par l'alim pendant la commande (0 A = le driver ne
->    conduit pas).
->
-> Ce qui est vérifié bon : DRV8833 (mesuré au multimètre par
-> l'utilisateur), `VM` à 7,5 V, `SLEEP` à 3V3, mécanique libre à la main,
-> encodeurs fonctionnels (le droit a compté -61 ticks).
+> **Branche fusionnée dans `main` ce jour** (`815700d`, après validation
+> matérielle complète) : `claude/joystick-speed-bar-ui-3a42ll` --- UI
+> joystick avec barre de vitesse séparée de la direction, bouton
+> réarmement/obstacle, puce d'état ESP32, `motor_triage.py`, correctifs
+> PID/réflexe d'obstacle. Détail dans le message de merge.
 
 
 > Fichier de reprise rapide --- objectif : que je puisse me repérer sans
@@ -69,6 +89,35 @@
 ------------------------------------------------------------------------
 
 ## État actuel (fil ouvert, mis à jour en continu)
+
+- **✅ ROVER SE DÉPLACE, BRANCHE FUSIONNÉE DANS `main` (2026-09-21,
+  session de test réel)** --- voir le bandeau en tête de fichier pour le
+  détail complet (root cause non éclaircie, calibration `max_speed`,
+  bug de troncature, mesures d'équilibrage). Résumé de session :
+  - Tests avant fusion : 32/32 natifs, 167/167 `pi/` (2 échecs Windows
+    pré-existants sans rapport), WROOM + S3 compilent tous les deux.
+  - Flashé sur le WROOM réel (`COM10`) --- premier flash de cette branche
+    sur matériel. `motor_triage.py` (nouvel outil de la branche) a
+    tranché en un coup : pont en H, alim, moteurs, encodeurs répondent.
+  - `max_speed` recalibré deux fois en session : d'abord suivant la
+    suggestion du triage (0,00028, beaucoup trop bas, a bloqué
+    l'avant/arrière sans toucher la rotation --- voir bandeau), puis
+    remonté à 0,15 après mesure réelle en charge (~0,20-0,23 m/s
+    observés). Valeur actuelle en NVS, persistante.
+  - Bug trouvé et corrigé dans `motor_triage.py` avant fusion (commit
+    `bc3887d`) : suggestion de calibration tronquée à `0.000` par un
+    format `%.3f` trop court pour ce châssis.
+  - Chenilles démontées par l'utilisateur pour isoler la cause du
+    mauvais déplacement : nette amélioration, écart gauche/droite résiduel
+    ~1-2 % seulement (contre ~16x mesuré roues en l'air avec chenilles le
+    2026-09-20) --- absorbé par le PID par roue, pas de trim logiciel
+    ajouté.
+  - Merge `--no-ff` propre, sans conflit, poussé sur `origin/main`
+    (`815700d`).
+  - **Impression 3D lancée par l'utilisateur** (nouvelles pièces pour
+    réduire l'effort mécanique sur le moteur côté chenilles) --- à
+    remonter et re-tester (balance + vitesse réelle) une prochaine
+    session.
 
 - **🔴 SEPT RÉGRESSIONS TROUVÉES EN RELISANT MON PROPRE TRAVAIL
   (2026-09-21)** --- revue de la branche avant flash, puisque ~1000
