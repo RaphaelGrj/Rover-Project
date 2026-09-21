@@ -196,13 +196,28 @@
 <script>
 "use strict";
 
-// Must stay <= the ESP32's own clamps (motion_config.h:
-// ROVER_MAX_WHEEL_SPEED_MPS / ROVER_MAX_ROTATION_RAD_S) -- these are
-// just the UI's own ceiling, the firmware clamps again regardless.
 // Reached at 100% on the speed bar, not by pushing the stick further:
 // since 2026-09-21 the stick carries DIRECTION only (see readAxes()).
-const MAX_VELOCITY_MPS = 0.3;
-const MAX_ROTATION_RAD_S = 1.5;
+//
+// The fallback matches ROVER_MAX_WHEEL_SPEED_MPS, but the robot's own
+// figure wins as soon as it reports one (STATE max_speed=): the ceiling
+// is calibrated per robot now (SYSTEM action=set_speed), so a hardcoded
+// constant here would go stale the moment anyone re-measures -- and a
+// ceiling above what the wheels can do is not cosmetic, it makes every
+// command an unreachable setpoint that pins the PWM at 255.
+const DEFAULT_MAX_VELOCITY_MPS = 0.03;
+let maxVelocityMps = DEFAULT_MAX_VELOCITY_MPS;
+
+// Mirrors ROVER_WHEEL_BASE_M (motion_config.h). Rotation is DERIVED from
+// the speed ceiling rather than set independently: the unicycle model
+// gives each wheel v ± rotation * wheelbase/2, so the fastest spin the
+// wheels can actually deliver is 2 * maxSpeed / wheelbase. The old
+// standalone 1.5 rad/s asked each wheel for 0.11 m/s -- nearly four
+// times what this chassis can do -- so every turn saturated.
+const WHEEL_BASE_M = 0.15;
+function maxRotationRadS() {
+  return (2 * maxVelocityMps) / WHEEL_BASE_M;
+}
 // Below this fraction of the pad/stick radius the input counts as
 // centred. A direction-only stick has no small commands to ease into,
 // so without a deadzone the slightest touch is a full-throttle start.
@@ -308,6 +323,16 @@ function updateObstacleLine() {
 // click: a page that assumed its request landed would quietly disagree
 // with the robot after a dropped frame or an ESP32 reboot (which re-arms
 // the reflex, since it is deliberately not persisted).
+// The robot's calibrated ceiling, when it reports one. Also relabels the
+// bar, because "40%" alone says nothing about how fast that actually is
+// on a chassis whose top speed is a few centimetres per second.
+function updateSpeedCeiling() {
+  const reported = Number(mergedState.max_speed);
+  if (Number.isFinite(reported) && reported > 0) maxVelocityMps = reported;
+  speedValueEl.textContent =
+    `${speedBarEl.value}% (${(speedBarEl.value / 100 * maxVelocityMps).toFixed(3)} m/s)`;
+}
+
 function updateObstacleToggle() {
   const armed = mergedState.obstacle_reflex !== "0";
   obstacleToggleEl.textContent = armed ? "Obstacle : ON" : "Obstacle : OFF";
@@ -351,6 +376,7 @@ function handleEsp32Message(data) {
     updateObstacleLine();
     updateEspStateChip();
     updateObstacleToggle();
+    updateSpeedCeiling();
   } else if (data.type === "EVENT") {
     eventLineEl.textContent = "evenement: " + formatFields(data);
     clearTimeout(eventClearTimer);
@@ -416,9 +442,10 @@ armButtonEl.addEventListener("click", () => {
 // distinct MOVE for the ESP32 to chew on. Splitting them gives a speed
 // that holds still while driving -- which is also what makes the
 // duplicate-MOVE suppression in RoverCore.move() actually bite.
-speedBarEl.addEventListener("input", () => {
-  speedValueEl.textContent = speedBarEl.value + "%";
-});
+speedBarEl.addEventListener("input", updateSpeedCeiling);
+// Once at startup too, so the bar reads in m/s from the first frame
+// rather than only after the robot's first STATE arrives.
+updateSpeedCeiling();
 function throttle() {
   return Number(speedBarEl.value) / 100;
 }
@@ -561,8 +588,8 @@ setInterval(() => {
   const gamepad = readGamepadAxes();
   const direction = directionFromAxes(gamepad || touchAxes);
   const speed = throttle();
-  const velocity = -direction.y * speed * MAX_VELOCITY_MPS; // stick up = forward
-  const rotation = direction.x * speed * MAX_ROTATION_RAD_S;
+  const velocity = -direction.y * speed * maxVelocityMps; // stick up = forward
+  const rotation = direction.x * speed * maxRotationRadS();
 
   // The head pad keeps its proportional behaviour: it aims at an angle,
   // it is not a speed, so "how far you push it" IS the command.

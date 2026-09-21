@@ -4,6 +4,7 @@
 #include "MotorDriver.h"
 #include "Encoder.h"
 #include "WheelPID.h"
+#include "motion_config.h"
 
 // Turns a MOVE-style intention (linear velocity + rotation, unicycle
 // model) into left/right wheel PWM via per-wheel PID loops closed on the
@@ -97,13 +98,31 @@ public:
     // SYSTEM action=set_pid/get_pid/reset_pid for the runtime API this
     // backs. Both wheels share one set of gains (not tuned
     // independently) since the two motors are the same part.
-    void setPidGains(float kp, float ki, float kd) {
-        _pidL.setGains(kp, ki, kd);
-        _pidR.setGains(kp, ki, kd);
+    void setPidGains(float kp, float ki, float kd, float kff) {
+        _pidL.setGains(kp, ki, kd, kff);
+        _pidR.setGains(kp, ki, kd, kff);
     }
     float pidKp() const { return _pidL.kp(); }
     float pidKi() const { return _pidL.ki(); }
     float pidKd() const { return _pidL.kd(); }
+    float pidKff() const { return _pidL.kff(); }
+
+    // Top speed a MOVE may ask for, in m/s (SYSTEM action=set_speed,
+    // persisted in CalibrationStore). Runtime-settable rather than a
+    // fixed constant because the compiled default is one measurement,
+    // not a specification -- and getting it wrong is not cosmetic: a
+    // ceiling above what the wheels can do makes every command an
+    // unreachable setpoint, which pins the PWM at 255 and leaves the
+    // speed control with nothing to control. See
+    // ROVER_MAX_WHEEL_SPEED_MPS for how the default was arrived at.
+    //
+    // Ignores a non-positive or non-finite value rather than accepting
+    // a ceiling of zero, which would silently immobilise the robot.
+    void setMaxSpeed(float maxMps) {
+        if (isnan(maxMps) || isinf(maxMps) || maxMps <= 0.0f) return;
+        _maxSpeedMps = maxMps;
+    }
+    float maxSpeed() const { return _maxSpeedMps; }
 
     // Raw, unconverted tick counters for wheel geometry calibration (see
     // SYSTEM action=raw_ticks/reset_ticks) -- independent of the PID
@@ -116,6 +135,12 @@ public:
     // an ISR storm shows up against.
     unsigned long rawEdgesLeft() { return _encL.totalEdges(); }
     unsigned long rawEdgesRight() { return _encR.totalEdges(); }
+
+    // Pops one encoder that just disabled itself on an implausible edge
+    // rate -- see Encoder::pollStorm(). Same shape as
+    // SensorHub::consumeSensorFailure so main.cpp reports it the same
+    // way; call in a loop, both wheels can storm at once.
+    bool consumeEncoderStorm(const char** wheelNameOut);
     void resetRawTicks() {
         _encL.resetTotal();
         _encR.resetTotal();
@@ -123,6 +148,8 @@ public:
 
 private:
     unsigned long _rawUntilMs = 0;
+    bool _pendingStormLeft = false;
+    bool _pendingStormRight = false;
 
     void updateWheel(MotorDriver& motor, Encoder& encoder, WheelPID& pid,
                       float targetMps, float dtSeconds, float& measuredOut,
@@ -132,6 +159,7 @@ private:
     Encoder _encL, _encR;
     WheelPID _pidL, _pidR;
 
+    float _maxSpeedMps = ROVER_MAX_WHEEL_SPEED_MPS;  // see setMaxSpeed()
     float _targetVelocity = 0.0f;  // m/s
     float _targetRotation = 0.0f;  // rad/s
     bool _obstacleSeen = false;          // see setForwardBlocked()

@@ -312,16 +312,23 @@ var pad=document.getElementById('pad'),knob=document.getElementById('knob'),
     st=document.getElementById('st'),sp=document.getElementById('sp'),
     spv=document.getElementById('spv');
 
-// Ceilings, reached at 100% on the bar. Same values as before the rework
-// -- this is a walk-alongside fallback control, not a racing mode. The
-// firmware clamps again regardless (motion_config.h).
+// Ceilings, reached at 100% on the bar.
 //
-// Heads-up for whoever tests this: the wheel PID ramps its duty up
-// through the integral term, so a LOW setting on the bar takes seconds
-// to reach the duty this chassis needs to break away (~10s at 20%,
-// ~1.6s at 100% -- see PROGRESS.md 2026-09-21). A slow start is not a
-// dead motor; test at full bar first.
-var VMAX=0.30, RMAX=1.50;
+// VMAX mirrors ROVER_MAX_WHEEL_SPEED_MPS, which since 2026-09-21 is a
+// MEASURED figure (0.029 m/s at full duty) rather than the aspirational
+// 0.30 that was there before -- a ceiling ten times the achievable
+// speed made every command an unreachable setpoint and pinned the PWM
+// at 255. Unlike the Pi's page, this one cannot learn the robot's
+// calibrated value (SYSTEM action=set_speed): keep it in step by hand
+// if that gets re-measured. Asking for less than the robot can give is
+// the safe direction to be wrong in.
+//
+// RMAX is DERIVED, not chosen: the unicycle model gives each wheel
+// v +/- rotation * wheelbase/2, so the fastest spin the wheels can
+// actually deliver is 2 * VMAX / wheelbase (0.15m). The old 1.50 rad/s
+// asked each wheel for 0.11 m/s -- nearly four times what this chassis
+// can do -- so every single turn saturated.
+var VMAX=0.03, RMAX=(2*0.03)/0.15;
 // Below this fraction of the pad radius the thumb counts as centred.
 // A direction-only stick has no small commands to ease into, so without
 // a deadzone the tiniest touch is a full-speed start.

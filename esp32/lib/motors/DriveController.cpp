@@ -34,7 +34,7 @@ void DriveController::setTarget(float velocityMps, float rotationRadPerSec) {
     if (isnan(velocityMps) || isinf(velocityMps)) velocityMps = 0.0f;
     if (isnan(rotationRadPerSec) || isinf(rotationRadPerSec)) rotationRadPerSec = 0.0f;
 
-    _targetVelocity = constrain(velocityMps, -ROVER_MAX_WHEEL_SPEED_MPS, ROVER_MAX_WHEEL_SPEED_MPS);
+    _targetVelocity = constrain(velocityMps, -_maxSpeedMps, _maxSpeedMps);
     _targetRotation = constrain(rotationRadPerSec, -ROVER_MAX_ROTATION_RAD_S, ROVER_MAX_ROTATION_RAD_S);
 }
 
@@ -71,8 +71,29 @@ void DriveController::driveRaw(int16_t leftPwm, int16_t rightPwm, unsigned long 
     _motorR.setSpeed(rightPwm);
 }
 
+bool DriveController::consumeEncoderStorm(const char** wheelNameOut) {
+    if (_pendingStormLeft) {
+        _pendingStormLeft = false;
+        *wheelNameOut = "left";
+        return true;
+    }
+    if (_pendingStormRight) {
+        _pendingStormRight = false;
+        *wheelNameOut = "right";
+        return true;
+    }
+    return false;
+}
+
 void DriveController::update() {
     unsigned long now = millis();
+
+    // Checked before anything else, and regardless of the raw-drive
+    // branch below: an encoder input that has started oscillating is
+    // starving this very loop, so the sooner its interrupt goes away
+    // the sooner everything else runs again.
+    if (_encL.pollStorm(now)) _pendingStormLeft = true;
+    if (_encR.pollStorm(now)) _pendingStormRight = true;
 
     // Raw bring-up drive owns the motors while it lasts: running the
     // PID underneath would fight it for the same H-bridge.

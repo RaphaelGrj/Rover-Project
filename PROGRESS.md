@@ -70,6 +70,92 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🟢 CORRIGÉ : plafond de vitesse, feed-forward, anti-windup
+  (2026-09-21)** --- le diagnostic de la session précédente est
+  maintenant réparé, et une **deuxième anomalie sérieuse** est sortie au
+  passage.
+  - **`ROVER_MAX_WHEEL_SPEED_MPS` : 0,30 → 0,03 m/s**, c'est-à-dire la
+    vitesse réellement mesurée à plein régime. La rotation suit :
+    elle est désormais **dérivée**, pas choisie --- le modèle unicycle
+    donne `2 × vmax / empattement` = 0,4 rad/s, là où l'ancien
+    1,5 rad/s demandait 0,11 m/s à chaque roue, presque **quatre fois**
+    ce que le châssis peut donner. Toute rotation saturait.
+  - **Feed-forward `ROVER_PID_KFF = 8500`** (PWM par m/s, soit
+    255 / 0,03). Le rapport cyclique nécessaire à une vitesse est connu
+    d'avance ; le faire redécouvrir à l'intégrateur par pas de 20 ms
+    était la cause de la rampe de 5 s. **Mesuré sur banc natif** : plein
+    barre atteint PWM 200 **immédiatement**, contre *jamais* avant.
+  - **⚠️ ANOMALIE TROUVÉE EN CORRIGEANT : le robot ne s'arrêtait pas
+    quand on relâchait le joystick.** Recentrer le stick ne fait que
+    mettre la consigne à zéro --- ça ne passe pas par `stop()` comme le
+    bouton STOP, le SAFE ou l'E-stop. L'intégrale accumulée pour tenir
+    la vitesse précédente restait, et se vidait à la vitesse de
+    l'erreur. **Mesuré sur banc : 81 secondes de plein régime après
+    avoir lâché.** Invisible jusqu'ici uniquement parce que les roues ne
+    tournaient pas ; ça aurait mordu le jour même où elles s'y seraient
+    mises.
+    - Corrigé par trois choses : l'**anti-windup** (intégration
+      conditionnelle : on n'intègre plus vers une butée déjà atteinte),
+      le **feed-forward** (l'intégrale n'a plus à porter le régime
+      permanent, donc elle reste près de zéro), et surtout une règle
+      explicite --- **consigne nulle ⇒ intégrale remise à zéro**.
+      « S'arrêter » est une intention, pas une consigne à asservir.
+    - Mesure après correction : **0,00 s** de dérive après relâchement,
+      *y compris* avec `kff=0`. L'anti-windup seul ne suffisait pas (il
+      restait 39 s), c'est la combinaison qui règle le problème.
+  - **Tout est recalibrable sans reflasher** : `SYSTEM action=set_speed
+    max=0.045` (persisté en NVS) et `set_pid kff=...`, même mécanique
+    que les gains PID. La page du Pi **suit** le plafond rapporté par le
+    robot (`STATE max_speed=`) et affiche la barre en m/s réels, donc
+    plus de constante d'UI qui périme. La page autonome garde une
+    constante (elle ne peut pas l'apprendre) --- à tenir à jour à la
+    main.
+  - Vérifié sur banc natif compilé avec `g++` (les tests Unity du dépôt
+    tournent aussi localement via un shim) : 9/9 au vert, dont trois
+    nouveaux couvrant exactement ces pathologies.
+
+- **🟢 CORRIGÉ : le lien Pi↔ESP32 ne détectait pas une mort silencieuse
+  (2026-09-21)** --- trouvé en réparant la CI, et c'est un vrai bug de
+  production qui **colle au symptôme « les moteurs ne tournent pas »**.
+  - TCP ne signale qu'un pair qui dit au revoir. Un ESP32 qui perd
+    l'alimentation, plante, ou sort de portée WiFi n'envoie **ni FIN ni
+    RST** : le socket reste ouvert et parfaitement sain, les lectures
+    expirent à vide --- ce qui n'est pas une erreur. Le Pi envoyait donc
+    son heartbeat dans le vide indéfiniment : aucune reconnexion, plus
+    aucun HEARTBEAT ne parvenant au robot, moteurs arrêtés en `SAFE`, et
+    une UI affichant toujours « connecté ».
+  - Corrigé par un **chien de garde en réception** : le firmware publie
+    de la télémétrie capteur toutes les 500 ms quoi qu'il arrive, donc
+    5 s de silence = 10 cycles manqués = lien mort. On ferme et on
+    reconstruit, AUTH comprise. Désactivable (`receive_timeout_s=None`).
+  - Deux tests couvrent les deux moitiés du contrat : un robot muet est
+    recyclé, un robot qui parle **n'est pas** recyclé (une boucle de
+    reconnexion serait pire que le bug).
+
+- **🟢 CORRIGÉ : 3 tests `test_link` rouges depuis toujours --- le code
+  testé était sain, c'est le harnais qui mentait (2026-09-21)**.
+  - `FakeEsp32.hang_up()` faisait `close()` pendant que son propre
+    thread était bloqué dans `recv()` sur **le même socket**. Sous
+    Linux, fermer un descripteur ne réveille pas un thread déjà bloqué
+    dessus, et l'appel bloqué **maintient la description de fichier
+    ouverte : aucun FIN n'est jamais envoyé**. Le client voyait un
+    socket sain et silencieux et avait raison de ne pas reconnecter.
+  - `shutdown(SHUT_RDWR)` avant `close()` : le FIN part tout de suite et
+    réveille le `recv()` bloqué. **15/15 au vert**, CI Python réparée.
+  - À retenir : trois tests de reconnexion ont passé leur vie en rouge
+    en accusant un code correct. Un harnais qui simule une panne doit
+    être vérifié comme le reste.
+
+- **Garde-fou anti-tempête d'interruptions encodeur (2026-09-21)** ---
+  détection passive la session dernière, protection active maintenant :
+  au-delà de 20 000 fronts/s (impossible physiquement --- ce châssis en
+  produit ~320/s), l'encodeur **désarme sa propre interruption** et émet
+  `ERROR code=encoder_storm wheel=left|right`. On échange la mesure de
+  vitesse contre un robot qui continue de tourner, là où une `loop()`
+  affamée ne fait plus rien du tout. Ne se réarme qu'avec
+  `SYSTEM action=reset_ticks` : la cause est un fil, un réarmement
+  automatique ne ferait que la cacher.
+
 - **🔴 TROUVÉ : la consigne de vitesse est INATTEIGNABLE, le PID est
   saturé en permanence (2026-09-21)** --- c'est le résultat le plus
   important de la session, et il **réinterprète des semaines de

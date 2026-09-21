@@ -94,14 +94,25 @@ unsigned long lastBatteryTelemetryMs = 0;
 void publishStateIfChanged() {
     static RoverState lastPublished = RoverState::BOOT;
     static bool lastEstop = false;
+    static float lastMaxSpeed = -1.0f;
     static bool everPublished = false;
     bool estopNow = estop.isPressed();
-    if (everPublished && lastPublished == state && lastEstop == estopNow) return;
+    float maxSpeedNow = drive.maxSpeed();
+    if (everPublished && lastPublished == state && lastEstop == estopNow &&
+        lastMaxSpeed == maxSpeedNow) {
+        return;
+    }
     lastPublished = state;
     lastEstop = estopNow;
+    lastMaxSpeed = maxSpeedNow;
     everPublished = true;
-    char fields[48];
-    snprintf(fields, sizeof(fields), "state=%s estop=%d", roverStateName(state), estopNow ? 1 : 0);
+    // max_speed rides along because a control page cannot scale its own
+    // speed bar sensibly without it: the ceiling is calibrated per robot
+    // now (SYSTEM action=set_speed), so a hardcoded UI constant would go
+    // stale the moment someone re-measures.
+    char fields[64];
+    snprintf(fields, sizeof(fields), "state=%s estop=%d max_speed=%.3f",
+             roverStateName(state), estopNow ? 1 : 0, maxSpeedNow);
     protocol.send("STATE", fields);
 }
 
@@ -188,35 +199,44 @@ void onFrame(const RoverFrame& frame) {
             float kp = frame.getFloat("kp", drive.pidKp());
             float ki = frame.getFloat("ki", drive.pidKi());
             float kd = frame.getFloat("kd", drive.pidKd());
+            // kff is the feed-forward gain (PWM per m/s), see
+            // WheelPID::update -- tunable here like the rest, since it
+            // is the term that decides whether a commanded speed
+            // produces a usable duty at once or seconds later.
+            float kff = frame.getFloat("kff", drive.pidKff());
             if (isnan(kp) || isinf(kp) || isnan(ki) || isinf(ki) || isnan(kd) || isinf(kd) ||
-                kp < 0.0f || ki < 0.0f || kd < 0.0f) {
+                isnan(kff) || isinf(kff) ||
+                kp < 0.0f || ki < 0.0f || kd < 0.0f || kff < 0.0f) {
                 protocol.sendError("invalid_pid_gains");
             } else {
-                drive.setPidGains(kp, ki, kd);
+                drive.setPidGains(kp, ki, kd, kff);
                 CalibrationStore::setFloat("pid_kp", kp);
                 CalibrationStore::setFloat("pid_ki", ki);
                 CalibrationStore::setFloat("pid_kd", kd);
-                char fields2[64];
-                snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f", kp, ki, kd);
+                CalibrationStore::setFloat("pid_kff", kff);
+                char fields2[96];
+                snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                         kp, ki, kd, kff);
                 protocol.send("STATE", fields2);
             }
         } else if (strcmp(action, "get_pid") == 0) {
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
-                     drive.pidKp(), drive.pidKi(), drive.pidKd());
+            char fields2[96];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                     drive.pidKp(), drive.pidKi(), drive.pidKd(), drive.pidKff());
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "reset_pid") == 0) {
             // Reverts to the compiled-in placeholders (motion_config.h)
             // and forgets the NVS override, rather than just resetting
             // the in-memory value -- a reboot after this must not bring
             // the old override back.
-            drive.setPidGains(ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            drive.setPidGains(ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD, ROVER_PID_KFF);
             CalibrationStore::remove("pid_kp");
             CalibrationStore::remove("pid_ki");
             CalibrationStore::remove("pid_kd");
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f",
-                     ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD);
+            CalibrationStore::remove("pid_kff");
+            char fields2[96];
+            snprintf(fields2, sizeof(fields2), "pid_kp=%.2f pid_ki=%.2f pid_kd=%.2f pid_kff=%.2f",
+                     ROVER_PID_KP, ROVER_PID_KI, ROVER_PID_KD, ROVER_PID_KFF);
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "motor_raw") == 0) {
             // Bring-up only: fixed duty straight to the H-bridge, no
@@ -246,6 +266,31 @@ void onFrame(const RoverFrame& frame) {
                          leftPwm, rightPwm, ms);
                 protocol.send("STATE", fields2);
             }
+        } else if (strcmp(action, "set_speed") == 0) {
+            // Re-calibrates the top speed a MOVE may ask for, without a
+            // reflash -- same reasoning as set_pid, and for a constant
+            // that turned out to matter just as much: a ceiling above
+            // what the wheels can actually do makes every command an
+            // unreachable setpoint, pins the PWM at 255 and leaves the
+            // speed bar with no authority at all (see
+            // ROVER_MAX_WHEEL_SPEED_MPS).
+            //
+            //   SYSTEM action=set_speed max=0.045
+            //
+            // Measure it with reset_ticks -> motor_raw left=255
+            // right=255 ms=10000 -> raw_ticks, cold.
+            float maxMps = frame.getFloat("max", -1.0f);
+            if (isnan(maxMps) || isinf(maxMps) || maxMps <= 0.0f) {
+                protocol.sendError("invalid_max_speed");
+            } else {
+                drive.setMaxSpeed(maxMps);
+                CalibrationStore::setFloat("max_speed", drive.maxSpeed());
+                publishStateIfChanged();
+            }
+        } else if (strcmp(action, "reset_speed") == 0) {
+            drive.setMaxSpeed(ROVER_MAX_WHEEL_SPEED_MPS);
+            CalibrationStore::remove("max_speed");
+            publishStateIfChanged();
         } else if (strcmp(action, "obstacle_reflex") == 0) {
             // Arms/disarms the LOCAL obstacle reflex
             // (DriveController::setObstacleReflexEnabled) without
@@ -626,8 +671,13 @@ void setup() {
     drive.setPidGains(
         CalibrationStore::getFloat("pid_kp", ROVER_PID_KP),
         CalibrationStore::getFloat("pid_ki", ROVER_PID_KI),
-        CalibrationStore::getFloat("pid_kd", ROVER_PID_KD)
+        CalibrationStore::getFloat("pid_kd", ROVER_PID_KD),
+        CalibrationStore::getFloat("pid_kff", ROVER_PID_KFF)
     );
+    // Same treatment for the speed ceiling: the compiled default is one
+    // measurement (see ROVER_MAX_WHEEL_SPEED_MPS), and re-measuring it
+    // must not need a reflash.
+    drive.setMaxSpeed(CalibrationStore::getFloat("max_speed", ROVER_MAX_WHEEL_SPEED_MPS));
     head.begin();
     // Servo horn positions survive reboots; the mechanical origin they
     // imply must too (HeadController::loadOrigin).
@@ -858,6 +908,18 @@ void loop() {
         snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=%s", failedSensor);
         protocol.send("ERROR", errFields);
     }
+    // An encoder that just disabled itself (Encoder::pollStorm): a
+    // floating input firing continuously starves this loop, so the
+    // interrupt is dropped and the fact is reported rather than left to
+    // look like a wheel that simply stopped counting. Re-armed only by
+    // SYSTEM action=reset_ticks, once the wiring has been seen to.
+    const char* stormedWheel;
+    while (drive.consumeEncoderStorm(&stormedWheel)) {
+        char errFields[48];
+        snprintf(errFields, sizeof(errFields), "code=encoder_storm wheel=%s", stormedWheel);
+        protocol.send("ERROR", errFields);
+    }
+
     // LOCAL obstacle reflex -- the ESP32 refuses to drive further into an
     // obstacle by itself, without consulting the Pi. Level-driven (not
     // the edge event below) so the block holds for as long as the
