@@ -101,7 +101,7 @@ void DriveController::update() {
     // Forward only -- reversing away and turning in place stay
     // available. See setForwardBlocked() for the full reasoning.
     float velocity = _targetVelocity;
-    if (_forwardBlocked && velocity > 0.0f) velocity = 0.0f;
+    if (forwardBlocked() && velocity > 0.0f) velocity = 0.0f;
 
     // Unicycle model: linear velocity + rotation -> per-wheel target speed
     // (ARCHITECTURE_AND_ROADMAP.md section 12).
@@ -131,6 +131,17 @@ void DriveController::buildTelemetryFields(char* out, size_t outLen) const {
     // "the robot ignores my MOVE" with no way to tell it apart from a
     // dead motor, a saturated PID or a lost link -- and the Pi is now
     // deported, so nobody can watch the robot while reading the logs.
-    snprintf(out, outLen, "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d forward_blocked=%d",
-             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight, _forwardBlocked ? 1 : 0);
+    // Three fields, not one, because they answer three different
+    // questions that used to be conflated: what the sensors see
+    // (obstacle_seen), whether the reflex is armed (obstacle_reflex),
+    // and whether forward motion is actually being clamped as a result
+    // (forward_blocked). With the reflex now switchable at runtime, a
+    // single flag could no longer tell "no obstacle" from "obstacle,
+    // but we were told to ignore it".
+    snprintf(out, outLen,
+             "left_speed=%.2f right_speed=%.2f left_pwm=%d right_pwm=%d "
+             "forward_blocked=%d obstacle_seen=%d obstacle_reflex=%d",
+             _measuredLeftMps, _measuredRightMps, _lastPwmLeft, _lastPwmRight,
+             forwardBlocked() ? 1 : 0, _obstacleSeen ? 1 : 0,
+             _obstacleReflexEnabled ? 1 : 0);
 }

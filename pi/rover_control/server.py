@@ -314,6 +314,16 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 core.resume()
                 continue
 
+            # Obstacle-reflex switch, same shape. Logged at info level
+            # on purpose: disabling a safety clamp is the kind of thing
+            # that must be findable in a log afterwards, next to
+            # whatever happened next.
+            if isinstance(data, dict) and data.get("action") == "obstacle_reflex":
+                enabled = bool(data.get("enabled", True))
+                logger.info("control client set obstacle reflex to %s (%s)", enabled, request.remote)
+                core.set_obstacle_reflex(enabled)
+                continue
+
             try:
                 velocity = float(data["velocity"])
                 rotation = float(data["rotation"])

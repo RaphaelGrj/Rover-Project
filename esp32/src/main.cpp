@@ -246,15 +246,51 @@ void onFrame(const RoverFrame& frame) {
                          leftPwm, rightPwm, ms);
                 protocol.send("STATE", fields2);
             }
+        } else if (strcmp(action, "obstacle_reflex") == 0) {
+            // Arms/disarms the LOCAL obstacle reflex
+            // (DriveController::setObstacleReflexEnabled) without
+            // touching the sensors: distances keep being measured and
+            // reported either way, only the clamp on forward motion
+            // changes. See that method for why a safety clamp is
+            // allowed a switch at all, and why this is not persisted.
+            //
+            //   SYSTEM action=obstacle_reflex on=0
+            //
+            // A missing on= reads as 1: if a frame ever arrives garbled
+            // enough to lose the field, the safe reading is "armed".
+            drive.setObstacleReflexEnabled(frame.getInt("on", 1) != 0);
+            char fields2[32];
+            snprintf(fields2, sizeof(fields2), "obstacle_reflex=%d",
+                     drive.obstacleReflexEnabled() ? 1 : 0);
+            protocol.send("STATE", fields2);
         } else if (strcmp(action, "raw_ticks") == 0) {
             // Bring-up only: raw cumulative encoder counts, untouched by
             // the PID loop's 20ms readAndResetTicks() -- lets a hand
             // rotation of a known number of turns be counted precisely,
             // to measure the real ROVER_ENCODER_TICKS_PER_REV instead of
             // the motion_config.h placeholder. See action=reset_ticks.
-            char fields2[64];
-            snprintf(fields2, sizeof(fields2), "raw_ticks_left=%ld raw_ticks_right=%ld",
-                     drive.rawTicksLeft(), drive.rawTicksRight());
+            // Edge counts alongside the tick counts, because the two
+            // answer different questions and only their RATIO catches
+            // the failure mode that matters here. A tick counter can
+            // sit near zero for two opposite reasons: nothing is
+            // turning, or a floating input is toggling so fast that the
+            // +1/-1 decisions cancel out. GPIO34-39 have no internal
+            // pull-up (Encoder::begin), so a connector that has worked
+            // loose -- which this robot has form for -- leaves the pin
+            // floating and the ISR firing continuously, starving the
+            // very loop() that drives the motors. Edges climbing while
+            // ticks stay flat is that, unambiguously.
+            // 128, not 96: four counters at their full width need 107
+            // bytes, and 96 would have cut the last one -- on the very
+            // command whose worst case (an edge counter running away on
+            // a floating input) is also its EXPECTED case. Same class of
+            // bug as the three truncations already noted in this file,
+            // caught here by counting instead of by hardware.
+            char fields2[128];
+            snprintf(fields2, sizeof(fields2),
+                     "raw_ticks_left=%ld raw_ticks_right=%ld raw_edges_left=%lu raw_edges_right=%lu",
+                     drive.rawTicksLeft(), drive.rawTicksRight(),
+                     drive.rawEdgesLeft(), drive.rawEdgesRight());
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "reset_ticks") == 0) {
             drive.resetRawTicks();
@@ -661,11 +697,27 @@ void setup() {
         drive.stop();
         state = RoverState::SAFE;
     };
+    standalone.onObstacleReflex = [](bool enabled) {
+        // Same switch the Pi reaches through SYSTEM action=obstacle_reflex
+        // -- one setting, one owner, no second code path that could end
+        // up disagreeing with the first.
+        drive.setObstacleReflexEnabled(enabled);
+    };
     standalone.statusProvider = []() {
-        // Shown verbatim on the page: without forward_blocked, an
-        // obstacle reflex reads as "the robot ignores my joystick".
-        return String(roverStateName(state)) +
-               (drive.forwardBlocked() ? " | obstacle: marche avant bloquee" : "");
+        // Shown verbatim on the page: without this, an obstacle reflex
+        // reads as "the robot ignores my joystick". Three cases, not
+        // two, since the reflex became switchable -- "a sensor sees
+        // something but we were told to drive anyway" is worth saying
+        // out loud rather than looking identical to a clear path.
+        String status = roverStateName(state);
+        if (drive.forwardBlocked()) {
+            status += " | obstacle: marche avant bloquee";
+        } else if (drive.obstacleSeen()) {
+            status += " | obstacle vu, reflexe DESACTIVE";
+        } else if (!drive.obstacleReflexEnabled()) {
+            status += " | reflexe obstacle desactive";
+        }
+        return status;
     };
 
     char fields[64];
@@ -856,7 +908,12 @@ void loop() {
             // truncation bugs. RoverProtocol::send() now detects a
             // truncated frame instead of emitting a silently-cut one,
             // but detection is the backstop, not the plan.
-            char fields[128];
+            // 160, not 128: splitting the old single forward_blocked
+            // into forward_blocked/obstacle_seen/obstacle_reflex
+            // (2026-09-21) added ~36 bytes to the worst case, and this
+            // file has three historical truncation bugs that all came
+            // from a thin margin exactly like that.
+            char fields[160];
             drive.buildTelemetryFields(fields, sizeof(fields));
             protocol.send("STATE", fields);
         }

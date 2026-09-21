@@ -65,6 +65,11 @@ public:
     std::function<void(float pitch, float yaw)> onLook;
     std::function<void()> onResume;
     std::function<void()> onStop;
+    // Arms/disarms the local obstacle reflex -- same switch as
+    // SYSTEM action=obstacle_reflex, routed through main.cpp rather
+    // than reaching into DriveController from here (this module owns no
+    // safety logic of its own, see the class comment).
+    std::function<void(bool enabled)> onObstacleReflex;
     // Any request from the page counts as proof of life, exactly like
     // any valid frame from the Pi does (ROVER_PROTOCOL.md §6).
     std::function<void()> onHeartbeat;
@@ -184,12 +189,12 @@ private:
 
     void handlePage() {
         // Served straight from flash (PROGMEM), never built into a
-        // String: this page is ~6KB (it grew with the speed bar) and RAM
-        // is the scarcer resource once WiFi is up.
+        // String: this page is ~7KB (it grew with the speed bar and the
+        // obstacle switch) and RAM is the scarcer resource once WiFi is up.
         _server.send_P(200, "text/html", PAGE);
     }
 
-    // GET /c?v=<velocity>&r=<rotation>[&p=&y=][&a=1][&s=1][&h=1]
+    // GET /c?v=<velocity>&r=<rotation>[&p=&y=][&a=1][&s=1][&h=1][&o=0|1]
     // One endpoint, not five: the page polls it ~5x/second anyway to
     // keep the heartbeat alive, so folding the commands into that same
     // request halves the traffic and keeps the joystick responsive.
@@ -213,6 +218,12 @@ private:
             if (onStop) onStop();
         } else if (_server.hasArg("a")) {
             if (onResume) onResume();
+        } else if (_server.hasArg("o")) {
+            // Obstacle-reflex switch. Its own branch rather than a flag
+            // riding along with v/r: it is an operator decision, not
+            // part of a drive command, and pairing the two would make
+            // every joystick update re-assert a safety setting.
+            if (onObstacleReflex) onObstacleReflex(_server.arg("o").toInt() != 0);
         } else if (_server.hasArg("h")) {
             // Keep-alive only: the heartbeat above is the whole point of
             // the request. Deliberately leaves the current target alone
@@ -269,6 +280,11 @@ h1{font-size:1.1em;margin:0 0 .5em}
 button{width:100%;padding:.9em;font-size:1em;margin:.3em 0;border:0;border-radius:6px}
 #stop{background:#b33;color:#fff;font-weight:bold}
 #arm{background:#284;color:#fff}
+/* Armed = quiet grey (that is the normal, safe state, it should not
+   shout). Disarmed = amber, because a disabled safety reflex must never
+   look like business as usual. */
+#obs{background:#2a2a33;color:#ccd}
+#obs.off{background:#a60;color:#fff;font-weight:bold}
 #st{font-family:monospace;font-size:.85em;color:#9ab;min-height:1.2em}
 </style></head><body>
 <h1>Rover &mdash; pilotage direct</h1>
@@ -283,6 +299,7 @@ button{width:100%;padding:.9em;font-size:1em;margin:.3em 0;border:0;border-radiu
 </div>
 <button id=stop>STOP</button>
 <button id=arm>Activer (sortir de SAFE)</button>
+<button id=obs>Arret sur obstacle : ACTIF</button>
 <script>
 // Speed bar + direction-only joystick (2026-09-21). The joystick used to
 // set BOTH direction and magnitude, which had two problems: the speed
@@ -363,6 +380,19 @@ function sendMove(extra){
 }
 document.getElementById('stop').onclick=function(){release();sendMove('&s=1');};
 document.getElementById('arm').onclick=function(){send('/c?a=1');};
+
+// Obstacle reflex switch. The DISTANCES keep being measured and shown
+// either way -- this only stops the robot acting on them, it does not
+// blind it. Optimistic UI (the button flips immediately) because the
+// firmware's own reading comes back in the status line below on the
+// very next poll, so a request that failed corrects itself within
+// 250ms rather than needing its own error path.
+var obs=document.getElementById('obs'),obsOn=true;
+function paintObs(){
+  obs.textContent='Arret sur obstacle : '+(obsOn?'ACTIF':'DESACTIVE');
+  obs.className=obsOn?'':'off';
+}
+obs.onclick=function(){obsOn=!obsOn;paintObs();send('/c?o='+(obsOn?1:0));};
 
 // 100ms tick, but two different requests come out of it:
 //   - the command changed -> send it now (so the pad still feels instant);

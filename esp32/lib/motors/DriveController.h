@@ -40,8 +40,36 @@ public:
     // have to cross a lossy link to stop the robot hitting something.
     // Re-applied on every update(), not just on a new MOVE, so a *stale*
     // command can't keep driving into an obstacle after the link drops.
-    void setForwardBlocked(bool blocked) { _forwardBlocked = blocked; }
-    bool forwardBlocked() const { return _forwardBlocked; }
+    void setForwardBlocked(bool blocked) { _obstacleSeen = blocked; }
+
+    // Whether forward motion is ACTUALLY being clamped right now, which
+    // is what an operator asking "why is it not moving?" needs -- not
+    // just whether a sensor sees something (obstacleSeen()).
+    bool forwardBlocked() const { return _obstacleSeen && _obstacleReflexEnabled; }
+
+    // What the ToF sensors say, regardless of whether the reflex is
+    // allowed to act on it. Kept separate so turning the reflex off
+    // never costs the operator the reading itself.
+    bool obstacleSeen() const { return _obstacleSeen; }
+
+    // Runtime override for the reflex above (SYSTEM action=obstacle_reflex,
+    // and the button on both control pages).
+    //
+    // Why this is allowed to exist at all, on a safety clamp: the reflex
+    // went live on 2026-09-20 when the VL53L0X were finally wired, and a
+    // sensor that sees the chassis, a track, a cable or the floor ahead
+    // of it silently zeroes every forward command -- indistinguishable,
+    // from the outside, from the dead motors this project has been
+    // chasing for weeks. Being able to take one suspect out of the
+    // picture in one press is worth more during bring-up than a reflex
+    // that cannot be questioned.
+    //
+    // Deliberately NOT persisted: a disabled safety reflex must not
+    // survive a power cycle, so every boot starts with it armed again
+    // (contrast CalibrationStore, which does persist PID gains -- those
+    // are a tuning choice, this is a guard rail).
+    void setObstacleReflexEnabled(bool enabled) { _obstacleReflexEnabled = enabled; }
+    bool obstacleReflexEnabled() const { return _obstacleReflexEnabled; }
 
     // Bring-up only: drives raw PWM straight to the H-bridge, with NO
     // PID and no encoder feedback, for `durationMs` and then stops.
@@ -82,6 +110,12 @@ public:
     // loop's own 20ms-reset counters in updateWheel().
     long rawTicksLeft() { return _encL.totalTicks(); }
     long rawTicksRight() { return _encR.totalTicks(); }
+    // Raw ISR edge counts -- see Encoder::totalEdges(). Not reset by
+    // resetRawTicks(): they measure the health of the input itself, not
+    // a calibration run, and zeroing them would throw away the baseline
+    // an ISR storm shows up against.
+    unsigned long rawEdgesLeft() { return _encL.totalEdges(); }
+    unsigned long rawEdgesRight() { return _encR.totalEdges(); }
     void resetRawTicks() {
         _encL.resetTotal();
         _encR.resetTotal();
@@ -100,7 +134,8 @@ private:
 
     float _targetVelocity = 0.0f;  // m/s
     float _targetRotation = 0.0f;  // rad/s
-    bool _forwardBlocked = false;  // see setForwardBlocked()
+    bool _obstacleSeen = false;          // see setForwardBlocked()
+    bool _obstacleReflexEnabled = true;  // see setObstacleReflexEnabled()
     float _measuredLeftMps = 0.0f;
     float _measuredRightMps = 0.0f;
     // Last PWM actually sent to each motor (motion_config.h: +/-255). Kept

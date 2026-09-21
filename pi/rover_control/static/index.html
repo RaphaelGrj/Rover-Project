@@ -84,6 +84,15 @@
   }
   #arm.needed { background: #f85149; animation: arm-pulse 1s ease-in-out infinite; }
   @keyframes arm-pulse { 50% { opacity: 0.55; } }
+  /* Armed = quiet grey (the normal, safe state should not shout).
+     Disarmed = amber, because a disabled safety clamp must never look
+     like business as usual. */
+  #obstacle-toggle {
+    padding: 0.6em 0.9em; font-size: 0.8em; line-height: 1.2;
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 6px; white-space: nowrap;
+  }
+  #obstacle-toggle.disarmed { background: #9e6a03; color: #fff; border-color: #bb8009; }
   #esp-state {
     display: inline-block; margin-left: 0.6em; padding: 0.1em 0.6em;
     border-radius: 1em; font-size: 0.85em; background: #21262d; color: #7d8590;
@@ -176,6 +185,7 @@
            aria-label="Vitesse">
     <div id="speed-label">vitesse</div>
     <button id="arm" type="button">Activer</button>
+    <button id="obstacle-toggle" type="button">Obstacle : ON</button>
   </div>
 </div>
 <div id="head-pad-base">
@@ -222,6 +232,7 @@ const speedBarEl = document.getElementById("speed-bar");
 const speedValueEl = document.getElementById("speed-value");
 const armButtonEl = document.getElementById("arm");
 const espStateEl = document.getElementById("esp-state");
+const obstacleToggleEl = document.getElementById("obstacle-toggle");
 
 // This page was itself only reachable because the URL carried a valid
 // ?token= (rover_control/server.py's auth_middleware, checked on every
@@ -283,8 +294,31 @@ function updateObstacleLine() {
     return;
   }
   const sides = [closeLeft && "gauche", closeRight && "droite"].filter(Boolean).join(" + ");
-  obstacleLineEl.textContent = `⚠ obstacle proche (${sides})`;
+  // The distances themselves are never hidden -- disabling the reflex
+  // stops the robot acting on them, it does not blind it. What changes
+  // is the second half of the line, so a warning can no longer be read
+  // as "and that is why it won't move" when it isn't.
+  const armed = mergedState.obstacle_reflex !== "0";
+  obstacleLineEl.textContent = armed
+    ? `⚠ obstacle proche (${sides}) -- marche avant bloquee`
+    : `⚠ obstacle proche (${sides}) -- arret sur obstacle DESACTIVE`;
 }
+
+// The firmware's own reading is what drives this button, never the
+// click: a page that assumed its request landed would quietly disagree
+// with the robot after a dropped frame or an ESP32 reboot (which re-arms
+// the reflex, since it is deliberately not persisted).
+function updateObstacleToggle() {
+  const armed = mergedState.obstacle_reflex !== "0";
+  obstacleToggleEl.textContent = armed ? "Obstacle : ON" : "Obstacle : OFF";
+  obstacleToggleEl.classList.toggle("disarmed", !armed);
+}
+
+obstacleToggleEl.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const armed = mergedState.obstacle_reflex !== "0";
+  ws.send(JSON.stringify({ action: "obstacle_reflex", enabled: !armed }));
+});
 
 // STATE is a standing status (always shows the latest merged fields);
 // EVENT/ERROR are transient occurrences (ROVER_PROTOCOL.md §8: distinct
@@ -316,6 +350,7 @@ function handleEsp32Message(data) {
     stateLineEl.textContent = "etat: " + formatFields(mergedState);
     updateObstacleLine();
     updateEspStateChip();
+    updateObstacleToggle();
   } else if (data.type === "EVENT") {
     eventLineEl.textContent = "evenement: " + formatFields(data);
     clearTimeout(eventClearTimer);
@@ -347,6 +382,7 @@ function connect() {
     stateLineEl.textContent = "";
     obstacleLineEl.textContent = "";
     updateEspStateChip();
+    updateObstacleToggle();
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();

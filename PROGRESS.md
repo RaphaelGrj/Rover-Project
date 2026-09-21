@@ -70,6 +70,91 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🔴 TROUVÉ : la consigne de vitesse est INATTEIGNABLE, le PID est
+  saturé en permanence (2026-09-21)** --- c'est le résultat le plus
+  important de la session, et il **réinterprète des semaines de
+  diagnostic**.
+  - Calcul, à partir de vos propres mesures : circonférence de roue
+    `π × 0,03183 = 100,0 mm` ; mesure du 2026-09-20 à froid,
+    **3125 ticks en 10 s à PWM 255** → `312 ticks/s ÷ 1073 = 0,291 tr/s`
+    = **17,5 tr/min** = **0,029 m/s**.
+  - Or `ROVER_MAX_WHEEL_SPEED_MPS = 0,30 m/s`, soit **10,3 × la vitesse
+    réellement atteinte à plein régime**. Demander 0,30 m/s revient à
+    demander **180 tr/min** à l'arbre de sortie.
+  - **Conséquence** : toute consigne au-dessus de ~0,03 m/s est
+    inatteignable → l'erreur ne redescend jamais → l'intégrale part à sa
+    borne → **le PWM reste collé à 255 indéfiniment**. Vérifié en
+    simulant la boucle fermée : consigne 0,12 m/s → saturé à 255 sur
+    100 % du régime établi ; consigne **0,025 m/s** (sous le plafond
+    mesuré) → **PWM 109, la boucle régule enfin**.
+  - **Donc `left_pwm=255 left_speed=0.00` n'est PAS un symptôme de
+    panne** : c'est la sortie normale de cette configuration. Ce chiffre
+    a été lu comme une preuve de moteur mort pendant des semaines ; il
+    ne prouve rien du tout.
+  - ⚠ Nuance honnête : les 17,5 tr/min viennent d'une mesure faite sur
+    un châssis peut-être partiellement chargé, donc le vrai plafond à
+    vide est sans doute plus élevé. Même faux d'un facteur 3, on reste à
+    un ordre de grandeur de 0,30 m/s. **À trancher par la mesure** :
+    `SYSTEM action=reset_ticks`, puis `motor_raw left=255 right=255
+    ms=10000`, puis `raw_ticks` --- à froid, roues en l'air *puis* au
+    sol. `ROVER_MAX_WHEEL_SPEED_MPS` doit ensuite être ramené à ce qui
+    est réellement atteignable, sinon la barre de vitesse n'a **aucune
+    autorité** : elle ne change que la durée de la rampe, pas le régime
+    final.
+  - **Non corrigé ici** : changer cette constante change le
+    comportement en mouvement du robot, ça se règle sur la mesure, pas à
+    l'aveugle.
+
+- **Bouton « arrêt sur obstacle » ON/OFF (2026-09-21)** --- demandé, et
+  c'est aussi un outil de diagnostic.
+  - Présent sur **les deux** pages. Les **distances restent mesurées,
+    publiées et affichées** dans tous les cas : le bouton empêche le
+    robot d'*agir* sur ce qu'il voit, il ne l'aveugle pas.
+  - Côté firmware `SYSTEM action=obstacle_reflex on=0|1`
+    (`DriveController::setObstacleReflexEnabled`). ⚠ Il y a **deux**
+    clamps indépendants (firmware + Pi, §6.2 question 5) : n'en
+    désactiver qu'un ne change rien, donc `RoverCore.set_obstacle_reflex()`
+    fait les deux d'un coup.
+  - **Non persisté, volontairement** : un garde-fou désactivé ne doit
+    pas survivre à une coupure de courant. Chaque démarrage repart armé
+    --- et le bouton de l'UI suit **la valeur rapportée par le robot**,
+    jamais le clic, pour qu'un reboot ESP32 ne laisse pas la page
+    mentir.
+  - La télémétrie distingue maintenant trois choses autrefois
+    confondues : `obstacle_seen` (ce que voit le capteur),
+    `obstacle_reflex` (armé ou non), `forward_blocked` (marche avant
+    effectivement bridée).
+
+- **Deux suspects restants, désormais diagnosticables en 2 secondes
+  (2026-09-21)** --- tous deux collent au symptôme « rien ne tourne »,
+  aucun n'est mécanique ni lié au driver :
+  1. **E-stop fantôme sur GPIO25.** `ROVER_PIN_ESTOP = 25` --- or
+     `motion_config.h` note que GPIO25 était le `PWMB` du plan TB6612FNG
+     abandonné. **S'il reste un fil de ce plan reliant GPIO25 à la masse
+     ou à une entrée du driver, l'E-stop lit « enfoncé » en permanence** :
+     dès la première `loop()` le front est détecté, l'état passe en
+     `SAFE`, les moteurs sont coupés, et *tout* `resume` est refusé.
+     Symptôme identique à des moteurs morts. Jusqu'à cette session ce
+     refus était **totalement silencieux** ; il répond maintenant
+     `ERROR code=estop_held`, et `STATE estop=1` le dit sans qu'on
+     demande rien.
+  2. **Tempête d'interruptions encodeur.** GPIO34-39 n'ont **aucun
+     pull-up interne** (`Encoder::begin` le documente). Un connecteur
+     desserré --- ce robot a des antécédents, cf. « connexion gauche
+     faible/intermittente » --- laisse la broche flotter et l'ISR se
+     déclencher en continu, ce qui **affame la `loop()` qui pilote les
+     moteurs**. Les ticks ne le montrent pas : les `+1`/`−1` s'annulent,
+     le compteur reste près de zéro, exactement comme une roue immobile.
+     Nouveau compteur `raw_edges_left`/`raw_edges_right` (jamais
+     décrémenté) dans `SYSTEM action=raw_ticks` : **des edges qui
+     grimpent pendant que les ticks stagnent, c'est ça, sans ambiguïté**.
+  - Bonus de la publication `STATE state=` au boot : une boucle de reset
+    du watchdog (3 s) se voit maintenant comme des `state=READY`
+    répétés, au lieu de passer inaperçue.
+  - Confirmé inerte : `RoverState::ERROR` n'est **jamais** affecté nulle
+    part dans le firmware, ce chemin ne peut pas bloquer quoi que ce
+    soit.
+
 - **PILOTAGE : barre de vitesse + joystick de direction (2026-09-21)**
   --- les deux pages (celle du Pi, `pi/rover_control/static/index.html`,
   et celle servie par l'ESP32 en mode autonome) séparent désormais

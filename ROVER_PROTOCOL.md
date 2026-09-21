@@ -128,6 +128,8 @@ ne reçoivent pas d'ACK.
 | `wifi_forget` | efface le SSID/mot de passe WiFi enregistrés en NVS (garde le mot de passe OTA) |
 | `standalone` / `standalone_off` | entre/sort du pilotage autonome (point d'accès WPA2 + page joystick, §6.3 de l'architecture) |
 | `motor_raw` | **bring-up uniquement** : `SYSTEM action=motor_raw left=200 right=200 ms=2000` applique un rapport cyclique fixe directement au pont en H, **sans PID ni encodeur**, et s'arrête tout seul (15 s max). Indispensable pour diagnostiquer une roue immobile : la sortie du PID sature à 255 *parce que* rien ne tourne, donc un blocage mécanique, un driver mort et un encodeur inversé y sont indiscernables. Refusé hors de l'état `ACTIVE` |
+| `obstacle_reflex` | arme/désarme le réflexe d'obstacle local : `SYSTEM action=obstacle_reflex on=0`. **Ne touche pas aux capteurs** --- les distances continuent d'être mesurées et publiées, seul le blocage de la marche avant change. Un `on=` absent vaut `1` (si une trame arrive assez abîmée pour perdre le champ, la lecture sûre est « armé »). Répond `STATE obstacle_reflex=...`. **Non persisté** : un garde-fou désactivé ne doit pas survivre à une coupure de courant, chaque démarrage repart armé. ⚠ Le Pi a son **propre** clamp (§6.2 question 5) et les deux sont indépendants ; `RoverCore.set_obstacle_reflex()` les désarme ensemble, désarmer un seul des deux ne change rien |
+| `raw_ticks` / `reset_ticks` | **bring-up uniquement** : compteurs d'encodeur bruts, intouchés par la boucle PID. Répond `STATE raw_ticks_left= raw_ticks_right= raw_edges_left= raw_edges_right=`. Les `raw_edges_` sont le nombre d'appels d'interruption depuis le boot, **jamais décrémentés** --- c'est leur rapport aux `raw_ticks_` qui compte : des *edges* qui grimpent pendant que les *ticks* stagnent signifie une entrée qui flotte (GPIO34-39 n'ont aucun pull-up interne) et une ISR qui affame la `loop()` chargée de piloter les moteurs. Les ticks seuls ne distinguent pas ce cas d'une roue simplement immobile |
 | `pintest` | **bring-up uniquement** : `SYSTEM action=pintest pin=13 level=1` force une broche (servos ou entrées moteur seulement) à un niveau logique continu, bien plus lisible au multimètre qu'un PWM. Réarme le PWM moteur après coup, `digitalWrite` détachant la broche du LEDC |
 | `head_origin` / `head_status` | `head_origin` fige les angles servo courants comme position de référence de la tête et les persiste en NVS ; tout angle logique est ensuite mesuré depuis là, ce qui rend un remontage de palonnier rattrapable sans reflasher. `head_status` renvoie `head_enabled=`, `head_a_att=`, `head_b_att=`, `head_a_deg=`, `head_b_deg=`, `head_org_a=`, `head_org_b=` |
 | `servo` | **bring-up uniquement** : `which=a\|b` pilote un servo en relâchant l'autre, `which=ab a= b=` les deux indépendamment, `which=pair angle=` les deux depuis l'origine, `which=off` relâche tout (aucune impulsion, aucun couple) |
@@ -239,6 +241,14 @@ Pourquoi c'est diffusé et pas seulement disponible sur demande
 conception. Sans ce champ, un timeout heartbeat après une micro-coupure
 WiFi est indiscernable d'un moteur mort --- exactement la confusion qui
 a coûté plusieurs sessions de diagnostic moteur (`PROGRESS.md`).
+
+`forward_blocked` / `obstacle_seen` / `obstacle_reflex` répondent à
+trois questions distinctes, autrefois confondues en un seul champ :
+ce que les capteurs voient, si le réflexe est armé, et si la marche
+avant est **effectivement** bridée en conséquence. Depuis que le réflexe
+est débrayable à chaud (`action=obstacle_reflex`), un drapeau unique ne
+pouvait plus distinguer « pas d'obstacle » de « obstacle, mais on nous a
+dit de l'ignorer ».
 
 `distance_left`/`distance_right` sont en millimètres ; `9999` signifie
 "capteur indisponible" (échec `begin()` ou perte depuis), `8190`

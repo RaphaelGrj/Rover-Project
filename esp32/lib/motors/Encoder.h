@@ -22,6 +22,16 @@ public:
     long totalTicks();
     void resetTotal();
 
+    // Raw ISR invocations since boot -- NEVER decremented, unlike the
+    // tick counters, which add or subtract depending on the decoded
+    // direction. That difference is the whole point: a floating input
+    // (these pins have no internal pull-up, see begin()) produces
+    // edges by the thousand whose directions cancel, so ticks stay
+    // near zero while the ISR eats the CPU that loop() needs to drive
+    // the motors. Ticks alone cannot tell that apart from a wheel that
+    // simply is not turning; edges can.
+    unsigned long totalEdges();
+
 private:
     static void IRAM_ATTR onPinAChange(void* arg);
 
@@ -29,6 +39,7 @@ private:
     uint8_t _pinB = 0;
     volatile long _ticks = 0;
     volatile long _totalTicks = 0;
+    volatile unsigned long _totalEdges = 0;
     // ESP32-specific spinlock, not noInterrupts()/interrupts(): those only
     // suspend the current core, which isn't enough if the GPIO ISR ever
     // ends up scheduled on the other core than the one calling

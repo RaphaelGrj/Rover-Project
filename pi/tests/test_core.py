@@ -327,3 +327,54 @@ def test_resume_reports_a_down_link_instead_of_claiming_success():
         assert core.resume() is False
 
     run(body())
+
+
+def test_obstacle_clamp_can_be_disabled_at_runtime():
+    """Bring-up escape hatch: a ToF that sees the chassis, a track or the
+    floor zeroes every forward command, which from the outside looks
+    exactly like the dead motors this project has been chasing."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+
+        core.set_obstacle_reflex(False)
+        core.move(0.2, 0.0)
+        assert ("MOVE", {"velocity": "0.20", "rotation": "0.00"}) in link.sent
+        # The firmware's own clamp is independent, so disabling only the
+        # Pi's would achieve nothing -- it has to be told too.
+        assert ("SYSTEM", {"action": "obstacle_reflex", "on": "0"}) in link.sent
+
+    run(body())
+
+
+def test_obstacle_clamp_comes_back_when_re_enabled():
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.set_obstacle_reflex(False)
+        core.move(0.2, 0.0)
+
+        core.set_obstacle_reflex(True)
+        core.move(0.2, 0.0)
+        assert ("SYSTEM", {"action": "obstacle_reflex", "on": "1"}) in link.sent
+        assert link.sent[-1] == ("MOVE", {"velocity": "0.00", "rotation": "0.00"})
+
+    run(body())
+
+
+def test_obstacle_clamp_is_armed_by_default():
+    """A disabled safety clamp must not be the starting state -- nothing
+    persists it, so every process (and every ESP32 boot) starts armed."""
+    async def body():
+        link = FakeLink()
+        core = RoverCore(link)
+        core.on_frame("STATE", {"distance_left": "100", "distance_right": "9999"})
+        await asyncio.sleep(0)
+        core.move(0.2, 0.0)
+        assert ("MOVE", {"velocity": "0.00", "rotation": "0.00"}) in link.sent
+
+    run(body())

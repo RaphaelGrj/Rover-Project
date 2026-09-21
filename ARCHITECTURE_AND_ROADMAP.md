@@ -698,6 +698,46 @@ Ce que ça permet côté lien, et où le gain est réellement pris :
     reste plancheré par le timeout heartbeat (500 ms) : ce n'est pas là
     que se gagne quelque chose, et c'est assumé.
 
+### Réflexe d'obstacle débrayable (2026-09-21)
+
+Les deux pages ont un bouton **« arrêt sur obstacle » ON/OFF**. C'est
+une entorse assumée au principe « on ne débranche pas un garde-fou », et
+elle se justifie :
+
+-   le réflexe est devenu actif le **2026-09-20**, le jour même où les
+    moteurs ont cessé de tourner. Un ToF qui voit une chenille, un
+    câble, ou le sol devant lui met la marche avant à zéro **en
+    silence** --- indiscernable, vu de l'extérieur, des moteurs morts
+    qu'on traque depuis des semaines ;
+-   pouvoir retirer un suspect du tableau en une pression vaut plus,
+    pendant un bring-up, qu'un réflexe qu'on ne peut pas interroger.
+
+Les garanties qui l'encadrent :
+
+-   **les capteurs ne sont pas touchés.** Les distances continuent
+    d'être mesurées, publiées et affichées. Le bouton empêche d'*agir*
+    sur ce qui est vu, il n'aveugle pas le robot ;
+-   **rien n'est persisté.** Un garde-fou désactivé ne survit pas à une
+    coupure de courant : chaque démarrage repart armé. C'est l'inverse
+    du choix fait pour les gains PID (`CalibrationStore`), et la
+    différence est nette --- un gain est un réglage, ceci est un
+    garde-fou ;
+-   **le bouton suit le robot, pas le clic.** L'UI affiche la valeur
+    rapportée par le firmware (`STATE obstacle_reflex=`), donc une trame
+    perdue ou un reboot ESP32 ne peut pas laisser la page prétendre que
+    le réflexe est désactivé alors qu'il est armé ;
+-   **les deux clamps se désarment ensemble.** Il y en a deux
+    indépendants par conception (§6.2 question 5, le Pi *et* le
+    firmware) ; n'en désactiver qu'un ne changerait rien, donc
+    `RoverCore.set_obstacle_reflex()` envoie aussi l'instruction au
+    firmware. Si cette trame se perd, le firmware continue de brider :
+    les deux couches se désynchronisent **du côté sûr**.
+
+La télémétrie distingue désormais trois choses qu'un drapeau unique
+confondait : `obstacle_seen` (ce que voit le capteur),
+`obstacle_reflex` (armé ou non) et `forward_blocked` (marche avant
+effectivement bridée).
+
 ### Bouton « Activer » aussi côté Pi
 
 Un ESP32 en `SAFE` jette toutes les `MOVE` (voulu, §27 règle 6) et seul

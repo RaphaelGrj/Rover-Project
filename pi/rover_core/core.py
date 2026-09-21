@@ -122,6 +122,10 @@ class RoverCore:
         # MOVE_REFRESH_S and move().
         self._last_move: tuple[float, float] | None = None
         self._last_move_sent_at = 0.0
+        # Armed at startup and never persisted -- a disabled safety
+        # clamp must not outlive the session that disabled it. See
+        # set_obstacle_reflex().
+        self._obstacle_reflex_enabled = True
         # Multiple control clients (e.g. a phone and a laptop tab at
         # once) are allowed; only stop heartbeating once the *last* one
         # leaves, not the first.
@@ -239,8 +243,30 @@ class RoverCore:
             return False
         return left < OBSTACLE_THRESHOLD_MM or right < OBSTACLE_THRESHOLD_MM
 
+    def set_obstacle_reflex(self, enabled: bool) -> bool:
+        """Arms or disarms the obstacle clamp, on BOTH layers.
+
+        There are two independent ones by design (§6.2 question 5): this
+        one, and the ESP32's own, which exists because a Pi-side-only
+        reflex would have to cross a lossy link to stop the robot. That
+        redundancy is the point -- and it also means disabling only one
+        of them achieves nothing, so this sends the firmware the same
+        instruction rather than just flipping a local flag.
+
+        The sensors are untouched either way: distances keep being
+        measured, reported and displayed. This changes what the robot
+        *does* about them, not what it knows.
+
+        Returns whether the instruction reached the link (False = link
+        down, so the two layers are now out of step -- the ESP32 keeps
+        clamping, which is the safe direction to fail in). The
+        authoritative answer comes back in telemetry as
+        obstacle_reflex=, which is what the UI shows."""
+        self._obstacle_reflex_enabled = enabled
+        return bool(self.link.send("SYSTEM", {"action": "obstacle_reflex", "on": "1" if enabled else "0"}))
+
     def move(self, velocity: float, rotation: float) -> None:
-        if velocity > 0.0 and self._obstacle_ahead():
+        if velocity > 0.0 and self._obstacle_reflex_enabled and self._obstacle_ahead():
             # Safety clamp, not navigation: refuses to drive *further*
             # into a detected obstacle (eg. a held joystick, a stuck
             # gamepad axis) -- backing away (negative velocity) and

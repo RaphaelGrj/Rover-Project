@@ -21,6 +21,7 @@ void IRAM_ATTR Encoder::onPinAChange(void* arg) {
     int8_t delta = (a == b) ? 1 : -1;
     self->_ticks += delta;
     self->_totalTicks += delta;
+    self->_totalEdges++;
     portEXIT_CRITICAL_ISR(&self->_mux);
 }
 
@@ -35,6 +36,13 @@ long Encoder::readAndResetTicks() {
 long Encoder::totalTicks() {
     portENTER_CRITICAL(&_mux);
     long total = _totalTicks;
+    portEXIT_CRITICAL(&_mux);
+    return total;
+}
+
+unsigned long Encoder::totalEdges() {
+    portENTER_CRITICAL(&_mux);
+    unsigned long total = _totalEdges;
     portEXIT_CRITICAL(&_mux);
     return total;
 }
