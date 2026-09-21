@@ -376,7 +376,11 @@ def _report(
                     f"ATTENTION : ROVER_MAX_WHEEL_SPEED_MPS vaut {max_speed:.3f}, soit {ratio:.1f}x cette\n"
                     f"mesure. Un plafond trop haut rend toute consigne inatteignable et colle le PWM\n"
                     f"a 255 ; trop bas, il bride le robot. Recalez-le sans reflasher :\n"
-                    f"  SYSTEM action=set_speed max={mps:.3f}\n"
+                    # .3f tronquait silencieusement toute vitesse < 0.001 m/s a
+                    # "0.000" -- exactement le cas sur ce chassis (roues lentes,
+                    # faible nombre de tours en args.duration) -- et
+                    # recommandait donc une commande qui immobilise le robot.
+                    f"  SYSTEM action=set_speed max={mps:.5f}\n"
                 )
             else:
                 extra += f"Coherent avec ROVER_MAX_WHEEL_SPEED_MPS ({max_speed:.3f}).\n"
