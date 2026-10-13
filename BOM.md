@@ -100,9 +100,11 @@
 > carte SD).
 
 > ⚠ **Révision du 2026-10-13 --- PCB sur mesure (`pcb/PCB_CONNEXIONS.md`).**
-> Si le PCB S3 tout-en-un est réalisé, la batterie devient un **pack
-> LiPo 2S** branché directement sur la carte (câble de puissance JST +
-> prise d'équilibrage JST-XH). **Le BMS est intégré au PCB** : charge
+> Si le PCB S3 tout-en-un est réalisé, la batterie reste **2 × 18650**
+> (choix sécurité confirmé le 2026-10-13, de préférence à un LiPo
+> souple), chacune dans son support, reliées à la carte par **un seul
+> connecteur JST-VH 3 broches** (B−, point milieu, B+) + une sonde de
+> température CTN. **Le BMS est intégré au PCB** : charge
 > USB-C avec équilibrage (BQ25887), protection par cellule (S-8252),
 > fusible, interrupteur, mesure tension/courant (INA219). Les lignes
 > marquées « remplacé par le PCB » ci-dessous ne sont alors plus à
@@ -110,11 +112,13 @@
 
 | Composant | Qté | Statut | Utilité | Notes |
 |---|---|---|---|---|
-| Pack LiPo 2S (7,4 V) avec prise d'équilibrage JST-XH | 1 | ❓ | Batterie du robot avec le PCB sur mesure | Capacité à choisir (1000-2200 mAh). Connecteur de puissance à identifier : un JST-PH 2,0 mm est trop faible pour les pics moteurs, voir `pcb/PCB_CONNEXIONS.md` §5.1 |
+| Support 18650 simple, contacts de qualité (ex. Keystone 1042) | 2 | 🛒 (PCB) | Un support par cellule : donne accès au point milieu sans souder de pack | Éviter les supports à ressorts fins (chauffent à 3 A) |
+| Fiche JST-VH 3 broches femelle + contacts à sertir | 1 | 🛒 (PCB) | Relie les supports à la carte (B−, MID, B+) | Fil silicone 18 AWG pour B−/B+, 22 AWG pour MID |
+| Thermistance CTN 10 kΩ « à perle » avec fils + fiche JST-PH 2 broches | 1 | 🛒 (PCB) | Surveille la température des cellules pendant la charge | Coefficient B selon la datasheet BQ25887 |
 | Alimentation de laboratoire 30V/10A | 1 | ✅ | Alimente les moteurs pendant les tests (réglée à 6-9V) | Outil de banc, ne sera pas embarqué sur le robot final |
-| Cellule 18650 haut-drain (Samsung 25R/30Q ou Molicel P26A/P28A) | 2 | 🛒 (remplacé par le PCB : pack LiPo) | Pack batterie 2S1P (7.4V nominal) | Marque reconnue uniquement, acheté chez un vendeur fiable --- jamais de cellule "9900mAh" bon marché (capacité fantaisiste, mauvaise QC, risque incendie). ~9-13€/pièce |
+| Cellule 18650 de marque (Samsung 35E / LG MJ1 3500 mAh recommandées avec le PCB ; 25R/30Q/Molicel P28A conviennent aussi) | 2 | 🛒 | Pack batterie 2S1P (7.4V nominal) | Marque reconnue uniquement, acheté chez un vendeur fiable --- jamais de cellule "9900mAh" bon marché (capacité fantaisiste, mauvaise QC, risque incendie). ~9-13€/pièce |
 | Module BMS + charge USB-C 2S (protection + boost interne 5V→8.4V) | 1 | 🛒 (remplacé par le PCB : BMS intégré) | Protection (surcharge/décharge/surintensité/court-circuit) + recharge directe en USB-C | Ex. "2S 5A/8A 8.4V BMS USB-C", voir sources ci-dessous pour des références précises. ~5-8€ |
-| Support 2×18650 avec fils | 1 | 🛒 (remplacé par le PCB) | Interface mécanique cellules ↔ BMS, évite la soudure directe sur les bornes des cellules | ~2-3€ |
+| Support 2×18650 avec fils | 1 | 🛒 (remplacé par 2 supports simples avec le PCB) | Interface mécanique cellules ↔ BMS, évite la soudure directe sur les bornes des cellules | ~2-3€ |
 | Fusible réarmable (PTC) 6-8A | 1 | 🛒 (intégré au PCB) | Protection en ligne indépendante du BMS, dernier rempart si l'électronique de protection tombe en panne | En série sur le + du pack. ~1-2€ |
 | ~~Convertisseur buck 5V/3A dédié Pi~~ | ~~1~~ | ❌ **Abandonné (2026-09-15)** | ~~Rail 5V isolé/propre pour le Raspberry Pi~~ | Plus nécessaire : le Pi est déporté sur le réseau et n'est plus alimenté par la batterie du robot (voir note ci-dessus). Ne pas acheter |
 | Convertisseur buck 5V/3A servos + ESP32 | 1 | 🛒 (intégré au PCB) | Rail 5V partagé pour le reste de l'électronique | Séparé du rail Pi. ~3-5€ |

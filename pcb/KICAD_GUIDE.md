@@ -77,7 +77,7 @@ Un seul grand schéma devient vite illisible. Créer **une feuille par
 bloc** (outil « Feuille hiérarchique »), dans le même ordre que
 `PCB_CONNEXIONS.md` §5 :
 
-1. `alimentation` --- connecteurs pack (puissance + équilibrage), protection S-8252,
+1. `alimentation` --- connecteur batterie VH 3 broches + sonde CTN, protection S-8252,
    chargeur BQ25887, fusible, INA219, interrupteur, bucks, LDO caméra
 2. `mcu` --- ESP32-S3, USB-C, boutons, TCA9554
 3. `camera` --- connecteur FPC
@@ -169,7 +169,7 @@ Placer **avant** de router, dans cet ordre :
 1. **Ce qui est imposé par la mécanique** : connecteurs à l'endroit où
    arrivent les câbles (moteurs côté moteurs, HP gauche à gauche, HP
    droit à droite, FPC caméra côté tête, USB-C accessible coque fermée,
-   connecteurs du pack LiPo, interrupteur accessible), trous de fixation.
+   connecteur batterie côté supports 18650, interrupteur accessible), trous de fixation.
 2. **ESP32-S3 en bord de carte**, antenne dépassant du bord ou au-dessus
    d'une zone **sans cuivre sur les 4 couches** (zone d'exclusion
    dessinée dans l'empreinte).
@@ -283,9 +283,10 @@ batterie : on limite le courant, donc une erreur ne brûle rien.
 
 ⚠ Avec le BMS intégré, la carte refuse de démarrer sans point milieu
 (`PCB_CONNEXIONS.md` §5.1). Fabriquer une **« fausse batterie »** :
-l'alim de labo sur le connecteur de puissance, plus une prise JST-XH
-3 broches dont le fil du milieu sort d'un pont de deux résistances
-1 kΩ entre `+` et `−`. **Ne pas brancher l'USB** pendant ces essais
+une fiche JST-VH 3 broches avec l'alim de labo sur les broches 1 (`−`)
+et 3 (`+`), et sur la broche 2 le milieu d'un pont de deux résistances
+1 kΩ entre `+` et `−`. Pont de soudure `TS` en position « résistance
+fixe » (pas de sonde). **Ne pas brancher l'USB** pendant ces essais
 (le chargeur essaierait de « charger » l'alim de labo).
 
 1. **À vide, sans rien brancher** : à l'ohmmètre, vérifier qu'il n'y a
@@ -306,9 +307,11 @@ l'alim de labo sur le connecteur de puissance, plus une prise JST-XH
 6. **Moteurs en dernier**, roues en l'air, avec `pi/tools/motor_triage.py`.
    Vérifier qu'un appui sur l'E-stop coupe **réellement** les moteurs,
    même firmware planté.
-7. Seulement ensuite, passer sur la **vraie batterie** (les deux
-   prises).
-8. **Charge**, pack branché, interrupteur OFF, à côté de la carte :
+7. Seulement ensuite, passer sur les **vraies cellules** (et la sonde
+   CTN, pont `TS` remis en position « sonde »). Avant de les mettre dans
+   les supports, vérifier au multimètre que les deux sont à moins de
+   0,1 V l'une de l'autre.
+8. **Charge**, cellules en place, interrupteur OFF, à côté de la carte :
    brancher l'USB-C → LED orange « en charge ». Lire en I2C la tension
    des deux cellules et le courant (négatif sur l'INA219). Toucher le
    chargeur et le pack de temps en temps pendant la première charge

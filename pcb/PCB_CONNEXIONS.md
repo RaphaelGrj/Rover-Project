@@ -19,8 +19,8 @@ Sur le PCB, il ne reste à brancher **que des câbles** :
 
 | À brancher sur la carte | Connecteur |
 |---|---|
-| Pack LiPo 2S --- câble de puissance | JST 2 broches (type exact à confirmer, §5.1) |
-| Pack LiPo 2S --- prise d'équilibrage | JST-XH 3 broches |
+| Batterie : 2 cellules 18650 en série (B−, point milieu, B+) | **JST-VH 3 broches** (un seul connecteur, détrompé, ~7 A) |
+| Sonde de température des cellules (CTN 10 kΩ) | JST-PH 2 broches |
 | Moteur gauche, moteur droit (N20 + encodeur, 6 fils) | 2 × JST-PH 6 broches |
 | Haut-parleur gauche, haut-parleur droit | 2 × JST-PH 2 broches |
 | Nappe caméra (OV2640) | FPC 24 broches pas 0,5 mm |
@@ -59,8 +59,9 @@ TCA9554, alimentations 5 V et 3,3 V, régulateurs caméra 2,8 V et 1,2 V.
 | IMU | 🔧 **LSM6DS3TR-C** (I2C, **0x6B**) | Le MPU-6050 est en fin de vie (beaucoup de contrefaçons). Le LSM6DS3TR-C a une bibliothèque Adafruit (`Adafruit_LSM6DS`) avec la même interface `getEvent()` : seul `ImuSensor.cpp` change. Garder un MPU-6050 reste possible si on veut zéro changement de code. |
 | Environnement | **BME688** (I2C, 0x76) | Température + humidité + pression + **gaz** en une puce. Déjà détecté automatiquement par le firmware (`EnvironmentSensor.cpp`). |
 | Mesure batterie | **INA219** + shunt 0,05 Ω (I2C, 0x40) | Pas de GPIO ADC disponible. En plus de la tension, il donne le **courant** : on voit un moteur bloqué, ce qui aurait aidé pendant la panne moteur de septembre. |
+| Batterie | 🔧 **2 × Li-ion 18650 de marque** (Samsung 35E ou LG MJ1 3500 mAh ; Samsung 30Q ou Molicel P28A si on veut plus de marge en courant), chacune dans **son propre support** de qualité (ex. Keystone 1042) | Choix le plus sûr pour un robot qui roule et cogne : boîtier acier rigide, chimie et qualité connues, cellules amovibles, pas de pack à souder. Un LiPo souple se perce ou gonfle au premier choc. Deux supports séparés donnent naturellement accès au point milieu. ~25 Wh, soit plusieurs heures d'autonomie. Rester sur le 4,2 V/cellule classique. Le LiFePO4 serait encore plus sûr, mais les seuils du chargeur et de la protection ne sont pas prévus pour. |
 | Chargeur 2S | **BQ25887** (TI, VQFN-24 4×4 mm, I2C) | Charge un pack 2S **depuis le 5 V de l'USB** (montée de tension interne jusqu'à 8,4 V), jusqu'à 2 A, **équilibrage des cellules intégré**. Son ADC donne la tension **de chaque cellule** en I2C. Seul chargeur USB-5 V → 2S courant qui équilibre sans puce supplémentaire. |
-| Protection 2S | **S-8252** (ABLIC, SOT-23-6) + double N-MOSFET | Coupe la batterie en cas de surcharge, de décharge profonde (cellule < ~2,8 V), de surintensité ou de court-circuit, **cellule par cellule**. Un pack LiPo de modélisme n'a aucune protection intégrée : sans elle, un robot oublié allumé tue le pack (et un LiPo trop déchargé devient dangereux à recharger). Alternative : HY2120. |
+| Protection 2S | **S-8252** (ABLIC, SOT-23-6) + double N-MOSFET | Coupe la batterie en cas de surcharge, de décharge profonde (cellule < ~2,8 V), de surintensité ou de court-circuit, **cellule par cellule**. Les cellules 18650 « nues » n'ont aucune protection : sans elle, un robot oublié allumé les détruit (et une cellule trop déchargée devient dangereuse à recharger). Alternative : HY2120. |
 | Interrupteur | Petit interrupteur à glissière + P-MOSFET | L'interrupteur ne commande que la grille : les 3 A passent dans le MOSFET, pas dans l'interrupteur. Robot éteint = la batterie peut quand même se recharger. |
 | Expandeur | **TCA9554** (8 E/S I2C, 0x20) | Prend les signaux lents (XSHUT, mute ampli, reset écran…) pour libérer des GPIO |
 | 5 V | Buck synchrone 3 A (ex. TPS563201, ou équivalent 4,5-17 V / 3 A) | Servo + 2 amplis |
@@ -77,7 +78,7 @@ puis recopier **exactement** le schéma d'application de leur datasheet
 ## 3. Schéma bloc
 
 ```text
-  Pack LiPo 2S ── JST puissance (B+ / B−) + JST-XH équilibrage (B−, MID, B+)
+  2 × 18650 en série ── JST-VH 3 broches (B−, MID, B+)  + CTN collée aux cellules
         │
   B− ─[Protection S-8252 + 2 N-MOSFET]─ GND        (coupe le négatif du pack)
   B+ ─[Fusible PTC]─[Shunt 0,05 Ω INA219]─ VPACK
@@ -196,50 +197,78 @@ suffit pour un signal de défaut.
 
 ### 5.1 Alimentation et BMS 2S (batterie, charge USB-C, protection)
 
-**Principe** : le pack LiPo 2S se branche directement sur la carte, par
-son câble de puissance (JST 2 broches) **et** sa prise d'équilibrage
-(JST-XH 3 broches). La carte le protège, le recharge par l'USB-C en
-équilibrant les deux cellules, et mesure tension et courant.
+**Principe** : deux cellules Li-ion 18650, chacune dans son support,
+sont reliées en série par le câblage et arrivent sur la carte par **un
+seul connecteur 3 broches** : `B−`, point milieu, `B+`. La carte les
+protège, les recharge par l'USB-C en équilibrant les deux cellules, et
+mesure tension et courant.
 
-⚠ **Les deux prises du pack doivent être branchées.** Sans la prise
-d'équilibrage, la carte ne voit pas le point milieu du pack. Elle ne
-peut alors ni équilibrer ni protéger chaque cellule séparément. Le
-point milieu est donc tiré vers B− par 1 MΩ : prise d'équilibrage
-absente = la protection voit une cellule « vide » et **refuse de
-démarrer**. C'est voulu (sécurité par défaut), pas une panne.
+Le point milieu est indispensable : sans lui, la carte ne pourrait ni
+équilibrer ni protéger chaque cellule séparément. Il arrive dans le
+même connecteur que la puissance, il ne peut donc pas être oublié. Si
+son fil casse, une résistance de 1 MΩ le tire vers `B−` : la
+protection voit alors une cellule « vide » et **coupe**. Sécurité par
+défaut, voulue.
 
 #### Nets d'alimentation
 
 | Net | Ce que c'est |
 |---|---|
-| `B+` / `B−` | Bornes brutes du pack (câble de puissance) |
-| `MID` | Point milieu du pack (fil central de la prise d'équilibrage) |
+| `B+` / `B−` | Bornes brutes du pack |
+| `MID` | Point milieu (entre les deux cellules), broche centrale du connecteur |
 | `GND` | Masse de toute la carte = `B−` **après** les MOSFET de protection |
 | `VPACK` | `B+` après fusible et shunt : là où se rejoignent chargeur et robot |
 | `VBAT_SYS` | `VPACK` après l'interrupteur : alimente tout le robot |
 | `VIN_LOGIC` | Entrée du buck 3,3 V (OU de diodes entre `VBAT_SYS` et l'USB) |
 | `5V`, `3V3`, `CAM_2V8`, `CAM_1V2` | Rails régulés |
 
-#### Connecteurs batterie
+#### Batterie et connecteur
+
+**Câblage côté batterie** (hors PCB, dans le châssis) :
+
+```text
+  Support cellule 1 (bas)        Support cellule 2 (haut)
+   (−) ────────────── fil noir 18 AWG ─────────────── broche 1 : B−
+   (+) ──┬─────────── fil blanc 22 AWG ────────────── broche 2 : MID
+         └── (−)
+                         (+) ──── fil rouge 18 AWG ── broche 3 : B+
+```
 
 | Connecteur | Broche | Net | Remarque |
 |---|---|---|---|
-| Puissance (JST 2 broches) | `+` (fil rouge) | `B+` | Pistes larges (≥ 2 mm) |
-| | `−` (fil noir) | `B−` | **Jamais relié directement à `GND`**, voir protection |
-| Équilibrage (JST-XH 3 broches, pas 2,5 mm) | 1 (noir) | `B−` (non relié, la mesure se fait sur le câble de puissance) | ⚠ Vérifier l'ordre des fils sur le pack réel : noir = B−, rouge = B+, le fil du milieu = MID |
-| | 2 (milieu) | `MID` (+ **1 MΩ vers `B−`** : prise absente = protection qui coupe) | Porte le courant d'équilibrage (≤ 400 mA) |
-| | 3 (rouge) | `B+` (non relié, même raison) | Les fils fins d'équilibrage ne doivent jamais transporter le courant du robot |
+| **Batterie : JST-VH 3 broches** (pas 3,96 mm, version coudée ou droite à souder sur PCB) | 1 (noir) | `B−` | **Jamais relié directement à `GND`**, voir protection. Pistes ≥ 2 mm. |
+| | 2 (blanc) | `MID`, via un **PTC 0,75 A** (1206) + **1 MΩ vers `B−`** | Porte seulement le courant d'équilibrage (≤ 400 mA). Le PTC protège ce fil fin si quelque chose tourne mal côté carte. |
+| | 3 (rouge) | `B+` | Pistes ≥ 2 mm |
+| **Sonde de température : JST-PH 2 broches** | 1, 2 | CTN 10 kΩ → `TS` du chargeur | CTN « à perle » collée au ruban Kapton entre les deux cellules. ⚠ Prendre le coefficient B (3435 ou 3950) indiqué par la datasheet BQ25887 pour calculer le pont `TS`. |
 
-⚠ **Quel « JST 2 broches » ?** Deux cas fréquents sur les LiPo 2S :
-- **JST-RCY** (rouge, appelé « BEC ») : ~3 A, juste suffisant pour le
-  Rover (pic estimé ~2,8 A sans le Pi). Il n'existe pas de version
-  standard à souder sur PCB. Prévoir **deux pastilles à souder + deux
-  trous de serre-câble**, pour une queue de cochon de 5 cm de fil
-  silicone 18 AWG terminée par le connecteur femelle. C'est solide et
-  remplaçable.
-- **JST-PH 2,0 mm** (petit, blanc) : ~2 A seulement, **trop faible**
-  pour les pics moteurs + servo. Dans ce cas, changer le connecteur du
-  pack (RCY ou XT30) ou accepter de brider les moteurs dans le firmware.
+Pourquoi ce connecteur : le JST-VH supporte ~7 A par contact (pic du
+robot ~2,8 A), il est détrompé, se verrouille, et existe en version à
+souder sur PCB. Un JST-PH (2 A) serait trop faible, et deux
+connecteurs (puissance + équilibrage, comme sur un LiPo) laisseraient
+oublier le second.
+
+Côté mécanique :
+- **Supports séparés de qualité** (contacts à ressort épais, type
+  Keystone 1042). Les supports bas de gamme ont des ressorts fins qui
+  chauffent à 3 A et perdent le contact dans les vibrations.
+- **Maintenir chaque cellule** (collier ou capot imprimé) : un choc ne
+  doit pas pouvoir la faire sortir de son support.
+- Fils **courts**, torsadés, loin des arêtes vives et des pièces
+  mobiles. Gaine ou capot ignifuge autour des cellules (`BOM.md`).
+- Repérer la polarité **+/−** en gros sur la pièce imprimée autour de
+  chaque support.
+
+#### Choix des cellules
+
+| Cellule | Capacité | Courant max | Pour le Rover |
+|---|---|---|---|
+| **Samsung INR18650-35E** | 3500 mAh | 8 A | ✅ recommandé : meilleure autonomie, 8 A suffit largement (pic ~2,8 A) |
+| LG INR18650-MJ1 | 3500 mAh | 10 A | ✅ équivalent |
+| Samsung INR18650-30Q / Molicel P28A | 3000 / 2800 mAh | 15 / 35 A | ✅ plus de marge en courant, un peu moins d'autonomie |
+
+Autonomie : ~25 Wh, soit environ **3 à 5 h** d'usage mixte (à mesurer
+avec l'INA219). Charge à **1 A** (~0,3C, doux pour les cellules) :
+~4 h pour une charge complète. Le chargeur tire alors ~2 A sur l'USB-C.
 
 #### Protection 2S (S-8252 + double N-MOSFET, côté négatif)
 
@@ -278,12 +307,12 @@ au Rover :
 |---|---|
 | `VBUS` | USB-C `VBUS` (direct, pas de diode) + condensateurs de la datasheet |
 | `BAT` | `VPACK` (côté robot du shunt) |
-| `MID` | `MID` (prise d'équilibrage) |
+| `MID` | `MID` (via le PTC 0,75 A, voir connecteur batterie) |
 | `SDA` / `SCL` | Bus I2C capteurs (GPIO1/GPIO2) |
 | `STAT` | LED orange « en charge » + 2,2 kΩ vers `3V3` |
 | `INT` | Non relié (le firmware scrute le chargeur en I2C) |
 | `CD` (arrêt de charge) | `GND` via 0 Ω (charge autorisée ; le firmware peut aussi la couper par I2C) |
-| `TS` (thermistance) | Pont de résistances fixes (valeurs dans la datasheet) qui simule 25 °C. Un LiPo de modélisme n'a pas de thermistance. Prévoir en option un connecteur 2 broches pour une CTN 10 kΩ collée au pack. |
+| `TS` (thermistance) | **CTN 10 kΩ collée entre les deux cellules** (connecteur JST-PH 2), dans le pont de résistances de la datasheet. Le chargeur suspend la charge si les cellules sont trop chaudes ou trop froides. Un pont de soudure permet de mettre à la place une résistance fixe qui simule 25 °C, pour les essais sans sonde. |
 | `D+` / `D−` | Ponts 0 Ω **non montés** vers les lignes USB. Le firmware règle lui-même la limite de courant USB en I2C. |
 | `GND` + pad | `GND` (beaucoup de vias) |
 
@@ -333,9 +362,14 @@ Comportement selon ce qui est branché :
 soudure)** en sortie de chaque buck. On démarre la carte buck par buck
 sans risquer le reste (voir `KICAD_GUIDE.md` §9).
 
-🔥 **Sécurité LiPo** : ne jamais laisser charger sans surveillance, pas
-plus de 1C, pack dans un sac ignifuge (`BOM.md`). Un pack gonflé, ou
-une cellule sous ~3,0 V au repos, ne se recharge pas : il se recycle.
+🔥 **Sécurité Li-ion** : ne pas laisser charger sans surveillance les
+premières fois. Acheter les cellules chez un revendeur spécialisé
+reconnu : les fausses « 9900 mAh » sont la première cause d'incident
+(`BOM.md`). Ne jamais utiliser une cellule dont la gaine plastique est
+déchirée (le boîtier métallique est le pôle −), ni une cellule cabossée.
+Une cellule restée sous ~2,5 V se recycle, elle ne se recharge pas.
+Toujours remplacer les deux cellules ensemble (même modèle, même
+âge).
 
 ### 5.2 ESP32-S3-WROOM-1 --- éléments autour du module
 
@@ -657,6 +691,5 @@ ne pas être découverts à la mise en service :
 | 5 | Assemblage : tout par JLCPCB (PCBA) ou soudure maison ? | **PCBA obligatoire** pour BME688, LSM6DS3, MAX98357A, ICS-43434 (boîtiers LGA/QFN impossibles au fer). Seuls les connecteurs traversants à la main. |
 | 6 | 2 ou 4 couches ? | **4 couches** (signal / GND / alim / signal) : un plan de masse continu pardonne beaucoup d'erreurs de débutant, pour quelques euros de plus |
 | 7 | Modèle et longueur de la nappe caméra | OV2640, nappe 75 mm, à commander en même temps que le PCB |
-| 8 | Quel connecteur JST sur le câble de puissance du pack ? (rouge « BEC/RCY », ou petit PH 2,0 mm ?) | Voir §5.1 : un PH 2,0 mm est trop faible pour les pics moteurs |
-| 9 | Capacité du pack LiPo (mAh) | Fixe le courant de charge (≤ 1C) et l'autonomie. Exemple : 1500 mAh → charge à 1 A, ~1h30 |
-| 10 | Le pack a-t-il une thermistance (fil supplémentaire) ? | En général non : la broche TS du chargeur est alors polarisée par des résistances fixes |
+| 8 | ~~Type de batterie et connecteur~~ | **Tranché le 2026-10-13** (choix délégué par l'utilisateur, critère sécurité) : 2 × 18650 en supports séparés, JST-VH 3 broches + CTN (§5.1) |
+| 9 | Emplacement des 2 supports 18650 dans le châssis (~2 × 21 × 77 mm) | À placer en CAO : bas et centré (centre de gravité), loin des moteurs, accessibles pour changer les cellules |
