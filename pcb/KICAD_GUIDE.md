@@ -77,7 +77,8 @@ Un seul grand schéma devient vite illisible. Créer **une feuille par
 bloc** (outil « Feuille hiérarchique »), dans le même ordre que
 `PCB_CONNEXIONS.md` §5 :
 
-1. `alimentation` --- XT30, fusible, anti-inversion, INA219, bucks, LDO caméra
+1. `alimentation` --- connecteurs pack (puissance + équilibrage), protection S-8252,
+   chargeur BQ25887, fusible, INA219, interrupteur, bucks, LDO caméra
 2. `mcu` --- ESP32-S3, USB-C, boutons, TCA9554
 3. `camera` --- connecteur FPC
 4. `moteurs` --- DRV8833, connecteurs moteurs, E-stop
@@ -87,7 +88,7 @@ bloc** (outil « Feuille hiérarchique »), dans le même ordre que
 
 Entre les feuilles, relier par **labels globaux** (`SDA`, `SCL`,
 `I2S_BCLK`, `ESTOP_N`, `AMP_EN`...) et par les **symboles
-d'alimentation** (`+3V3`, `+5V`, `VBAT`, `GND`). Utiliser exactement
+d'alimentation** (`+3V3`, `+5V`, `VBAT_SYS`, `VPACK`, `GND`). Utiliser exactement
 les noms de net de `PCB_CONNEXIONS.md` : on pourra comparer ligne à
 ligne.
 
@@ -112,7 +113,7 @@ ligne.
 - Remplir le champ **Valeur** et la **référence LCSC** de chaque
   composant (via le plugin JLCPCB Tools). L'assemblage en dépend.
 - Mettre un **symbole `PWR_FLAG`** sur chaque rail qui sort d'un
-  connecteur ou d'un régulateur (`VBAT`, `+5V`, `+3V3`, `GND`), sinon
+  connecteur ou d'un régulateur (`VPACK`, `VBAT_SYS`, `+5V`, `+3V3`, `GND`), sinon
   le contrôle électrique signale des « entrées d'alimentation non
   alimentées ».
 - Broche volontairement inutilisée (ex. `Y0`/`Y1` caméra) : poser un
@@ -168,7 +169,7 @@ Placer **avant** de router, dans cet ordre :
 1. **Ce qui est imposé par la mécanique** : connecteurs à l'endroit où
    arrivent les câbles (moteurs côté moteurs, HP gauche à gauche, HP
    droit à droite, FPC caméra côté tête, USB-C accessible coque fermée,
-   XT30), trous de fixation.
+   connecteurs du pack LiPo, interrupteur accessible), trous de fixation.
 2. **ESP32-S3 en bord de carte**, antenne dépassant du bord ou au-dessus
    d'une zone **sans cuivre sur les 4 couches** (zone d'exclusion
    dessinée dans l'empreinte).
@@ -194,7 +195,7 @@ vérifier l'encombrement **avant** de commander.
 |---|---|
 | F.Cu (dessus) | Composants + signaux |
 | In1.Cu | **Plan de masse GND plein, sans coupure** |
-| In2.Cu | Plans d'alimentation (`3V3`, `5V`, `VBAT` en zones) |
+| In2.Cu | Plans d'alimentation (`3V3`, `5V`, `VBAT_SYS` en zones) |
 | B.Cu (dessous) | Signaux restants |
 
 Un plan GND intact juste sous les signaux fait la moitié du travail en
@@ -203,7 +204,7 @@ pistes.
 
 ### 6.4 Routage (ordre conseillé)
 
-1. **Puissance** (`VBAT`, sorties moteur, HP) : pistes larges. Repère :
+1. **Puissance** (`B+`/`B−`, `VPACK`, `VBAT_SYS`, sorties moteur, HP) : pistes larges. Repère :
    ~1 mm par ampère en couche externe (calculateur intégré : **Outils →
    Calculateur → Largeur de piste**). Batterie → DRV8833 : ≥ 1,5 mm,
    ou une zone de cuivre.
@@ -252,7 +253,8 @@ carte et date.
    par puce le repère broche 1.
 4. Commander **5 PCB dont 2 assemblés** : une carte de rechange si la
    première souffre pendant la mise en service.
-5. Souder soi-même ce qui est traversant (XT30, barrette servo), voire
+5. Souder soi-même ce qui est traversant (queue de cochon batterie,
+   barrette servo), voire
    les connecteurs JST si l'assembleur ne les a pas.
 
 ------------------------------------------------------------------------
@@ -269,6 +271,8 @@ carte et date.
 | Pull-up sur GPIO45/46 | Le S3 ne démarre plus (broches de strapping, `PCB_CONNEXIONS.md` §4) |
 | Pas de pastille sous le pad thermique DRV8833/MAX98357A | Le driver chauffe et se coupe en protection thermique |
 | Capteur de température collé au régulateur | Fente d'isolation + placement en bord de carte |
+| `B−` du pack relié directement à `GND` | Toute la protection batterie est court-circuitée : `B−` ne rejoint `GND` **qu'à travers** les MOSFET de protection (`PCB_CONNEXIONS.md` §5.1) |
+| Inductance du chargeur mal placée | Boucle `SW` → inductance → condensateurs la plus courte possible, copier le placement de la datasheet / carte d'évaluation BQ25887EVM |
 
 ------------------------------------------------------------------------
 
@@ -277,21 +281,38 @@ carte et date.
 Utiliser l'**alimentation de labo** (`BOM.md`) à la place de la
 batterie : on limite le courant, donc une erreur ne brûle rien.
 
+⚠ Avec le BMS intégré, la carte refuse de démarrer sans point milieu
+(`PCB_CONNEXIONS.md` §5.1). Fabriquer une **« fausse batterie »** :
+l'alim de labo sur le connecteur de puissance, plus une prise JST-XH
+3 broches dont le fil du milieu sort d'un pont de deux résistances
+1 kΩ entre `+` et `−`. **Ne pas brancher l'USB** pendant ces essais
+(le chargeur essaierait de « charger » l'alim de labo).
+
 1. **À vide, sans rien brancher** : à l'ohmmètre, vérifier qu'il n'y a
-   pas de court-circuit entre `VBAT`/`5V`/`3V3` et GND.
-2. Ponts 0 Ω des bucks **ouverts**. Alim labo à **7,4 V, limite
-   200 mA**. Mesurer la sortie de chaque buck à vide : 5,0 V et 3,3 V.
+   pas de court-circuit entre `VPACK`/`VBAT_SYS`/`5V`/`3V3` et GND, et entre `B+` et `B−`.
+2. Ponts 0 Ω des bucks **ouverts**, interrupteur sur ON. Alim labo à
+   **7,4 V, limite 200 mA**, via la fausse batterie. Vérifier d'abord
+   que `GND` ↔ `B−` ≈ 0 V (protection passante), puis mesurer la sortie
+   de chaque buck à vide : 5,0 V et 3,3 V. Interrupteur sur OFF : plus
+   rien en aval.
 3. Fermer le pont `3V3` → le témoin s'allume. Brancher l'USB-C : la
    carte doit apparaître (`/dev/ttyACM0`), puis flasher un firmware de
    test.
-4. `SYSTEM action=i2c_scan` → doit lister **0x20, 0x40, 0x6A, 0x76**
+4. `SYSTEM action=i2c_scan` → doit lister **0x20, 0x40, 0x6A (chargeur),
+   0x6B (IMU), 0x76**
    (puis 0x29/0x30 une fois les ToF branchés).
 5. Fermer le pont `5V`, monter la limite à 1 A, puis tester dans
    l'ordre : servo, son, écran, caméra.
 6. **Moteurs en dernier**, roues en l'air, avec `pi/tools/motor_triage.py`.
    Vérifier qu'un appui sur l'E-stop coupe **réellement** les moteurs,
    même firmware planté.
-7. Seulement ensuite, passer sur la batterie.
+7. Seulement ensuite, passer sur la **vraie batterie** (les deux
+   prises).
+8. **Charge**, pack branché, interrupteur OFF, à côté de la carte :
+   brancher l'USB-C → LED orange « en charge ». Lire en I2C la tension
+   des deux cellules et le courant (négatif sur l'INA219). Toucher le
+   chargeur et le pack de temps en temps pendant la première charge
+   complète : ils doivent rester tièdes.
 
 À chaque étape validée, la noter dans `PROGRESS.md`, puis mettre à jour
 `AIDE_CABLAGE.md` (règle `CLAUDE.md`).

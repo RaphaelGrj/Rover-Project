@@ -100,7 +100,14 @@
   module **N16R2** obligatoire (pas N16R8, GPIO35-37 nécessaires),
   expandeur TCA9554 pour les signaux lents (36/36 GPIO du module
   attribués), E-stop câblé sur nSLEEP du DRV8833 (coupure matérielle).
-  Questions ouvertes listées en §8 du document. Firmware non touché.
+  **Révision le même jour, à la demande de l'utilisateur : BMS 2S
+  intégré** --- pack LiPo 2S branché directement (JST puissance + JST-XH
+  équilibrage), charge USB-C avec équilibrage (BQ25887, I2C 0x6A → IMU
+  déplacée en 0x6B), protection par cellule (S-8252), interrupteur sur
+  la carte ; XT30 et MOSFET anti-inversion retirés. Connecteurs N20 :
+  JST-PH 6 broches dans l'ordre de `esp32/WIRING.md`, l'utilisateur
+  adapte le câble si besoin. Questions ouvertes listées en §8 du
+  document. Firmware non touché.
 
 - **✅ ROVER SE DÉPLACE, BRANCHE FUSIONNÉE DANS `main` (2026-09-21,
   session de test réel)** --- voir le bandeau en tête de fichier pour le

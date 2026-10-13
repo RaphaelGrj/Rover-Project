@@ -19,22 +19,24 @@ Sur le PCB, il ne reste à brancher **que des câbles** :
 
 | À brancher sur la carte | Connecteur |
 |---|---|
-| Batterie 2S | XT30 |
-| Moteur gauche, moteur droit (N20 + encodeur, 6 fils) | 2 × JST 6 broches |
+| Pack LiPo 2S --- câble de puissance | JST 2 broches (type exact à confirmer, §5.1) |
+| Pack LiPo 2S --- prise d'équilibrage | JST-XH 3 broches |
+| Moteur gauche, moteur droit (N20 + encodeur, 6 fils) | 2 × JST-PH 6 broches |
 | Haut-parleur gauche, haut-parleur droit | 2 × JST-PH 2 broches |
 | Nappe caméra (OV2640) | FPC 24 broches pas 0,5 mm |
 | Écran ST7789 (dans la tête) | JST-PH 8 broches |
 | Servo de tête | barrette 3 broches 2,54 mm |
 | Capteurs de distance VL53L0X × 2 (façade) | 2 × JST-PH 6 broches |
 | Bouton d'arrêt d'urgence | JST-PH 2 broches |
-| USB-C (flash, console, alimentation de test) | USB-C 16 broches |
+| USB-C (flash, console **et recharge de la batterie**) | USB-C 16 broches |
 | Extension I2C future (option) | JST-SH 4 broches (format Qwiic/STEMMA QT) |
 
 **Intégrés sur la carte** (plus de modules sur fils) : ESP32-S3, driver
 moteur DRV8833, 2 amplis MAX98357A (stéréo), micro I2S, IMU,
-capteur température/humidité/pression/gaz BME688, mesure batterie
-INA219, expandeur d'E/S TCA9554, alimentations 5 V et 3,3 V,
-régulateurs caméra 2,8 V et 1,2 V.
+capteur température/humidité/pression/gaz BME688, **BMS 2S complet**
+(chargeur USB-C avec équilibrage BQ25887 + protection S-8252),
+mesure batterie INA219, interrupteur marche/arrêt, expandeur d'E/S
+TCA9554, alimentations 5 V et 3,3 V, régulateurs caméra 2,8 V et 1,2 V.
 
 **Ce qui disparaît** :
 - l'ESP32-CAM (le S3 pilote directement la caméra) ;
@@ -54,9 +56,12 @@ régulateurs caméra 2,8 V et 1,2 V.
 | Driver moteur | **DRV8833** (HTSSOP-16 avec pad thermique) | Celui du robot actuel : même firmware (PWM direct sur IN1-4) |
 | Ampli | **2 × MAX98357A** (un par canal) | Celui déjà prévu ; deux puces = stéréo, un haut-parleur par côté |
 | Micro | **ICS-43434** (MEMS I2S, port en dessous) | Successeur direct de l'INMP441 (même protocole I2S, l'INMP441 n'est plus fabriqué) |
-| IMU | 🔧 **LSM6DS3TR-C** (I2C, 0x6A) | Le MPU-6050 est en fin de vie (beaucoup de contrefaçons). Le LSM6DS3TR-C a une bibliothèque Adafruit (`Adafruit_LSM6DS`) avec la même interface `getEvent()` : seul `ImuSensor.cpp` change. Garder un MPU-6050 reste possible si on veut zéro changement de code. |
+| IMU | 🔧 **LSM6DS3TR-C** (I2C, **0x6B**) | Le MPU-6050 est en fin de vie (beaucoup de contrefaçons). Le LSM6DS3TR-C a une bibliothèque Adafruit (`Adafruit_LSM6DS`) avec la même interface `getEvent()` : seul `ImuSensor.cpp` change. Garder un MPU-6050 reste possible si on veut zéro changement de code. |
 | Environnement | **BME688** (I2C, 0x76) | Température + humidité + pression + **gaz** en une puce. Déjà détecté automatiquement par le firmware (`EnvironmentSensor.cpp`). |
 | Mesure batterie | **INA219** + shunt 0,05 Ω (I2C, 0x40) | Pas de GPIO ADC disponible. En plus de la tension, il donne le **courant** : on voit un moteur bloqué, ce qui aurait aidé pendant la panne moteur de septembre. |
+| Chargeur 2S | **BQ25887** (TI, VQFN-24 4×4 mm, I2C) | Charge un pack 2S **depuis le 5 V de l'USB** (montée de tension interne jusqu'à 8,4 V), jusqu'à 2 A, **équilibrage des cellules intégré**. Son ADC donne la tension **de chaque cellule** en I2C. Seul chargeur USB-5 V → 2S courant qui équilibre sans puce supplémentaire. |
+| Protection 2S | **S-8252** (ABLIC, SOT-23-6) + double N-MOSFET | Coupe la batterie en cas de surcharge, de décharge profonde (cellule < ~2,8 V), de surintensité ou de court-circuit, **cellule par cellule**. Un pack LiPo de modélisme n'a aucune protection intégrée : sans elle, un robot oublié allumé tue le pack (et un LiPo trop déchargé devient dangereux à recharger). Alternative : HY2120. |
+| Interrupteur | Petit interrupteur à glissière + P-MOSFET | L'interrupteur ne commande que la grille : les 3 A passent dans le MOSFET, pas dans l'interrupteur. Robot éteint = la batterie peut quand même se recharger. |
 | Expandeur | **TCA9554** (8 E/S I2C, 0x20) | Prend les signaux lents (XSHUT, mute ampli, reset écran…) pour libérer des GPIO |
 | 5 V | Buck synchrone 3 A (ex. TPS563201, ou équivalent 4,5-17 V / 3 A) | Servo + 2 amplis |
 | 3,3 V | Buck synchrone 2-3 A (même puce que le 5 V, autres résistances de retour) | ESP32-S3 (pics WiFi ~500 mA) + caméra + capteurs ; un régulateur linéaire 5→3,3 V chaufferait trop |
@@ -72,16 +77,21 @@ puis recopier **exactement** le schéma d'application de leur datasheet
 ## 3. Schéma bloc
 
 ```text
-  Batterie 2S (6,0-8,4 V)
-        │ XT30
-        ▼
-  [Fusible PTC 5 A] → [P-MOSFET anti-inversion] → [Shunt 0,05 Ω (INA219)] → VBAT
-                                                                              │
-     ┌──────────────────────┬─────────────────────────┬─────────────────────┤
-     ▼                      ▼                         ▼                     │
-  DRV8833 VM          Buck 5 V / 3 A          Diode ─┐                      │
+  Pack LiPo 2S ── JST puissance (B+ / B−) + JST-XH équilibrage (B−, MID, B+)
+        │
+  B− ─[Protection S-8252 + 2 N-MOSFET]─ GND        (coupe le négatif du pack)
+  B+ ─[Fusible PTC]─[Shunt 0,05 Ω INA219]─ VPACK
+                                            │
+              ┌─────────────────────────────┤
+              ▼                             ▼
+  USB-C VBUS → BQ25887 (charge + équilibrage via MID)   [Interrupteur → P-MOSFET]
+                                                            │
+                                                            ▼ VBAT_SYS
+     ┌──────────────────────┬─────────────────────────┬─────┘
+     ▼                      ▼                         ▼
+  DRV8833 VM          Buck 5 V / 3 A          Diode ─┐
   (moteurs)           → servo, 2 amplis              ├→ Buck 3,3 V → ESP32-S3, capteurs,
-                                    USB-C VBUS → Diode┘    │          expandeur, micro
+                                    USB-C VBUS → Diode┘    │          expandeur, micro, chargeur (I2C)
                                                            ├→ LDO 2,8 V → caméra AVDD
                                                            └→ LDO 1,2 V → caméra DVDD
 
@@ -91,13 +101,15 @@ puis recopier **exactement** le schéma d'application de leur datasheet
                      DOUT ────┼─ MAX98357A D ── JST HP droit
                      DIN  ────┴─ ICS-43434 (micro)
            ── SPI (SCLK, MOSI, DC) ──────── JST écran
-           ── I2C capteurs ── LSM6DS3, BME688, INA219, TCA9554, JST ToF ×2, Qwiic
+           ── I2C capteurs ── LSM6DS3, BME688, INA219, BQ25887, TCA9554, JST ToF ×2, Qwiic
            ── PWM servo ─────────────────── servo tête
            ── USB natif (D+/D−) ──────────── USB-C
 ```
 
-L'USB-C passe par une diode vers le buck 3,3 V : on peut **flasher la
-carte sans batterie**. Dans ce cas le 5 V n'existe pas : servo et son
+L'USB-C alimente **deux** choses : le chargeur (recharge du pack, même
+interrupteur sur arrêt) et, par une diode, le buck 3,3 V. On peut donc
+**flasher la carte sans batterie**, et l'ESP32 reste allumé pendant une
+charge, ce qui lui permet de surveiller la charge. Dans ce cas le 5 V n'existe pas : servo et son
 restent éteints, ce qui est voulu. Le 5 V est fabriqué uniquement depuis
 VBAT, ainsi l'USB ne peut jamais remonter dans la batterie ni dans le
 buck 5 V.
@@ -182,30 +194,148 @@ suffit pour un signal de défaut.
 
 ## 5. Connexions détaillées par bloc
 
-### 5.1 Alimentation
+### 5.1 Alimentation et BMS 2S (batterie, charge USB-C, protection)
+
+**Principe** : le pack LiPo 2S se branche directement sur la carte, par
+son câble de puissance (JST 2 broches) **et** sa prise d'équilibrage
+(JST-XH 3 broches). La carte le protège, le recharge par l'USB-C en
+équilibrant les deux cellules, et mesure tension et courant.
+
+⚠ **Les deux prises du pack doivent être branchées.** Sans la prise
+d'équilibrage, la carte ne voit pas le point milieu du pack. Elle ne
+peut alors ni équilibrer ni protéger chaque cellule séparément. Le
+point milieu est donc tiré vers B− par 1 MΩ : prise d'équilibrage
+absente = la protection voit une cellule « vide » et **refuse de
+démarrer**. C'est voulu (sécurité par défaut), pas une panne.
+
+#### Nets d'alimentation
+
+| Net | Ce que c'est |
+|---|---|
+| `B+` / `B−` | Bornes brutes du pack (câble de puissance) |
+| `MID` | Point milieu du pack (fil central de la prise d'équilibrage) |
+| `GND` | Masse de toute la carte = `B−` **après** les MOSFET de protection |
+| `VPACK` | `B+` après fusible et shunt : là où se rejoignent chargeur et robot |
+| `VBAT_SYS` | `VPACK` après l'interrupteur : alimente tout le robot |
+| `VIN_LOGIC` | Entrée du buck 3,3 V (OU de diodes entre `VBAT_SYS` et l'USB) |
+| `5V`, `3V3`, `CAM_2V8`, `CAM_1V2` | Rails régulés |
+
+#### Connecteurs batterie
+
+| Connecteur | Broche | Net | Remarque |
+|---|---|---|---|
+| Puissance (JST 2 broches) | `+` (fil rouge) | `B+` | Pistes larges (≥ 2 mm) |
+| | `−` (fil noir) | `B−` | **Jamais relié directement à `GND`**, voir protection |
+| Équilibrage (JST-XH 3 broches, pas 2,5 mm) | 1 (noir) | `B−` (non relié, la mesure se fait sur le câble de puissance) | ⚠ Vérifier l'ordre des fils sur le pack réel : noir = B−, rouge = B+, le fil du milieu = MID |
+| | 2 (milieu) | `MID` (+ **1 MΩ vers `B−`** : prise absente = protection qui coupe) | Porte le courant d'équilibrage (≤ 400 mA) |
+| | 3 (rouge) | `B+` (non relié, même raison) | Les fils fins d'équilibrage ne doivent jamais transporter le courant du robot |
+
+⚠ **Quel « JST 2 broches » ?** Deux cas fréquents sur les LiPo 2S :
+- **JST-RCY** (rouge, appelé « BEC ») : ~3 A, juste suffisant pour le
+  Rover (pic estimé ~2,8 A sans le Pi). Il n'existe pas de version
+  standard à souder sur PCB. Prévoir **deux pastilles à souder + deux
+  trous de serre-câble**, pour une queue de cochon de 5 cm de fil
+  silicone 18 AWG terminée par le connecteur femelle. C'est solide et
+  remplaçable.
+- **JST-PH 2,0 mm** (petit, blanc) : ~2 A seulement, **trop faible**
+  pour les pics moteurs + servo. Dans ce cas, changer le connecteur du
+  pack (RCY ou XT30) ou accepter de brider les moteurs dans le firmware.
+
+#### Protection 2S (S-8252 + double N-MOSFET, côté négatif)
+
+Recopier le schéma d'application de la datasheet ABLIC S-8252. Le
+principe :
+
+| Broche S-8252 | Connexion |
+|---|---|
+| `VDD` | `B+` via ~470 Ω, + 100 nF vers `B−` (filtre RC de la datasheet) |
+| `VC` | `MID` via ~470 Ω, + 100 nF vers `B−` |
+| `VSS` | `B−` |
+| `DO` | Grille du MOSFET « décharge » (source sur `B−`) |
+| `CO` | Grille du MOSFET « charge » (source sur `GND`) |
+| `VM` | `GND` via ~2 kΩ (détection surintensité / chargeur) |
+
+Les deux MOSFET sont en série, **drains reliés** : `B−` → MOSFET
+décharge → MOSFET charge → `GND`. Choisir un double N-MOSFET ≥ 8 A et
+R<sub>DS(on)</sub> ≤ 15 mΩ (logique 2,5 V). Le seuil de surintensité vaut
+« tension de détection du S-8252 / (2 × R<sub>DS(on)</sub>) ». Le régler
+vers **6-8 A** : au-dessus des pics normaux, en dessous d'un
+court-circuit.
+
+⚠ Le S-8252 existe en dizaines de suffixes (seuils différents).
+Prendre **surcharge ≈ 4,25-4,30 V** (au-dessus des 4,20 V du chargeur)
+et **décharge profonde ≈ 2,8-3,0 V**. Vérifier les seuils du suffixe
+exact dans la datasheet avant de commander. Alternative équivalente :
+HY2120 (même principe, mêmes réserves sur les suffixes).
+
+#### Chargeur BQ25887 (USB-C 5 V → charge 2S, équilibrage intégré)
+
+Recopier le schéma d'application de la datasheet TI (inductance,
+condensateurs `VBUS`/`PMID`/`BAT`, `BTST`, `REGN`). Connexions propres
+au Rover :
+
+| Broche BQ25887 | Connexion |
+|---|---|
+| `VBUS` | USB-C `VBUS` (direct, pas de diode) + condensateurs de la datasheet |
+| `BAT` | `VPACK` (côté robot du shunt) |
+| `MID` | `MID` (prise d'équilibrage) |
+| `SDA` / `SCL` | Bus I2C capteurs (GPIO1/GPIO2) |
+| `STAT` | LED orange « en charge » + 2,2 kΩ vers `3V3` |
+| `INT` | Non relié (le firmware scrute le chargeur en I2C) |
+| `CD` (arrêt de charge) | `GND` via 0 Ω (charge autorisée ; le firmware peut aussi la couper par I2C) |
+| `TS` (thermistance) | Pont de résistances fixes (valeurs dans la datasheet) qui simule 25 °C. Un LiPo de modélisme n'a pas de thermistance. Prévoir en option un connecteur 2 broches pour une CTN 10 kΩ collée au pack. |
+| `D+` / `D−` | Ponts 0 Ω **non montés** vers les lignes USB. Le firmware règle lui-même la limite de courant USB en I2C. |
+| `GND` + pad | `GND` (beaucoup de vias) |
+
+⚠ Les noms de broches ci-dessus viennent du schéma simplifié de TI.
+Les vérifier sur le brochage complet de la datasheet (VQFN-24).
+
+Points de fonctionnement :
+- Le BQ25887 **monte** le 5 V USB jusqu'à 8,4 V : pour 1 A de charge,
+  il tire ~2 A sur l'USB. Régler le courant de charge à **≤ 1C** du pack
+  (1 A pour un 1000-1500 mAh) et la limite d'entrée à 1,5-2 A.
+  Branché sur un port USB faible, sa régulation de tension d'entrée
+  (VINDPM) réduit le courant d'elle-même.
+- **Pas de « power path »** : le robot et le chargeur sont tous les
+  deux sur le pack. Rouler pendant la charge fonctionne, mais fausse la
+  détection de fin de charge. Recharger robot à l'arrêt (interrupteur
+  sur OFF).
+- Le chargeur se branche **avant** l'interrupteur : on recharge robot
+  éteint.
+
+#### Fusible, mesure, interrupteur, régulateurs
 
 | De | Vers | Remarque |
 |---|---|---|
-| XT30 `+` | Fusible PTC (maintien ~5 A, 1812 ou 2920) | Dernier rempart indépendant du BMS (`BOM.md`) |
-| PTC | Drain du P-MOSFET anti-inversion | P-MOSFET ≥ 6 A, faible R<sub>DS(on)</sub>, V<sub>GS(th)</sub> bas. Grille → GND via 10 kΩ, source côté charge. Batterie branchée à l'envers = MOSFET bloqué, rien ne brûle. |
-| P-MOSFET | Shunt 0,05 Ω (2512, 1 W) → `VBAT` | INA219 `IN+` côté amont, `IN−` côté `VBAT` |
-| XT30 `−` | GND | Plan de masse unique |
-| `VBAT` | DRV8833 `VM` | + **470 µF / 16 V** électrolytique **et** 10 µF céramique au plus près du DRV8833 |
-| `VBAT` | Entrée buck 5 V | Condensateurs selon datasheet |
-| `VBAT` → diode Schottky (SS34) | Entrée buck 3,3 V (`VIN_LOGIC`) | |
+| `B+` | Fusible PTC (maintien ~4-5 A, 1812 ou 2920) | Dernier rempart indépendant de la protection électronique |
+| PTC | Shunt 0,05 Ω (2512, 1 W) → `VPACK` | INA219 `IN+` côté amont, `IN−` côté `VPACK`. Le shunt voit **tout** le courant du pack : positif en décharge, **négatif en charge** (l'INA219 mesure dans les deux sens). |
+| `VPACK` | **Interrupteur** : P-MOSFET (source sur `VPACK`, drain sur `VBAT_SYS`) | P-MOSFET ≥ 6 A, V<sub>GS</sub> max ±20 V, R<sub>DS(on)</sub> faible. Grille → `VPACK` par 100 kΩ (bloqué par défaut). Petit interrupteur à glissière entre la grille et `GND` (via 10 kΩ) : ON = grille à la masse = MOSFET passant. L'interrupteur ne voit aucun courant de puissance. |
+| `VBAT_SYS` | DRV8833 `VM` | + **470 µF / 16 V** électrolytique **et** 10 µF céramique au plus près du DRV8833 |
+| `VBAT_SYS` | Entrée buck 5 V | Condensateurs selon datasheet |
+| `VBAT_SYS` → diode Schottky (SS34) | `VIN_LOGIC` | |
 | USB-C `VBUS` → diode Schottky (SS34) | `VIN_LOGIC` | « OU » de diodes : la plus haute tension alimente |
+| `VIN_LOGIC` | Buck 3,3 V → `3V3` | ESP32-S3, capteurs, TCA9554, micro, chargeur (I2C), LDO caméra, pull-ups |
 | Sortie buck 5 V | Rail `5V` | Servo, 2 × MAX98357A. + 470 µF près du connecteur servo |
-| Sortie buck 3,3 V | Rail `3V3` | ESP32-S3, capteurs, TCA9554, micro, LDO caméra, pull-ups |
 | `3V3` | LDO 2,8 V → `CAM_2V8` | AVDD caméra |
 | `3V3` | LDO 1,2 V → `CAM_1V2` | DVDD caméra |
 | `3V3` | LED verte + 1 kΩ → GND | Témoin « carte alimentée » |
 
-L'**interrupteur général** reste sur le câble batterie, en amont du
-XT30 : faire passer 3 A dans un petit connecteur JST serait limite.
+Comportement selon ce qui est branché :
+
+| Situation | Ce qui marche |
+|---|---|
+| Pack branché, interrupteur ON | Tout |
+| Pack branché, interrupteur OFF | Rien (consommation ≈ protection + INA219 + chargeur en veille, quelques dizaines de µA ⚠ à vérifier) |
+| USB seul, sans pack | ESP32 + capteurs (flash, console). Pas de moteurs, servo ni son (pas de 5 V). |
+| USB + pack, interrupteur OFF | **Recharge** + ESP32 allumé (il peut afficher l'état de charge) |
 
 🔧 Pour le premier prototype, prévoir un **pont 0 Ω (ou un cavalier de
 soudure)** en sortie de chaque buck. On démarre la carte buck par buck
 sans risquer le reste (voir `KICAD_GUIDE.md` §9).
+
+🔥 **Sécurité LiPo** : ne jamais laisser charger sans surveillance, pas
+plus de 1C, pack dans un sac ignifuge (`BOM.md`). Un pack gonflé, ou
+une cellule sous ~3,0 V au repos, ne se recharge pas : il se recycle.
 
 ### 5.2 ESP32-S3-WROOM-1 --- éléments autour du module
 
@@ -235,7 +365,7 @@ zone d'antenne, sur toutes les couches. Ne pas l'enfermer dans du métal.
 
 | Broche DRV8833 | Connexion |
 |---|---|
-| `VM` | `VBAT` (+ 470 µF + 10 µF, §5.1) |
+| `VM` | `VBAT_SYS` (+ 470 µF + 10 µF, §5.1) |
 | `VINT` | 2,2 µF vers GND (régulateur interne, rien d'autre dessus) |
 | `VCP` | 10 nF (16 V) vers `VM` (pompe de charge, ⚠ valeur à confirmer dans la datasheet) |
 | `AIN1` / `AIN2` | GPIO47 / GPIO48 (moteur gauche) |
@@ -258,24 +388,24 @@ actifs (comportement actuel).
 actuel. Un bouton **NC** serait plus sûr, car un fil arraché arrêterait
 le robot. Mais il inverse la logique : à décider avant de router.
 
-**Connecteur moteur** (×2, JST 6 broches) :
+**Connecteur moteur** (×2, **JST-PH 2,0 mm, 6 broches**). Ordre des
+broches = ordre du tableau « Câblage moteur → encodeur » de
+`esp32/WIRING.md` (marquages relevés sur le PCB encodeur le 2026-09-02).
+L'utilisateur adaptera le câble si le connecteur réel diffère :
 
-| Signal | Moteur gauche | Moteur droit |
-|---|---|---|
-| `M1` (fil blanc) | AOUT1 | BOUT1 |
-| `M2` (fil rouge) | AOUT2 | BOUT2 |
-| `VCC` encodeur (fil noir) | **3V3** (jamais VBAT) | 3V3 |
-| `GND` encodeur (fil bleu) | GND | GND |
-| `C1` (fil vert) | GPIO14 | GPIO35 |
-| `C2` (fil jaune) | GPIO21 | GPIO36 |
+| Broche | Fil | Marquage encodeur | Moteur gauche | Moteur droit |
+|---|---|---|---|---|
+| 1 | Blanc | `M1` | AOUT1 | BOUT1 |
+| 2 | Rouge | `M2` | AOUT2 | BOUT2 |
+| 3 | Noir | `VCC` (encodeur) | **3V3** (jamais VBAT) | 3V3 |
+| 4 | Bleu | `GND` | GND | GND |
+| 5 | Vert | `C1` (canal A) | GPIO14 | GPIO35 |
+| 6 | Jaune | `C2` (canal B) | GPIO21 | GPIO36 |
 
-⚠ **L'ordre des 6 broches doit recopier exactement celui du connecteur
-livré sur le moteur** (souvent JST-PH 2,0 mm ou ZH 1,5 mm selon le
-vendeur). Couleurs et marquages ci-dessus : voir `esp32/WIRING.md`
-§« Câblage moteur → encodeur ». Mesurer le pas au pied à coulisse et
-noter l'ordre sur la sérigraphie du PCB encodeur **avant** de dessiner
-l'empreinte. Une inversion VCC/M1 a déjà coûté une session
-(2026-09-02).
+⚠ Les broches 1-2 (moteur, jusqu'à 8,4 V pulsé) sont voisines de la
+broche 3 (3V3 encodeur). Une inversion VCC/M1 a déjà coûté une session
+(2026-09-02) : sérigraphier les noms des 6 broches à côté du connecteur.
+Pistes M1/M2 ≥ 0,8 mm.
 
 Pull-ups encodeur : 10 kΩ vers 3V3 sur C1/C2 (question laissée ouverte
 dans `WIRING.md`). Ajouter une empreinte 100 pF vers GND sur chaque
@@ -334,9 +464,10 @@ DRV8833, des bucks et des haut-parleurs (bruit et larsen).
 
 | Puce | Adresse | Broches particulières |
 |---|---|---|
-| LSM6DS3TR-C (IMU) | **0x6A** | `SDO/SA0` → GND, `CS` → 3V3 (force le mode I2C), `INT1/INT2` non reliés, 100 nF + 10 µF sur VDD/VDDIO |
+| LSM6DS3TR-C (IMU) | **0x6B** | `SDO/SA0` → **3V3** (0x6A est pris par le chargeur BQ25887), `CS` → 3V3 (force le mode I2C), `INT1/INT2` non reliés, 100 nF + 10 µF sur VDD/VDDIO |
 | BME688 | **0x76** | `SDO` → GND (même adresse que le BME280 actuel, `sensors_config.h` inchangé), `CSB` → 3V3, 100 nF |
 | INA219 | **0x40** | `A0`, `A1` → GND, `IN+`/`IN−` aux bornes du shunt (pistes de mesure séparées, « Kelvin »), 100 nF |
+| BQ25887 (chargeur) | **0x6A** ⚠ | Adresse de la famille BQ2588x, à confirmer dans la datasheet (§ « Slave Address »). Voir §5.1. |
 | TCA9554 | **0x20** | `A0-A2` → GND, `INT` non relié, 100 nF |
 | VL53L0X gauche (connecteur) | 0x29 → **0x30** au démarrage | XSHUT → 3V3 (logique actuelle) |
 | VL53L0X droit (connecteur) | **0x29** | XSHUT → TCA9554 P0 |
@@ -454,7 +585,7 @@ sérigraphie**, car les inverser inverse `distance_left`/`distance_right`.
 | Servo (barrette 3 × 2,54 mm) | 1 = GND (marron), 2 = `5V` (rouge), 3 = signal GPIO37 (orange) --- ordre standard des servos, détrompé en sérigraphie |
 | E-stop (JST-PH 2) | 1 = `ESTOP_N`, 2 = GND |
 | Qwiic / STEMMA QT (JST-SH 4, option) | 1 = GND, 2 = 3V3, 3 = SDA (GPIO1), 4 = SCL (GPIO2) |
-| Points de test (pastilles) | `VBAT`, `5V`, `3V3`, `CAM_2V8`, `CAM_1V2`, GND (×2), SDA, SCL, `ESTOP_N`, TCA9554 P7 |
+| Points de test (pastilles) | `B−`, `MID`, `VPACK`, `VBAT_SYS`, `VBUS`, `5V`, `3V3`, `CAM_2V8`, `CAM_1V2`, GND (×2), SDA, SCL, `ESTOP_N`, TCA9554 P7 |
 
 ------------------------------------------------------------------------
 
@@ -462,7 +593,7 @@ sérigraphie**, car les inverser inverse `distance_left`/`distance_right`.
 
 | Bus | Broches | Participants |
 |---|---|---|
-| I2C capteurs (I2C0) | SDA=1, SCL=2 | LSM6DS3TR-C 0x6A, BME688 0x76, INA219 0x40, TCA9554 0x20, VL53L0X G 0x30 / D 0x29, Qwiic |
+| I2C capteurs (I2C0) | SDA=1, SCL=2 | LSM6DS3TR-C 0x6B, BQ25887 0x6A, BME688 0x76, INA219 0x40, TCA9554 0x20, VL53L0X G 0x30 / D 0x29, Qwiic |
 | SCCB caméra (I2C1) | SIOD=4, SIOC=5 | OV2640 0x30 |
 | I2S0 full-duplex | BCLK=38, WS=39, DOUT=40, DIN=41 | 2 × MAX98357A (G/D), ICS-43434 |
 | SPI écran | SCLK=42, MOSI=43, DC=44 | ST7789 |
@@ -494,11 +625,21 @@ ne pas être découverts à la mise en service :
    les autres capteurs (`I2CProbe.h`).
 5. **IMU** : passer `ImuSensor.cpp` sur `Adafruit_LSM6DS`, si le
    LSM6DS3TR-C est retenu.
-6. **Batterie** : `BatteryMonitor` lit l'INA219 au lieu d'un ADC.
-   Ajouter le courant à la télémétrie.
-7. **Audio stéréo** : l'I2S envoie déjà gauche + droite. Un son mono
+6. **Batterie** : `BatteryMonitor` lit l'INA219 au lieu d'un ADC
+   (tension du pack + courant, négatif pendant la charge). Ajouter le
+   courant à la télémétrie.
+7. **Pilote du chargeur BQ25887** : au démarrage, régler le courant de
+   charge (≤ 1C du pack), la limite de courant d'entrée USB et la
+   tension de fin de charge (4,20 V/cellule). Lire ensuite l'état de
+   charge et la **tension de chaque cellule**, pour couper proprement
+   le robot vers 3,3 V/cellule, bien avant que la protection matérielle
+   ne coupe tout. ⚠ Les chargeurs TI de cette famille ont un **chien de
+   garde I2C** qui remet les registres par défaut si l'hôte se tait
+   (~40 s) : le firmware doit le désactiver ou le relancer. À vérifier
+   dans la datasheet.
+8. **Audio stéréo** : l'I2S envoie déjà gauche + droite. Un son mono
    doit être copié sur les deux canaux.
-8. **ESP32-S3-WROOM-1-N16R2** : `board_build.arduino.memory_type =
+9. **ESP32-S3-WROOM-1-N16R2** : `board_build.arduino.memory_type =
    qio_qspi`, flash 16 Mo. ⚠ Une carte de dev S3 en **N16R8** (le cas
    le plus courant) ne peut **pas** servir de prototype à ce brochage :
    GPIO35-37 y sont pris par la PSRAM.
@@ -510,9 +651,12 @@ ne pas être découverts à la mise en service :
 | # | Question | Ma proposition |
 |---|---|---|
 | 1 | Dimensions et fixations du PCB | À extraire de la CAO du châssis (export DXF du contour + trous) |
-| 2 | Connecteur exact des moteurs N20 (PH 2,0 ou ZH 1,5 ?) et ordre des fils | À mesurer sur les moteurs réels |
+| 2 | ~~Connecteur des moteurs N20~~ | **Tranché le 2026-10-13** : JST-PH 6 broches dans l'ordre de `esp32/WIRING.md` (§5.3), câble adapté par l'utilisateur si besoin |
 | 3 | E-stop NO (comme aujourd'hui) ou NC (plus sûr) ? | NC si le bouton n'est pas encore acheté |
 | 4 | IMU : LSM6DS3TR-C (nouvelle lib) ou MPU-6050 (zéro code) ? | LSM6DS3TR-C |
 | 5 | Assemblage : tout par JLCPCB (PCBA) ou soudure maison ? | **PCBA obligatoire** pour BME688, LSM6DS3, MAX98357A, ICS-43434 (boîtiers LGA/QFN impossibles au fer). Seuls les connecteurs traversants à la main. |
 | 6 | 2 ou 4 couches ? | **4 couches** (signal / GND / alim / signal) : un plan de masse continu pardonne beaucoup d'erreurs de débutant, pour quelques euros de plus |
 | 7 | Modèle et longueur de la nappe caméra | OV2640, nappe 75 mm, à commander en même temps que le PCB |
+| 8 | Quel connecteur JST sur le câble de puissance du pack ? (rouge « BEC/RCY », ou petit PH 2,0 mm ?) | Voir §5.1 : un PH 2,0 mm est trop faible pour les pics moteurs |
+| 9 | Capacité du pack LiPo (mAh) | Fixe le courant de charge (≤ 1C) et l'autonomie. Exemple : 1500 mAh → charge à 1 A, ~1h30 |
+| 10 | Le pack a-t-il une thermistance (fil supplémentaire) ? | En général non : la broche TS du chargeur est alors polarisée par des résistances fixes |
