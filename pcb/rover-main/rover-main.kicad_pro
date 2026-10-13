@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "project": "rover-main",
+    "title": "Rover PCB draft",
+    "version": "0.1",
+    "date": "2026-10-13",
+    "status": "draft",
+    "notes": "Generated from PCB_CONNEXIONS.md and KICAD_GUIDE.md. Not fabrication-ready."
+  },
+  "schematic": {
+    "top_level": "rover-main.kicad_sch",
+    "hierarchical_sheets": [
+      "alimentation.kicad_sch",
+      "mcu.kicad_sch",
+      "camera.kicad_sch",
+      "moteurs.kicad_sch",
+      "audio.kicad_sch",
+      "capteurs.kicad_sch",
+      "ihm.kicad_sch"
+    ]
+  },
+  "stackup": {
+    "layers": [
+      "F.Cu",
+      "In1.Cu",
+      "In2.Cu",
+      "B.Cu"
+    ],
+    "notes": "Recommended 4-layer design with GND plane and power planes."
+  },
+  "design_rules": {
+    "power_trace": "Use wide tracks for B+, VPACK, VBAT_SYS, motor outputs, and audio outputs.",
+    "usb_diff": "Route USB D+/D- as a short differential pair with 90Ω target when final geometry is known.",
+    "antenna": "Keepout around ESP32-S3 antenna; avoid copper under antenna on all layers."
+  }
+}
