@@ -1,6 +1,7 @@
 name: Rover CI
 
-# Compiles both PlatformIO targets (esp32_wroom and esp32_s3) on every
+# Compiles every PlatformIO target (esp32_wroom, esp32_s3 and the custom
+# PCB's rover_pcb_v1) on every
 # push/PR touching the firmware, so a target-specific compile error
 # (eg. the std::max/random() long-vs-int mismatch that only broke
 # esp32_s3, found manually during Phase 4 -- see PROGRESS.md
@@ -37,7 +38,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [esp32_wroom, esp32_s3]
+        # rover_pcb_v1: the custom PCB (pcb/PCB_CONNEXIONS.md) -- an S3
+        # with its own pinout, camera and power chips, so it can break in
+        # ways neither devkit build would catch.
+        environment: [esp32_wroom, esp32_s3, rover_pcb_v1]
     steps:
       - uses: actions/checkout@v4
 
@@ -97,7 +101,7 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
-      - name: Run native unit tests (RoverProtocol, WheelPID, Emotion)
+      - name: Run native unit tests (RoverProtocol, WheelPID, Emotion, PowerMath)
         working-directory: esp32
         run: pio test -e native
 

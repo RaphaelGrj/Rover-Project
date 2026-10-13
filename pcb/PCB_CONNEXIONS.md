@@ -312,8 +312,9 @@ au Rover :
 | `STAT` | LED orange « en charge » + 2,2 kΩ vers `3V3` |
 | `INT` | Non relié (le firmware scrute le chargeur en I2C) |
 | `CD` (arrêt de charge) | `GND` via 0 Ω (charge autorisée ; le firmware peut aussi la couper par I2C) |
+| `ILIM` | Résistance vers `GND` qui fixe un **plafond matériel** du courant d'entrée USB, actif même firmware planté (fonction activée par défaut dans la puce, bit `EN_ILIM`). Viser **~2 A**, valeur selon la formule de la datasheet (§ « ILIM »). Le firmware règle en plus la limite logicielle à 2 A (`ROVER_USB_INPUT_LIMIT_MA`) : c'est la plus basse des deux qui s'applique. |
 | `TS` (thermistance) | **CTN 10 kΩ collée entre les deux cellules** (connecteur JST-PH 2), dans le pont de résistances de la datasheet. Le chargeur suspend la charge si les cellules sont trop chaudes ou trop froides. Un pont de soudure permet de mettre à la place une résistance fixe qui simule 25 °C, pour les essais sans sonde. |
-| `D+` / `D−` | Ponts 0 Ω **non montés** vers les lignes USB. Le firmware règle lui-même la limite de courant USB en I2C. |
+| `D+` / `D−` (ou `PSEL`) | Ponts 0 Ω **non montés** vers les lignes USB. Le firmware désactive la détection automatique de source (`AUTO_INDET_EN`) et règle lui-même la limite de courant USB en I2C. ⚠ Les registres de la puce parlent d'une broche `PSEL` (choix de la source) : vérifier sur le brochage de la datasheet si le boîtier a `D+`/`D−`, `PSEL`, ou les deux. Si `PSEL` existe, la relier à `GND` (« adaptateur ») via 0 Ω. |
 | `GND` + pad | `GND` (beaucoup de vias) |
 
 ⚠ Les noms de broches ci-dessus viennent du schéma simplifié de TI.
@@ -501,7 +502,7 @@ DRV8833, des bucks et des haut-parleurs (bruit et larsen).
 | LSM6DS3TR-C (IMU) | **0x6B** | `SDO/SA0` → **3V3** (0x6A est pris par le chargeur BQ25887), `CS` → 3V3 (force le mode I2C), `INT1/INT2` non reliés, 100 nF + 10 µF sur VDD/VDDIO |
 | BME688 | **0x76** | `SDO` → GND (même adresse que le BME280 actuel, `sensors_config.h` inchangé), `CSB` → 3V3, 100 nF |
 | INA219 | **0x40** | `A0`, `A1` → GND, `IN+`/`IN−` aux bornes du shunt (pistes de mesure séparées, « Kelvin »), 100 nF |
-| BQ25887 (chargeur) | **0x6A** ⚠ | Adresse de la famille BQ2588x, à confirmer dans la datasheet (§ « Slave Address »). Voir §5.1. |
+| BQ25887 (chargeur) | **0x6A** | Adresse fixe. Confirmée par le pilote open source `bq25887` (crate Rust, transcrit de la datasheet), pas encore lue sur la datasheet TI elle-même. Le firmware vérifie le numéro de pièce avant toute écriture. Voir §5.1. |
 | TCA9554 | **0x20** | `A0-A2` → GND, `INT` non relié, 100 nF |
 | VL53L0X gauche (connecteur) | 0x29 → **0x30** au démarrage | XSHUT → 3V3 (logique actuelle) |
 | VL53L0X droit (connecteur) | **0x29** | XSHUT → TCA9554 P0 |
@@ -636,47 +637,44 @@ sérigraphie**, car les inverser inverse `distance_left`/`distance_right`.
 
 ------------------------------------------------------------------------
 
-## 7. Conséquences côté firmware (à faire, rien n'est codé)
+## 7. Firmware de la carte (écrit le 2026-10-13, **jamais compilé ni testé**)
 
-Ces points ne bloquent pas le dessin du PCB. Ils sont listés ici pour
-ne pas être découverts à la mise en service :
+Le firmware principal (`esp32/`) gère la carte via l'environnement
+PlatformIO **`rover_pcb_v1`**. Le WROOM et le S3 de dev compilent
+toujours avec leur brochage d'origine (règle `CLAUDE.md`).
 
-1. **Nouvel environnement PlatformIO** (ex. `esp32_s3_pcb`) avec son
-   propre fichier de broches. Les `*_config.h` actuels gardent le
-   mapping WROOM (règle `CLAUDE.md` : le WROOM doit continuer à
-   compiler).
-2. **Console sur USB natif** : `-D ARDUINO_USB_MODE=1 -D
-   ARDUINO_USB_CDC_ON_BOOT=1`, sinon `Serial` part sur GPIO43/44, qui
-   sont maintenant l'écran.
-3. **Caméra intégrée** : fusionner `esp32-cam/` dans le firmware
-   principal, derrière un `#ifdef` propre au S3 (même règle
-   `CLAUDE.md`). ⚠ `esp32-camera` utilise par défaut le canal LEDC 0,
-   **déjà pris par le moteur gauche** (`motion_config.h`). Il faut lui
-   donner le canal 7 / timer 3. Le S3 n'a que 8 canaux LEDC (contre 16
-   sur le WROOM) : moteurs 0-3 + servo 4 + caméra 7, ça tient.
-4. **Pilote TCA9554** (petite classe I2C) pour XSHUT, AMP_EN, RST/BLK
-   écran, PWDN caméra, nFAULT, LED. Il doit gérer les erreurs I2C comme
-   les autres capteurs (`I2CProbe.h`).
-5. **IMU** : passer `ImuSensor.cpp` sur `Adafruit_LSM6DS`, si le
-   LSM6DS3TR-C est retenu.
-6. **Batterie** : `BatteryMonitor` lit l'INA219 au lieu d'un ADC
-   (tension du pack + courant, négatif pendant la charge). Ajouter le
-   courant à la télémétrie.
-7. **Pilote du chargeur BQ25887** : au démarrage, régler le courant de
-   charge (≤ 1C du pack), la limite de courant d'entrée USB et la
-   tension de fin de charge (4,20 V/cellule). Lire ensuite l'état de
-   charge et la **tension de chaque cellule**, pour couper proprement
-   le robot vers 3,3 V/cellule, bien avant que la protection matérielle
-   ne coupe tout. ⚠ Les chargeurs TI de cette famille ont un **chien de
-   garde I2C** qui remet les registres par défaut si l'hôte se tait
-   (~40 s) : le firmware doit le désactiver ou le relancer. À vérifier
-   dans la datasheet.
-8. **Audio stéréo** : l'I2S envoie déjà gauche + droite. Un son mono
-   doit être copié sur les deux canaux.
-9. **ESP32-S3-WROOM-1-N16R2** : `board_build.arduino.memory_type =
-   qio_qspi`, flash 16 Mo. ⚠ Une carte de dev S3 en **N16R8** (le cas
-   le plus courant) ne peut **pas** servir de prototype à ce brochage :
-   GPIO35-37 y sont pris par la PSRAM.
+⚠ **Non compilé** : le registre PlatformIO était inaccessible depuis
+l'environnement qui l'a écrit. Les en-têtes de configuration, les
+nouveaux pilotes et la logique de calcul ont été vérifiés à part
+(compilation des en-têtes pour les trois cartes, contrôle de syntaxe,
+18 tests unitaires natifs). Mais la compilation complète contre le vrai
+framework ESP32 reste à faire : **`pio run -e rover_pcb_v1`** sur le PC,
+avant de souder quoi que ce soit.
+
+| Point | Où dans le code | Remarque |
+|---|---|---|
+| Brochage complet de la carte | `esp32/include/board_pins_pcb_v1.h` | Un seul fichier, calqué ligne à ligne sur le §4. Toute modification du schéma doit y être reportée dans le même commit. |
+| Environnement de build | `esp32/platformio.ini`, `[env:rover_pcb_v1]` | N16R2 (`qio_qspi`), 16 Mo, partitions OTA 2 × 6,5 Mo, PSRAM, console sur USB natif (`ARDUINO_USB_CDC_ON_BOOT=1`) |
+| Lignes lentes (expandeur) | `esp32/lib/board/BoardIo.*`, `Tca9554.*` | XSHUT, AMP_EN, PWDN caméra, RST/BLK écran, LED, nFAULT. Le reste du code dit « quoi » (`BoardLine::DisplayReset`) sans savoir « où » : GPIO sur le WROOM, expandeur sur le PCB. Expandeur absent : `ERROR sensor=io_expander`, nouvel essai toutes les 5 s. |
+| Caméra intégrée | `esp32/lib/camera/RoverCamera.*`, `include/camera_config.h` | Reprise du firmware ESP32-CAM. Flux sur `http://rover-esp32.local:81/stream` (**changer `camera_url` côté Pi**). Canal/timer LEDC 7/3 (le défaut 0/0 volerait le PWM du moteur gauche). Un seul flux à la fois. N'écrit jamais sur `Serial` (protocole). |
+| IMU | `esp32/lib/sensors/ImuSensor.*` | LSM6DS3TR-C en 0x6B sur le PCB, MPU-6050 ailleurs : mêmes champs `STATE` |
+| Batterie | `esp32/lib/power/BatteryMonitor.*`, `Ina219.*` | Pilote INA219 maison (chaque transaction I2C vérifiée). Télémétrie `battery= battery_mv= battery_ma=` (négatif en charge). |
+| Chargeur | `esp32/lib/power/ChargerMonitor.*` | Vérifie l'identité de la puce avant toute écriture. Configure 4,20 V/cellule, 1 A de charge, 2 A max sur l'USB, chien de garde coupé. Remet la config si la puce se réinitialise. Surveille chaque cellule : `cell_low` à 3,3 V ; `cell_critical` à 3,1 V, qui met le robot en `SAFE` ; `cell_overvoltage` à 4,25 V, qui bloque la charge jusqu'au reboot. |
+| Calculs « purs » (encodages registres, cohérence cellules) | `esp32/lib/power_math/PowerMath.h` + `esp32/test/test_power_math` | Chaque encodage est vérifié contre les **valeurs de reset documentées**. |
+| Pas de servo de lacet | `head_config.h` → `ROVER_PIN_SERVO_YAW = -1` | `ServoJoint` ignore une broche négative |
+| Écran | `display_config.h` | SPI ramené à 26,7 MHz (câble vers la tête), CS à la masse, reset via l'expandeur |
+
+**Ce qui n'est PAS fait** (rien de bloquant pour dessiner le PCB) :
+- **Pilote audio I2S** (amplis + micro) : il n'existe sur aucune carte.
+  Les amplis restent coupés (`AMP_EN` bas) tant qu'il n'est pas écrit.
+- **Échelle des ADC du chargeur** (1 mV par pas supposé). Elle n'a pas
+  pu être lue dans la datasheet. Le firmware s'en protège : les mesures
+  de cellules ne servent que si leur somme égale la tension du pack
+  mesurée par l'INA219 (sinon `cells_ok=0` et
+  `EVENT name=cells_implausible`). **Premier contrôle à la mise en
+  service : `cells_ok=1` avec des cellules réalistes.**
+- **Côté Pi** : changer `camera_url` pour
+  `http://rover-esp32.local:81/stream`.
 
 ------------------------------------------------------------------------
 

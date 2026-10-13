@@ -2,6 +2,7 @@
 #include "sensors_config.h"
 #include "Watchdog.h"
 #include "I2CProbe.h"
+#include "BoardIo.h"
 
 namespace {
 
@@ -25,7 +26,9 @@ void DistanceSensor::begin() {
     // high in hardware. See bringUpBoth() for why one line is enough,
     // and WIRING.md for why it has to be (the 30-pin WROOM devkit does
     // not break GPIO0 out at all, found on the real board 2026-09-20).
-    pinMode(ROVER_PIN_TOF_RIGHT_XSHUT, OUTPUT);
+    // The line itself is owned by BoardIo: a GPIO on the WROOM, an I/O
+    // expander pin on the custom PCB -- BoardIo::begin() has already
+    // configured it by the time this runs.
     bringUpBoth();
 }
 
@@ -74,8 +77,12 @@ void DistanceSensor::bringUpBoth() {
     _bringUpCount++;
 
     // 1. Right sensor into reset, so the left one is alone on the bus
-    //    as far as the factory address is concerned.
-    digitalWrite(ROVER_PIN_TOF_RIGHT_XSHUT, LOW);
+    //    as far as the factory address is concerned. On the PCB this
+    //    write crosses the I2C bus to the expander and can fail; that
+    //    is recorded (tof_xshut=0 in tof_status) rather than hidden,
+    //    since a right sensor left running here makes the left one's
+    //    re-addressing below unreliable.
+    bool xshutOk = BoardIo::write(BoardLine::TofRightXshut, false);
     delay(10);
 
     // Everything below feeds the diagnostic snapshot reported by
@@ -118,7 +125,8 @@ void DistanceSensor::bringUpBoth() {
     RoverWatchdog::feed();  // an absent sensor can take a while to time out on I2C, see SensorHub.cpp
 
     // 4. Release the right sensor onto the now-free factory address.
-    digitalWrite(ROVER_PIN_TOF_RIGHT_XSHUT, HIGH);
+    xshutOk = BoardIo::write(BoardLine::TofRightXshut, true) && xshutOk;
+    _xshutOk = xshutOk;
     delay(10);  // boot time after XSHUT release, per the VL53L0X datasheet
     _rightOk = false;
     if (i2cDevicePresent(ROVER_TOF_DEFAULT_ADDRESS)) {
@@ -188,8 +196,9 @@ void DistanceSensor::buildTelemetryFields(char* out, size_t outLen) const {
 }
 
 void DistanceSensor::buildBringUpFields(char* out, size_t outLen) const {
-    snprintf(out, outLen, "%s tof_rbegin=%d tof_bringups=%lu",
-             _bringUpReport, _rightOk ? 1 : 0, (unsigned long)_bringUpCount);
+    snprintf(out, outLen, "%s tof_rbegin=%d tof_xshut=%d tof_bringups=%lu",
+             _bringUpReport, _rightOk ? 1 : 0, _xshutOk ? 1 : 0,
+             (unsigned long)_bringUpCount);
 }
 
 void DistanceSensor::rescan() {

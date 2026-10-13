@@ -21,6 +21,8 @@
 // deported Pi frees GPIO1, and GPIO3 is earmarked for the microphone).
 constexpr bool ROVER_BUZZER_ENABLED = false;
 constexpr int ROVER_PIN_BUZZER = -1;  // no pin assigned while disabled
+// The custom PCB has no buzzer at all: its two speakers replace it, and
+// a beep will be an I2S sound once the audio driver exists.
 
 // I2S audio amplifier (MAX98357A). Pins confirmed with the user on
 // 2026-09-13 -- see WIRING.md for why GPIO16/17 (originally reserved
@@ -28,6 +30,17 @@ constexpr int ROVER_PIN_BUZZER = -1;  // no pin assigned while disabled
 // is USB) and GPIO14 (previously the unwired battery ADC placeholder,
 // see power_config.h) were the only GPIOs left to reclaim on the WROOM.
 // Driver/playback code not written yet -- pins only, for wiring.
+#if defined(ROVER_BOARD_PCB_V1)
+// Custom PCB: two MAX98357A (left/right channel picked by their
+// SD_MODE resistors) on one DIN line, plus the ICS-43434 mic on its own
+// data line -- board_pins_pcb_v1.h. Both amps stay shut down
+// (BoardLine::AmpEnable low) until an audio driver turns them on, so a
+// board without one is silent rather than hissing.
+#include "board_pins_pcb_v1.h"
+#else
 constexpr int ROVER_PIN_I2S_BCLK = 16;
 constexpr int ROVER_PIN_I2S_LRC = 17;
 constexpr int ROVER_PIN_I2S_DIN = 14;
+// Planned on GPIO3 with a jumper (WIRING.md "Micro I2S"), not wired yet.
+constexpr int ROVER_PIN_I2S_MIC_SD = -1;
+#endif  // ROVER_BOARD_PCB_V1

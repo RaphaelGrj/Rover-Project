@@ -11,6 +11,13 @@
 // BME688 addresses/behavior below are the library defaults, unconfirmed
 // against real hardware.
 
+#if defined(ROVER_BOARD_PCB_V1)
+// Custom PCB: pins in board_pins_pcb_v1.h. The right ToF's XSHUT is an
+// I/O-expander line there, not a GPIO -- DistanceSensor drives it
+// through BoardIo, which knows which one it is on each board.
+#include "board_pins_pcb_v1.h"
+constexpr int ROVER_PIN_TOF_RIGHT_XSHUT = -1;
+#else
 constexpr int ROVER_PIN_I2C_SDA = 21;
 constexpr int ROVER_PIN_I2C_SCL = 22;
 
@@ -29,6 +36,7 @@ constexpr int ROVER_PIN_I2C_SCL = 22;
 // other is re-addressed (DistanceSensor::bringUpBoth). It also removes
 // a strapping-pin risk and gives a scarce GPIO back.
 constexpr int ROVER_PIN_TOF_RIGHT_XSHUT = 4;
+#endif  // ROVER_BOARD_PCB_V1
 
 // Both VL53L0X boot on the same factory I2C address; the left sensor is
 // re-addressed during begin() so it can coexist with the right one,
@@ -50,6 +58,17 @@ constexpr uint8_t ROVER_ENV_SENSOR_ADDRESS = 0x76;
 // MPU6050 factory default (AD0 pin low); adjust if the real wiring ties
 // AD0 high instead (0x69).
 constexpr uint8_t ROVER_MPU6050_ADDRESS = 0x68;
+
+// Which IMU chip is fitted. The MPU-6050 is end-of-life, so the custom
+// PCB carries an LSM6DS3TR-C instead (pcb/PCB_CONNEXIONS.md section 2),
+// strapped to 0x6B (SA0 high) because 0x6A belongs to the BQ25887
+// charger on the same bus. ImuSensor keeps one interface for both, so
+// SensorHub and the STATE fields do not change. A macro rather than a
+// constexpr: it decides which library header is included at all.
+#if defined(ROVER_BOARD_PCB_V1)
+#define ROVER_IMU_LSM6DS3TRC 1
+#endif
+constexpr uint8_t ROVER_LSM6DS3TRC_ADDRESS = 0x6B;
 
 // How often each sensor is sampled/polled from update().
 constexpr unsigned long ROVER_SENSOR_UPDATE_PERIOD_MS = 200;

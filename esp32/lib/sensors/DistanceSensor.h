@@ -70,6 +70,11 @@ private:
     char _bringUpReport[80] = "tof_never_run=1";
     // Should stay at 1 for the life of a boot -- see bringUpBoth().
     uint32_t _bringUpCount = 0;
+    // Whether the last XSHUT toggle actually reached the line. Always
+    // true on the WROOM (a GPIO cannot fail to switch); on the PCB the
+    // line is an I2C expander pin, and a failed write is the first
+    // thing to rule out when the left sensor goes missing.
+    bool _xshutOk = true;
 
     // Both sides at once: a single XSHUT line makes them inseparable,
     // see the definition for the full reasoning.

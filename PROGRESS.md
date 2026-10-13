@@ -90,6 +90,33 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🧩 Firmware de la carte PCB écrit (2026-10-13) --- JAMAIS COMPILÉ NI
+  TESTÉ.** Nouvel environnement `rover_pcb_v1` (S3 N16R2, USB natif) ;
+  brochage unique dans `esp32/include/board_pins_pcb_v1.h`. Nouveaux
+  modules : `lib/board` (expandeur TCA9554, lignes lentes `BoardIo`),
+  `lib/camera` (caméra intégrée, flux `rover-esp32.local:81/stream`),
+  `lib/power` (INA219, chargeur BQ25887 avec protections par cellule),
+  `lib/power_math` (encodages registres + 18 tests natifs). IMU
+  LSM6DS3TR-C sur le PCB. Le WROOM garde son brochage et son
+  comportement. Détail et limites : `pcb/PCB_CONNEXIONS.md` §7.
+  **Ce qui n'a pas pu être fait dans la session (registre PlatformIO
+  bloqué par le réseau)** :
+  - `pio run -e esp32_wroom`, `-e esp32_s3`, `-e rover_pcb_v1` et
+    `pio test -e native` --- **à lancer en premier sur le PC**. Seuls
+    ont été vérifiés : la compilation des en-têtes de config pour les
+    3 cartes (dont un contrôle statique « 33 GPIO distincts, aucun
+    réservé »), un contrôle syntaxique des nouveaux pilotes contre des
+    stubs, et les 18 tests `test_power_math` (passés avec g++).
+  - Datasheet BQ25887 inaccessible (site TI bloqué) : registres repris
+    du crate Rust `bq25887` (transcrit de la datasheet), chaque encodage
+    vérifié contre les valeurs de reset documentées. **Échelle ADC des
+    cellules supposée (1 mV/pas)**, non confirmée. Le firmware s'en
+    protège (somme des cellules ≠ tension INA219 → `cells_ok=0`, pas
+    de décision), mais c'est le premier point à vérifier à la mise en
+    service.
+  - Côté Pi : `camera_url` à passer sur
+    `http://rover-esp32.local:81/stream` (documenté dans `pi/README.md`).
+
 - **📐 PCB sur mesure ESP32-S3 planifié (2026-10-13, conception
   seulement, rien de dessiné ni commandé)** --- carte tout-en-un : S3 +
   caméra intégrée (remplace l'ESP32-CAM), DRV8833, 2 × MAX98357A

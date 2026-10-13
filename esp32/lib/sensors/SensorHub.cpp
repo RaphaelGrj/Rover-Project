@@ -2,22 +2,14 @@
 #include <Wire.h>
 #include "sensors_config.h"
 #include "Watchdog.h"
+#include "BoardIo.h"
 
 void SensorHub::begin() {
-    // Explicit pins, not board defaults -- keeps this portable across
-    // WROOM/S3 (their default I2C pins can differ), same approach
-    // DisplayEngine already uses for SPI.
-    Wire.begin(ROVER_PIN_I2C_SDA, ROVER_PIN_I2C_SCL);
-    // Fail fast on a missing device instead of the core's default I2C
-    // timeout. First real-hardware test of this module (no sensors
-    // wired at all yet) hit exactly this: an absent device on an
-    // otherwise-idle bus reads back ESP_ERR_TIMEOUT rather than a quick
-    // NACK, and with up to four sensors probed below, that stacked up
-    // past the hardware watchdog's 3s window (Watchdog.h) before
-    // setup() ever reached loop()'s first feed() -- a boot-loop crash
-    // caused by a *missing* sensor, exactly what section 21 says must
-    // never happen. 50ms is generous for any device actually present.
-    Wire.setTimeOut(50);
+    // Explicit pins + a short timeout (a missing device must not stall
+    // boot past the watchdog) -- see BoardIo::beginI2C for the full
+    // story. Idempotent: on the PCB, BoardIo::begin() has already
+    // started the bus for the I/O expander before we get here.
+    BoardIo::beginI2C();
 
     _distance.begin();
     RoverWatchdog::feed();  // each begin() below can take a while with nothing answering on the bus

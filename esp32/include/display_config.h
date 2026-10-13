@@ -19,12 +19,18 @@
 // ROVER_DISPLAY_PANEL_WIDTH/HEIGHT are the native (pre-rotation) values
 // passed to Adafruit_ST7789::init().
 
+#if defined(ROVER_BOARD_PCB_V1)
+// Custom PCB: CS tied low on the board, RST and backlight on the I/O
+// expander (board_pins_pcb_v1.h, driven through BoardIo).
+#include "board_pins_pcb_v1.h"
+#else
 constexpr int ROVER_PIN_DISPLAY_SCLK = 18;
 constexpr int ROVER_PIN_DISPLAY_MOSI = 23;
 constexpr int ROVER_PIN_DISPLAY_CS = 5;
 constexpr int ROVER_PIN_DISPLAY_DC = 2;   // strapping pin, see WIRING.md
 constexpr int ROVER_PIN_DISPLAY_RST = 15; // strapping pin, see WIRING.md
 // BLK (backlight) is hardwired to 3V3 in this base wiring -- no GPIO.
+#endif  // ROVER_BOARD_PCB_V1
 
 constexpr int ROVER_DISPLAY_PANEL_WIDTH = 240;   // native panel, portrait
 constexpr int ROVER_DISPLAY_PANEL_HEIGHT = 280;
@@ -36,7 +42,16 @@ constexpr int ROVER_DISPLAY_PANEL_HEIGHT = 280;
 constexpr uint8_t ROVER_DISPLAY_ROTATION = 1;
 constexpr int ROVER_DISPLAY_WIDTH = ROVER_DISPLAY_PANEL_HEIGHT;   // logical, landscape
 constexpr int ROVER_DISPLAY_HEIGHT = ROVER_DISPLAY_PANEL_WIDTH;
+#if defined(ROVER_BOARD_PCB_V1)
+// On the PCB the panel sits at the end of a 15-20 cm cable up into the
+// head; 40 MHz over that is asking for corrupted pixels. 26.67 MHz is
+// the next clean divider of the S3's 80 MHz SPI clock below 27 MHz
+// (pcb/PCB_CONNEXIONS.md section 5.8). Raise it only after checking the
+// image on the real cable.
+constexpr uint32_t ROVER_DISPLAY_SPI_HZ = 26666666;
+#else
 constexpr uint32_t ROVER_DISPLAY_SPI_HZ = 40000000;
+#endif
 
 // How often DisplayEngine::update() re-evaluates blink/look/animation
 // state and redraws.

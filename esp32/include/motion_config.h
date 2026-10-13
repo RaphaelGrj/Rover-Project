@@ -22,6 +22,12 @@
 // both 0 = coast/stop). That means only 4 GPIOs for both motors instead
 // of 6. SLP (sleep/enable) is hardwired to 3V3 in this base wiring (see
 // WIRING.md), so there is no GPIO for it here.
+//
+// The custom PCB (ROVER_BOARD_PCB_V1) has its own pinout, kept whole in
+// board_pins_pcb_v1.h; everything below the #else is the WROOM devkit.
+#if defined(ROVER_BOARD_PCB_V1)
+#include "board_pins_pcb_v1.h"
+#else
 constexpr int ROVER_PIN_MOTOR_L_IN1 = 27;  // forward PWM, left motor
 constexpr int ROVER_PIN_MOTOR_L_IN2 = 26;  // reverse PWM, left motor
 constexpr int ROVER_PIN_MOTOR_R_IN1 = 33;  // forward PWM, right motor
@@ -33,6 +39,7 @@ constexpr int ROVER_PIN_ENCODER_L_A = 34;
 constexpr int ROVER_PIN_ENCODER_L_B = 35;
 constexpr int ROVER_PIN_ENCODER_R_A = 36;
 constexpr int ROVER_PIN_ENCODER_R_B = 39;
+#endif  // ROVER_BOARD_PCB_V1
 
 // --- LEDC (ESP32 hardware PWM) setup for the motor driver. One channel
 // per direction pin (4 total) since the DRV8833 PWMs both inputs.
