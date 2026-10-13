@@ -90,6 +90,18 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **📐 PCB sur mesure ESP32-S3 planifié (2026-10-13, conception
+  seulement, rien de dessiné ni commandé)** --- carte tout-en-un : S3 +
+  caméra intégrée (remplace l'ESP32-CAM), DRV8833, 2 × MAX98357A
+  stéréo, micro ICS-43434, IMU, BME688, INA219, connecteurs pour
+  moteurs/HP/écran/ToF/servo/E-stop. Liste complète des connexions :
+  `pcb/PCB_CONNEXIONS.md` ; guide KiCad débutant :
+  `pcb/KICAD_GUIDE.md`. Décisions structurantes à garder en tête :
+  module **N16R2** obligatoire (pas N16R8, GPIO35-37 nécessaires),
+  expandeur TCA9554 pour les signaux lents (36/36 GPIO du module
+  attribués), E-stop câblé sur nSLEEP du DRV8833 (coupure matérielle).
+  Questions ouvertes listées en §8 du document. Firmware non touché.
+
 - **✅ ROVER SE DÉPLACE, BRANCHE FUSIONNÉE DANS `main` (2026-09-21,
   session de test réel)** --- voir le bandeau en tête de fichier pour le
   détail complet (root cause non éclaircie, calibration `max_speed`,
