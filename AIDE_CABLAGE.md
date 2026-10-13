@@ -422,27 +422,59 @@ Suivre `pcb/KICAD_GUIDE.md` §9 (alimentation de labo, courant limité,
 2. KiCad → **[Outils → Gestionnaire de plugins et contenus]** →
    installer **JLCPCB Tools**.
 3. `pip install --user easyeda2kicad`.
-4. Sur **jlcpcb.com/parts**, chercher chaque puce et noter son numéro
-   **LCSC** (`Cxxxxx`), en préférant les pièces « Basic » ou en stock :
+4. **Références LCSC** (relevées le 2026-10-13 via un moteur de
+   recherche : les sites LCSC/JLCPCB étaient inaccessibles depuis la
+   session). **Avant de commander, ouvrir chaque `Cxxxxx` sur lcsc.com**
+   et vérifier : la référence fabricant **exacte** (les suffixes
+   comptent), le stock, et le statut chez JLCPCB (« Basic » = moins
+   cher à assembler, « Extended » = petit supplément par référence).
 
-   | À chercher | Remarque |
-   |---|---|
-   | ESP32-S3-WROOM-1-**N16R2** | Pas N16R8 ! |
-   | DRV8833PWP | HTSSOP-16 avec pad |
-   | MAX98357AETE+T | ×2 |
-   | ICS-43434 | micro |
-   | LSM6DS3TR-C | IMU |
-   | BME688 | env. |
-   | INA219 (AIDCNR ou BIDR) | mesure batterie |
-   | TCA9554PWR | expandeur |
-   | BQ25887RGER | chargeur |
-   | S-8252 (suffixe : surcharge ~4,25-4,30 V, décharge ~2,8-3,0 V) | protection |
-   | Double N-MOSFET ≥ 8 A, ≤ 15 mΩ | protection |
-   | P-MOSFET ≥ 6 A, Vgs ±20 V | interrupteur |
-   | Buck 3 A 4,5-17 V (ex. TPS563201) | ×2 (5 V et 3,3 V) |
-   | XC6206P282 / XC6206P122 | LDO caméra |
-   | USBLC6-2SC6 | protection USB |
-   | Connecteur FPC 24 broches 0,5 mm | caméra |
+   ✅ confirmé par plusieurs sources ou une page LCSC · ⚠️ source unique
+   ou réserve à lire · ❓ pas trouvé, à chercher toi-même
+
+   **Puces principales**
+
+   | Pièce | Référence fabricant | LCSC | | Remarque |
+   |---|---|---|---|---|
+   | Module ESP32-S3 | ESP32-S3-WROOM-1-**N16R2** | C2913205 | ⚠️ | Source unique (Flux). **Ne pas confondre** avec N16 (C2913199) ou N8R2 (C2913204) |
+   | Driver moteur | DRV8833PWPR | C50506 | ✅ | Une capture LCSC le dit « non recommandé pour nouveaux designs » : vérifier le stock. Le DRV8833**C**PWPR (C191171) est une **autre** puce, pas un remplaçant direct |
+   | Ampli ×2 | MAX98357AETE+T | C910544 | ✅ | Extended, ~10 000 en stock |
+   | Micro | ICS-43434 | C5656610 | ⚠️ | Source unique |
+   | IMU | LSM6DS3TR-C | C967633 | ✅ | ⚠️ Mouser l'annonce **en fin de vie**. Remplaçant possible : LSM6DSOX, géré par la même bibliothèque Adafruit (petit changement de code, je m'en occupe si besoin) |
+   | Capteur env. | BME688 | C3664478 | ✅ | Stock faible et variable selon les relevés |
+   | Mesure batterie | INA219AIDCNR | C87469 | ✅ | SOT-23-8 |
+   | Expandeur | TCA9554PWR | C477924 | ✅ | Vérifier le boîtier (TSSOP-16) contre l'empreinte |
+   | Chargeur 2S | BQ25887RGER | C2761614 | ✅ | Ne pas confondre avec BQ25883RGER (C544362, sans équilibrage). Stock faible (~126) |
+   | Buck 5 V et 3,3 V (×2) | TPS563201DDCR | C116592 | ✅ | Gros stock |
+   | LDO 2,8 V | XC6206P282MR | C347374 | ⚠️ | Version UMW. Autres numéros selon le fabricant (Torex C14255, Torex -G C2891263) : en choisir **un** en stock |
+   | LDO 1,2 V | XC6206P122MR-G | C424699 | ⚠️ | Version Torex « -G » |
+   | Protection USB | USBLC6-2SC6 | C7519 | ✅ | |
+
+   **Protection batterie et puissance**
+
+   | Pièce | Référence fabricant | LCSC | | Remarque |
+   |---|---|---|---|---|
+   | Protection 2S | S-8252**AAH**-M6T1U | --- | ❓ | La datasheet ABLIC donne pour AAH : surcharge **4,25 V**, décharge profonde **3,0 V**, exactement ce qu'on veut. Mais **pas trouvée sur LCSC**. Variantes présentes sur LCSC : AAA (C5745537), AAC (C468219), AAG (C468221), AAJ (C3681497), ABB (C5904467). Prendre celle dont le tableau de la datasheet donne surcharge 4,25-4,30 V et décharge 2,8-3,0 V. **À me montrer avant de commander** |
+   | Double N-MOSFET (protection) | FS8205A | C2830320 | ⚠️ | Classique des BMS (20 V, 6 A, ~25 mΩ). Un peu juste pour les pics (~2,8 A) : chauffe acceptable mais seuil de surintensité à recalculer avec son R<sub>DS(on)</sub> |
+   | (alternative) | FDMW2512NZ | C3278415 | ⚠️ | 20 V, 7,2 A, drain commun, mais 34 mΩ à 2,5 V : plus de chute de tension |
+   | P-MOSFET (interrupteur) | AO4407A (AOS) | C16072 | ✅ | 30 V, 12 A, SOIC-8. Seconde source UMW : C2841482 |
+   | Diode Schottky ×2 | SS34 | C717457 | ✅ | Version LGE. C8678 (MDD) est marquée « non recommandée » |
+
+   **Connecteurs**
+
+   | Pièce | Référence fabricant | LCSC | | Remarque |
+   |---|---|---|---|---|
+   | USB-C 16 broches | TYPE-C-31-M-12 | C165948 | ✅ | Le plus utilisé chez JLCPCB |
+   | Batterie JST-VH 3 broches | B3P-VH(LF)(SN) (droit) / B3PS-VH(LF)(SN) (coudé) | C160316 / C131336 | ✅ | Traversant, à souder soi-même. Coudé si le câble arrive par le côté |
+   | FPC caméra 24 broches 0,5 mm | FPC-05F-24PH20 (XUNPU) | C2856805 | ⚠️ | Contacts **dessous**, volet basculant. ⚠️ À valider avec la vraie nappe (côté des contacts, `PCB_CONNEXIONS.md` §5.7) |
+   | JST-PH 6 broches coudé CMS (moteurs, ToF) | S6B-PH-SM4-TB(LF)(SN) | C265405 | ⚠️ | Source unique. Pour info : 4 br. C265102, 5 br. C265104 |
+   | JST-PH 2 et 8 broches coudés CMS | S2B-PH-SM4-TB(LF)(SN), S8B-PH-SM4-TB(LF)(SN) | --- | ❓ | Chercher ces références exactes sur LCSC |
+   | JST-SH 4 broches (Qwiic) | SM04B-SRSS-TB(LF)(SN) | C160404 | ✅ | |
+
+   **Passifs** (résistances, condensateurs, fusibles PTC, shunt 0,05 Ω
+   2512, LED, boutons, interrupteur à glissière) : laisser le plugin
+   **JLCPCB Tools** proposer des pièces **« Basic »** de la bonne valeur
+   et du bon boîtier. Pas besoin de les chercher une par une.
 
 5. Pour chaque pièce absente de KiCad :
    `easyeda2kicad --full --lcsc_id=Cxxxxx --output ~/kicad-libs/rover`
