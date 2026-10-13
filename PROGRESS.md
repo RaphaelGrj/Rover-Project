@@ -90,32 +90,42 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
-- **🧩 Firmware de la carte PCB écrit (2026-10-13) --- JAMAIS COMPILÉ NI
-  TESTÉ.** Nouvel environnement `rover_pcb_v1` (S3 N16R2, USB natif) ;
-  brochage unique dans `esp32/include/board_pins_pcb_v1.h`. Nouveaux
-  modules : `lib/board` (expandeur TCA9554, lignes lentes `BoardIo`),
-  `lib/camera` (caméra intégrée, flux `rover-esp32.local:81/stream`),
-  `lib/power` (INA219, chargeur BQ25887 avec protections par cellule),
-  `lib/power_math` (encodages registres + 18 tests natifs). IMU
-  LSM6DS3TR-C sur le PCB. Le WROOM garde son brochage et son
-  comportement. Détail et limites : `pcb/PCB_CONNEXIONS.md` §7.
-  **Ce qui n'a pas pu être fait dans la session (registre PlatformIO
-  bloqué par le réseau)** :
-  - `pio run -e esp32_wroom`, `-e esp32_s3`, `-e rover_pcb_v1` et
-    `pio test -e native` --- **à lancer en premier sur le PC**. Seuls
-    ont été vérifiés : la compilation des en-têtes de config pour les
-    3 cartes (dont un contrôle statique « 33 GPIO distincts, aucun
-    réservé »), un contrôle syntaxique des nouveaux pilotes contre des
-    stubs, et les 18 tests `test_power_math` (passés avec g++).
-  - Datasheet BQ25887 inaccessible (site TI bloqué) : registres repris
-    du crate Rust `bq25887` (transcrit de la datasheet), chaque encodage
-    vérifié contre les valeurs de reset documentées. **Échelle ADC des
-    cellules supposée (1 mV/pas)**, non confirmée. Le firmware s'en
-    protège (somme des cellules ≠ tension INA219 → `cells_ok=0`, pas
-    de décision), mais c'est le premier point à vérifier à la mise en
-    service.
-  - Côté Pi : `camera_url` à passer sur
-    `http://rover-esp32.local:81/stream` (documenté dans `pi/README.md`).
+- **✅ PCB sur mesure : conception + firmware MERGÉS dans `main`
+  (2026-10-13, [RaphaelGrj/Rover-Project#1](https://github.com/RaphaelGrj/Rover-Project/pull/1),
+  merge `7f88758`)** --- rien n'est encore dessiné dans KiCad ni
+  commandé, et **aucune ligne de ce firmware n'a tourné sur une vraie
+  carte** (elle n'existe pas).
+  - **CI verte sur le commit mergé** : compilation `esp32_wroom`,
+    `esp32_s3` **et `rover_pcb_v1`** (ajouté à la matrice CI), tests
+    natifs (dont les 18 de `test_power_math`), tests `pi/`, build
+    ESP32-CAM. Le premier passage avait cassé les 3 builds ESP32 sur une
+    parenthèse en trop dans `main.cpp` (garde `pintest`), corrigée dans
+    `318c120` --- une seule erreur, le reste du code a compilé du
+    premier coup.
+  - **Contenu** : plan complet (`pcb/PCB_CONNEXIONS.md`), guide KiCad
+    (`pcb/KICAD_GUIDE.md`), partie 2 d'`AIDE_CABLAGE.md` (connecteurs de
+    la carte + création KiCad étape par étape, tableau GPIO recoupé
+    automatiquement avec `board_pins_pcb_v1.h`, 33/33), BMS 2S avec
+    2 × 18650 en supports séparés (`BOM.md`), firmware `rover_pcb_v1`
+    (`lib/board`, `lib/camera`, `lib/power`, `lib/power_math`, IMU
+    LSM6DS3TR-C), protocole documenté (`ROVER_PROTOCOL.md`), et
+    correction des 23 checksums faux des exemples du protocole (dont la
+    référence du §3.1 : `*3A`, pas `*39`).
+  - **Toujours ouvert --- à vérifier à la mise en service de la carte** :
+    - **Échelle ADC des cellules du BQ25887 supposée (1 mV/pas)**,
+      jamais lue sur la datasheet (site TI bloqué depuis la session ;
+      registres repris du crate Rust `bq25887`). Le firmware s'en
+      protège (`cells_ok=0` si la somme des cellules ≠ tension INA219),
+      mais **voir `cells_ok=1` avec des tensions réalistes est le
+      premier contrôle**.
+    - Brochage du connecteur FPC caméra (sens 1↔24) à confirmer sur le
+      schéma ESP32-S3-EYE avant routage ; broches `D+/D−` ou `PSEL` du
+      BQ25887 ; seuils SD_MODE des MAX98357A.
+    - Pilote audio I2S non écrit (amplis coupés en attendant).
+    - Côté Pi : `camera_url` → `http://rover-esp32.local:81/stream`.
+  - **Prochaine étape (utilisateur)** : `AIDE_CABLAGE.md` partie B,
+    étape 0 (références LCSC + datasheets), puis schéma KiCad poussé
+    sur git pour relecture avant le PCB.
 
 - **📐 PCB sur mesure ESP32-S3 planifié (2026-10-13, conception
   seulement, rien de dessiné ni commandé)** --- carte tout-en-un : S3 +
