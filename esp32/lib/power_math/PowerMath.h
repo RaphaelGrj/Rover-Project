@@ -195,4 +195,40 @@ inline uint8_t batteryPercentFromMv(uint32_t packMv, uint32_t emptyMv, uint32_t 
     return (uint8_t)(((packMv - emptyMv) * 100u) / (fullMv - emptyMv));
 }
 
+// --- Low-battery deep sleep ---------------------------------------------
+
+// Everything the sleep decision looks at, gathered by the caller so the
+// rule itself stays pure and testable.
+struct BatterySnapshot {
+    bool chargerOk;      // BQ25887 answering and configured
+    bool usbPresent;     // valid USB power on the charger input
+    bool charging;       // charge cycle in progress
+    bool cellsValid;     // cell readings passed cellsPlausible()
+    uint16_t minCellMv;  // lowest cell, meaningful only if cellsValid
+    bool packValid;      // INA219 gave a live reading
+    uint32_t packMv;     // pack voltage, meaningful only if packValid
+};
+
+// Below this the "pack" reading is not a battery at all (nothing
+// plugged, USB-only bring-up): never a reason to sleep.
+constexpr uint32_t MIN_PLAUSIBLE_PACK_MV = 2 * CELL_MIN_PLAUSIBLE_MV;
+
+// True when the battery is too low for the robot to stay awake.
+//
+// Never on external power: with USB present the ESP32 runs from it and
+// the charger is filling the cells, so sleeping would only stop the
+// robot from reporting the charge. Prefers the per-cell reading (one
+// weak cell is what the protection IC acts on); falls back to the pack
+// voltage, split evenly, only when the cells cannot be trusted. With no
+// trustworthy reading at all it answers false: a robot must not switch
+// itself off on a number it cannot believe.
+inline bool batteryTooLowToRun(const BatterySnapshot& s, uint16_t cellLimitMv) {
+    if (s.chargerOk && (s.usbPresent || s.charging)) return false;
+    if (s.cellsValid) return s.minCellMv < cellLimitMv;
+    if (s.packValid && s.packMv >= MIN_PLAUSIBLE_PACK_MV) {
+        return s.packMv < 2u * cellLimitMv;
+    }
+    return false;
+}
+
 }  // namespace PowerMath

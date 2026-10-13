@@ -26,6 +26,7 @@
 #include "BoardIo.h"
 #include "ChargerMonitor.h"
 #include "RoverCamera.h"
+#include "LowBatterySleep.h"
 
 // RoverProtocol takes a Stream&, never a HardwareSerial& -- that is what
 // keeps the transport swappable (ROVER_PROTOCOL.md section 2). The Pi is
@@ -184,6 +185,15 @@ void reportPowerAndBoardEvents() {
         state = RoverState::SAFE;
         drive.stop();
         protocol.send("EVENT", "name=cell_critical");
+    }
+    if (LowBatterySleep::tooLowNow(battery, charger)) {
+        // Last frame before silence: motors stopped first, then the
+        // board goes to deep sleep (LowBatterySleep::enterSleep cuts the
+        // amps, backlight and camera). See ROVER_PROTOCOL.md §7.2.
+        drive.stop();
+        state = RoverState::SAFE;
+        protocol.send("EVENT", "name=battery_shutdown");
+        LowBatterySleep::enterSleep();
     }
     if (charger.consumeOvervoltageEvent()) {
         protocol.send("EVENT", "name=cell_overvoltage charging=inhibited");
@@ -784,6 +794,20 @@ void setup() {
     // XSHUT...): on the PCB this starts the I2C bus and the I/O expander
     // and puts every slow line in its safe state.
     BoardIo::begin();
+    // Battery first, before anything power-hungry (display, WiFi,
+    // camera): a robot woken by its low-battery timer must be able to go
+    // straight back to sleep without lighting everything up each time.
+    battery.begin();
+    charger.begin();
+    if (LowBatterySleep::tooLowAtBoot(battery, charger)) {
+        // Announced on a cold boot only. A timer wake-up that finds the
+        // cells still low goes back to sleep silently, rather than
+        // emitting the same event every 15 minutes to nobody.
+        if (!LowBatterySleep::wokeFromLowBatterySleep()) {
+            protocol.send("EVENT", "name=battery_shutdown");
+        }
+        LowBatterySleep::enterSleep();
+    }
     protocol.onFrame(onFrame);
     // Load the shared secret now, while the transport is still the USB
     // cable: provisioning it (SYSTEM action=wifi_setup) must be
@@ -821,8 +845,6 @@ void setup() {
     display.begin();
     sensors.begin();
     estop.begin();
-    battery.begin();
-    charger.begin();
     RoverWatchdog::feed();  // camera init below can take ~0.5 s, more with no sensor
     camera.begin();
     buzzer.begin();

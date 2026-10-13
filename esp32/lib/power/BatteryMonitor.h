@@ -22,6 +22,12 @@ public:
     // Non-blocking, call every loop() iteration.
     void update();
 
+    // One measurement right now, ignoring the update period. For the
+    // boot-time low-battery check (LowBatterySleep), which cannot wait
+    // the 2 s the periodic update() would take to produce a first value.
+    // No-op while the INA219 is absent.
+    void sampleNow();
+
     bool hasReading() const { return _hasReading; }
     uint8_t percent() const { return _percent; }
     // Pack voltage in mV; 0 until a first reading. Also what the charger
@@ -56,6 +62,7 @@ private:
     unsigned long _lastUpdateMs = 0;
     unsigned long _lastRetryMs = 0;
 
+    void measure(unsigned long now);
     void applyPercent(uint32_t packMv);
     void trackInaHealth();
 };

@@ -42,6 +42,13 @@ void update();
 // failure, which callers may report.
 bool write(BoardLine line, bool high);
 
+// Lowest-power state for every line, before a low-battery deep sleep
+// (LowBatterySleep): amps shut down, backlight off, camera powered
+// down, right ToF in reset, LED off. Best effort -- an I2C failure here
+// cannot be reported any more, and the protection IC still guards the
+// cells. On the WROOM only the ToF line exists.
+void prepareForSleep();
+
 // True if this board routes lines through an expander at all.
 bool hasExpander();
 // False while the expander is absent or stopped answering.

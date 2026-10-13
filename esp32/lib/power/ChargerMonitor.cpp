@@ -103,7 +103,17 @@ void ChargerMonitor::update(uint32_t packMv, bool packMvValid) {
 
     if (now - _lastUpdateMs < ROVER_CHARGER_UPDATE_PERIOD_MS) return;
     _lastUpdateMs = now;
+    measure(now, packMv, packMvValid);
+}
 
+void ChargerMonitor::sampleNow(uint32_t packMv, bool packMvValid) {
+    if (!ROVER_CHARGER_ENABLED || !_ok) return;
+    unsigned long now = millis();
+    _lastUpdateMs = now;
+    measure(now, packMv, packMvValid);
+}
+
+void ChargerMonitor::measure(unsigned long now, uint32_t packMv, bool packMvValid) {
     bool matches = true;
     if (!configLooksApplied(&matches) || (!matches && !applyConfig()) || !readStatusAndAdc()) {
         _ok = false;

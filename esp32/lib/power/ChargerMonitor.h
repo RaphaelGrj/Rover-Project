@@ -35,6 +35,10 @@ public:
     // it the cell readings cannot be cross-checked and are not used.
     void update(uint32_t packMv, bool packMvValid);
 
+    // One measurement right now, ignoring the update period -- see
+    // BatteryMonitor::sampleNow. No-op while the chip is absent.
+    void sampleNow(uint32_t packMv, bool packMvValid);
+
     bool ok() const { return _ok; }
     bool usbPresent() const { return _usbPresent; }
     bool charging() const;
@@ -93,6 +97,7 @@ private:
     unsigned long _lastUpdateMs = 0;
     unsigned long _lastRetryMs = 0;
 
+    void measure(unsigned long now, uint32_t packMv, bool packMvValid);
     bool probeAndConfigure();
     bool applyConfig();
     bool configLooksApplied(bool* matches);

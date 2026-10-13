@@ -42,8 +42,9 @@ constexpr float ROVER_BATTERY_DIVIDER_RATIO = 2.0f;  // Vbatt = Vadc * ratio
 
 // Pack voltages mapped to 0% / 100% (linear estimate, see
 // PowerMath::batteryPercentFromMv for its limits). 2 x 18650 in series:
-// 3.2 V/cell is "empty enough" -- well above the protection IC's ~2.8 V
-// cut-off, so the robot stops itself long before the hardware has to --
+// 3.2 V/cell is "empty enough" -- well above the protection IC's 2.4 V
+// cut-off (S-8252AAC), so the robot stops itself long before the
+// hardware has to --
 // and 4.15 V/cell is "full" since a resting cell drifts below the
 // 4.20 V the charger ends at.
 constexpr uint32_t ROVER_BATTERY_EMPTY_MV = 6400;  // maps to 0%
@@ -89,12 +90,25 @@ constexpr uint16_t ROVER_CELL_CHARGE_MV = 4200;
 // Cell-level thresholds, applied only when the two cell readings are
 // plausible (PowerMath::cellsPlausible -- the ADC scale is unverified).
 // LOW warns; CRITICAL stops the robot (SAFE) well before the protection
-// IC disconnects the pack at ~2.8 V; OVERVOLTAGE disables charging as a
+// IC disconnects the pack at 2.4 V; OVERVOLTAGE disables charging as a
 // firmware layer under the protection IC's own ~4.28 V cut-off.
 constexpr uint16_t ROVER_CELL_LOW_MV = 3300;
 constexpr uint16_t ROVER_CELL_LOW_CLEAR_MV = 3450;
 constexpr uint16_t ROVER_CELL_CRITICAL_MV = 3100;
 constexpr uint16_t ROVER_CELL_OVERVOLTAGE_MV = 4250;
+
+// Deep sleep (LowBatterySleep). The S-8252AAC chosen for the PCB only
+// disconnects a cell at 2.40 V -- below the 2.5-2.65 V end of discharge
+// of the 18650s -- and once the motors are stopped the board still
+// draws ~100 mA, which would walk a forgotten robot all the way down
+// there. Under SHUTDOWN the ESP32 cuts what it can and deep-sleeps
+// (~mA for the whole board), waking every WAKE_PERIOD to look again.
+// It only resumes for real at RESUME or with USB present: a cell that
+// rebounds a little at rest must not trigger a full boot (WiFi, camera)
+// that drags it straight back down, every period, forever.
+constexpr uint16_t ROVER_CELL_SHUTDOWN_MV = 3000;
+constexpr uint16_t ROVER_CELL_RESUME_MV = 3300;
+constexpr uint32_t ROVER_LOW_BATTERY_WAKE_PERIOD_S = 15 * 60;
 // Max disagreement between (top cell + bottom cell) and the INA219's
 // pack voltage. Covers ADC tolerances and the small drop across the
 // shunt and protection MOSFETs; a wrong scale or a broken balance wire

@@ -322,6 +322,7 @@ EVENT name=estop_pressed *12
 ```
 EVENT name=cell_low *7B
 EVENT name=cell_critical *04
+EVENT name=battery_shutdown *6C
 EVENT name=cell_overvoltage charging=inhibited *19
 EVENT name=cells_implausible *01
 EVENT name=charger_fault fault=0x40 ts=hot *59
@@ -332,8 +333,15 @@ EVENT name=motor_driver_fault *49
   de 3,45 V pour réarmer).
 - `cell_critical` : une cellule sous 3,10 V **hors charge** --- le robot
   passe en `SAFE` et coupe les moteurs **avant** que la protection
-  matérielle (~2,8 V) ne coupe tout d'un coup (écran, WiFi compris).
+  matérielle (2,4 V, S-8252AAC) ne coupe tout d'un coup (écran, WiFi compris).
   Comme pour un timeout heartbeat, seul un `resume` explicite réarme.
+- `battery_shutdown` : une cellule sous 3,00 V hors charge et sans
+  USB --- le robot coupe ce qu'il peut (moteurs, amplis, écran, caméra)
+  puis l'ESP32 passe en **sommeil profond**. C'est la **dernière trame**
+  avant le silence. Il se réveille seul toutes les 15 min pour mesurer.
+  Il ne redémarre vraiment que si une cellule est remontée à 3,30 V ou
+  plus, ou si une alimentation USB est présente. Sinon il se rendort
+  aussitôt, sans rien émettre.
 - `cell_overvoltage` : une cellule au-dessus de 4,25 V --- le firmware
   **bloque la charge jusqu'au prochain redémarrage** (couche logicielle
   sous la protection matérielle à ~4,28 V).

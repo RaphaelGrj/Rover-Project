@@ -61,7 +61,7 @@ TCA9554, alimentations 5 V et 3,3 V, régulateurs caméra 2,8 V et 1,2 V.
 | Mesure batterie | **INA219** + shunt 0,05 Ω (I2C, 0x40) | Pas de GPIO ADC disponible. En plus de la tension, il donne le **courant** : on voit un moteur bloqué, ce qui aurait aidé pendant la panne moteur de septembre. |
 | Batterie | 🔧 **2 × Li-ion 18650 de marque** (Samsung 35E ou LG MJ1 3500 mAh ; Samsung 30Q ou Molicel P28A si on veut plus de marge en courant), chacune dans **son propre support** de qualité (ex. Keystone 1042) | Choix le plus sûr pour un robot qui roule et cogne : boîtier acier rigide, chimie et qualité connues, cellules amovibles, pas de pack à souder. Un LiPo souple se perce ou gonfle au premier choc. Deux supports séparés donnent naturellement accès au point milieu. ~25 Wh, soit plusieurs heures d'autonomie. Rester sur le 4,2 V/cellule classique. Le LiFePO4 serait encore plus sûr, mais les seuils du chargeur et de la protection ne sont pas prévus pour. |
 | Chargeur 2S | **BQ25887** (TI, VQFN-24 4×4 mm, I2C) | Charge un pack 2S **depuis le 5 V de l'USB** (montée de tension interne jusqu'à 8,4 V), jusqu'à 2 A, **équilibrage des cellules intégré**. Son ADC donne la tension **de chaque cellule** en I2C. Seul chargeur USB-5 V → 2S courant qui équilibre sans puce supplémentaire. |
-| Protection 2S | **S-8252** (ABLIC, SOT-23-6) + double N-MOSFET | Coupe la batterie en cas de surcharge, de décharge profonde (cellule < ~2,8 V), de surintensité ou de court-circuit, **cellule par cellule**. Les cellules 18650 « nues » n'ont aucune protection : sans elle, un robot oublié allumé les détruit (et une cellule trop déchargée devient dangereuse à recharger). Alternative : HY2120. |
+| Protection 2S | **S-8252** (ABLIC, SOT-23-6) + double N-MOSFET | Coupe la batterie en cas de surcharge, de décharge profonde (cellule < 2,4 V avec la variante **AAC** retenue), de surintensité ou de court-circuit, **cellule par cellule**. Les cellules 18650 « nues » n'ont aucune protection : sans elle, un robot oublié allumé les détruit (et une cellule trop déchargée devient dangereuse à recharger). Alternative : HY2120. |
 | Interrupteur | Petit interrupteur à glissière + P-MOSFET | L'interrupteur ne commande que la grille : les 3 A passent dans le MOSFET, pas dans l'interrupteur. Robot éteint = la batterie peut quand même se recharger. |
 | Expandeur | **TCA9554** (8 E/S I2C, 0x20) | Prend les signaux lents (XSHUT, mute ampli, reset écran…) pour libérer des GPIO |
 | 5 V | Buck synchrone 3 A (ex. TPS563201, ou équivalent 4,5-17 V / 3 A) | Servo + 2 amplis |
@@ -291,11 +291,31 @@ R<sub>DS(on)</sub> ≤ 15 mΩ (logique 2,5 V). Le seuil de surintensité vaut
 vers **6-8 A** : au-dessus des pics normaux, en dessous d'un
 court-circuit.
 
-⚠ Le S-8252 existe en dizaines de suffixes (seuils différents).
-Prendre **surcharge ≈ 4,25-4,30 V** (au-dessus des 4,20 V du chargeur)
-et **décharge profonde ≈ 2,8-3,0 V**. Vérifier les seuils du suffixe
-exact dans la datasheet avant de commander. Alternative équivalente :
-HY2120 (même principe, mêmes réserves sur les suffixes).
+**Variante retenue : S-8252AAC-M6T1U (LCSC C468219)**, choisie le
+2026-10-13 parmi celles que LCSC vend. Seuils lus dans le tableau de la
+datasheet ABLIC (extraits indexés, ⚠ à reconfirmer sur le PDF à la
+réception) :
+
+| Seuil | Valeur | Commentaire |
+|---|---|---|
+| Surcharge (coupure / réarmement) | **4,30 V** / 4,10 V | Au-dessus des 4,20 V du chargeur : il finit sa charge sans être coupé |
+| Décharge profonde (coupure / réarmement) | **2,40 V** / 3,00 V | ⚠ Sous la fin de décharge des cellules (35E : 2,65 V, MJ1 : 2,5 V) |
+| Surintensité en décharge | 0,20 V aux bornes des MOSFET | Voir le calcul ci-dessus |
+
+Pourquoi l'accepter : la variante idéale (**AAH**, 4,25 V / 3,0 V)
+n'est pas chez LCSC. AAA et ABB coupent à 2,0 V (pire), et AAJ est
+réglée pour du LiFePO4 (3,9 V, elle couperait des Li-ion avant la fin de
+la charge). Les 2,4 V ne sont **jamais atteints en usage normal**, car le
+firmware s'arrête bien avant :
+- 3,1 V/cellule → `cell_critical` : moteurs coupés, robot en `SAFE` ;
+- 3,0 V/cellule → **sommeil profond** de l'ESP32
+  (`EVENT name=battery_shutdown`). La carte ne consomme alors presque
+  plus rien, et le robot se réveille tout seul pour vérifier, ou dès
+  qu'on branche l'USB.
+
+La coupure à 2,4 V ne sert donc qu'en dernier recours (firmware planté
+ou absent). Alternative si on veut mieux : HY2120 (autre fabricant,
+même principe), à rechercher avec des seuils ~4,25 V / ~2,8 V.
 
 #### Chargeur BQ25887 (USB-C 5 V → charge 2S, équilibrage intégré)
 
@@ -598,6 +618,11 @@ limiter l'horloge SPI à ~20-27 MHz au lieu de 40 MHz.
 
 ### 5.9 Capteurs ToF VL53L0X (2 × JST-PH 6 broches)
 
+Les deux VL53L0X ne sont **pas soudés sur la carte** : ce sont des
+modules indépendants (type GY-530), fixés en façade du châssis là où
+ils doivent voir, et reliés à la carte par un câble chacun. La carte
+n'a que leurs deux connecteurs.
+
 Ordre identique à la barrette des modules GY-530 (`VIN GND SCL SDA
 GPIO1 XSHUT`) :
 
@@ -657,6 +682,7 @@ valider à la mise en service (`pcb/KICAD_GUIDE.md` §9).
 | IMU | `esp32/lib/sensors/ImuSensor.*` | LSM6DS3TR-C en 0x6B sur le PCB, MPU-6050 ailleurs : mêmes champs `STATE` |
 | Batterie | `esp32/lib/power/BatteryMonitor.*`, `Ina219.*` | Pilote INA219 maison (chaque transaction I2C vérifiée). Télémétrie `battery= battery_mv= battery_ma=` (négatif en charge). |
 | Chargeur | `esp32/lib/power/ChargerMonitor.*` | Vérifie l'identité de la puce avant toute écriture. Configure 4,20 V/cellule, 1 A de charge, 2 A max sur l'USB, chien de garde coupé. Remet la config si la puce se réinitialise. Surveille chaque cellule : `cell_low` à 3,3 V ; `cell_critical` à 3,1 V, qui met le robot en `SAFE` ; `cell_overvoltage` à 4,25 V, qui bloque la charge jusqu'au reboot. |
+| Sommeil profond batterie basse | `esp32/lib/power/LowBatterySleep.*` | Sous 3,0 V/cellule (hors USB et hors charge), le robot coupe amplis, écran et caméra, puis l'ESP32 s'endort (`EVENT name=battery_shutdown`). Réveil toutes les 15 min pour mesurer. Il ne redémarre vraiment qu'au-dessus de 3,3 V/cellule ou avec l'USB. Compense la coupure basse à 2,4 V de la S-8252AAC. |
 | Calculs « purs » (encodages registres, cohérence cellules) | `esp32/lib/power_math/PowerMath.h` + `esp32/test/test_power_math` | Chaque encodage est vérifié contre les **valeurs de reset documentées**. |
 | Pas de servo de lacet | `head_config.h` → `ROVER_PIN_SERVO_YAW = -1` | `ServoJoint` ignore une broche négative |
 | Écran | `display_config.h` | SPI ramené à 26,7 MHz (câble vers la tête), CS à la masse, reset via l'expandeur |

@@ -40,7 +40,18 @@ void BatteryMonitor::update() {
 
     if (now - _lastUpdateMs < ROVER_BATTERY_UPDATE_PERIOD_MS) return;
     _lastUpdateMs = now;
+    measure(now);
+}
 
+void BatteryMonitor::sampleNow() {
+    if (!ROVER_BATTERY_MONITORING_ENABLED) return;
+    if (ROVER_BATTERY_USES_INA219 && !_ina.ok()) return;
+    unsigned long now = millis();
+    _lastUpdateMs = now;
+    measure(now);
+}
+
+void BatteryMonitor::measure(unsigned long now) {
     if (ROVER_BATTERY_USES_INA219) {
         uint32_t mv = 0;
         int32_t ma = 0;
