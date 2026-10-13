@@ -436,7 +436,7 @@ Suivre `pcb/KICAD_GUIDE.md` §9 (alimentation de labo, courant limité,
 
    | Pièce | Référence fabricant | LCSC | | Remarque |
    |---|---|---|---|---|
-   | Module ESP32-S3 | ESP32-S3-WROOM-1-**N16R2** | C2913205 | ⚠️ | Source unique (Flux). **Ne pas confondre** avec N16 (C2913199) ou N8R2 (C2913204) |
+   | Module ESP32-S3 | ESP32-S3-WROOM-1-**N16R2** | C2913205 | ✅ | Confirmé par la fiche JLCPCB (référence exacte, module 18 × 25,5 mm, antenne PCB). **Ne pas confondre** avec N16 (C2913199) ou N8R2 (C2913204) |
    | Driver moteur | DRV8833PWPR | C50506 | ✅ | Une capture LCSC le dit « non recommandé pour nouveaux designs » : vérifier le stock. Le DRV8833**C**PWPR (C191171) est une **autre** puce, pas un remplaçant direct |
    | Ampli ×2 | MAX98357AETE+T | C910544 | ✅ | Extended, ~10 000 en stock |
    | Micro | ICS-43434 | C5656610 | ⚠️ | Source unique |
@@ -467,7 +467,7 @@ Suivre `pcb/KICAD_GUIDE.md` §9 (alimentation de labo, courant limité,
    | USB-C 16 broches | TYPE-C-31-M-12 | C165948 | ✅ | Le plus utilisé chez JLCPCB |
    | Batterie JST-VH 3 broches | B3P-VH(LF)(SN) (droit) / B3PS-VH(LF)(SN) (coudé) | C160316 / C131336 | ✅ | Traversant, à souder soi-même. Coudé si le câble arrive par le côté |
    | FPC caméra 24 broches 0,5 mm | FPC-05F-24PH20 (XUNPU) | C2856805 | ⚠️ | Contacts **dessous**, volet basculant. ⚠️ À valider avec la vraie nappe (côté des contacts, `PCB_CONNEXIONS.md` §5.7) |
-   | JST-PH 6 broches coudé CMS (moteurs, ToF) | S6B-PH-SM4-TB(LF)(SN) | C265405 | ⚠️ | Source unique. Pour info : 4 br. C265102, 5 br. C265104 |
+   | JST-PH 6 broches coudé CMS (moteurs, ToF) | S6B-PH-SM4-TB(LF)(SN) | C265405 | ✅ | Confirmé par la page LCSC (6 broches, pas 2 mm, coudé CMS, ~9 600 en stock au relevé). Ne pas confondre avec B6B (C471518, sortie verticale) |
    | JST-PH 2 broches coudé CMS (HP ×2, CTN, E-stop) | S2B-PH-SM4-TB(LF)(SN) | C295747 | ✅ | Page LCSC + JLCPCB. ⚠ Ne pas prendre « C9900150953 » (fiche JLCPCB générique sans fabricant) |
    | JST-PH 8 broches coudé CMS (écran) | S8B-PH-SM4-TB(LF)(SN) | C265121 | ✅ | Page LCSC. Ne pas confondre avec B8B (C495548, sortie verticale) |
    | JST-SH 4 broches (Qwiic) | SM04B-SRSS-TB(LF)(SN) | C160404 | ✅ | |
