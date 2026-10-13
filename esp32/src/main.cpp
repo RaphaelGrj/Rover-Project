@@ -625,7 +625,7 @@ void onFrame(const RoverFrame& frame) {
             bool allowed = pin >= 0 &&
                            (pin == ROVER_PIN_SERVO_PITCH || pin == ROVER_PIN_SERVO_YAW ||
                             pin == ROVER_PIN_MOTOR_L_IN1 || pin == ROVER_PIN_MOTOR_L_IN2 ||
-                            pin == ROVER_PIN_MOTOR_R_IN1 || pin == ROVER_PIN_MOTOR_R_IN2));
+                            pin == ROVER_PIN_MOTOR_R_IN1 || pin == ROVER_PIN_MOTOR_R_IN2);
             if (!allowed) {
                 protocol.sendError("pintest_pin_not_allowed");
             } else {
