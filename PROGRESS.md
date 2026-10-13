@@ -90,7 +90,12 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
-- **🔋 Protection batterie choisie + sommeil profond (2026-10-13)** ---
+- **✅ Protection batterie choisie + sommeil profond --- MERGÉ dans
+  `main` (2026-10-13, [RaphaelGrj/Rover-Project#4](https://github.com/RaphaelGrj/Rover-Project/pull/4),
+  merge `1f72aff`, CI verte : 3 cartes + 22 tests natifs + `pi/`)** ---
+  jamais testé sur matériel (carte pas encore fabriquée). Entre-temps,
+  #2 (`PROGRESS.md`) et #3 (références LCSC de l'étape 0,
+  `AIDE_CABLAGE.md`) ont aussi été mergées. Détail ---
   **S-8252AAC-M6T1U** (LCSC C468219) retenue parmi les variantes en
   stock chez LCSC : surcharge 4,30 V, décharge profonde **2,40 V**
   (seuils lus sur des extraits indexés de la datasheet, à reconfirmer
@@ -141,8 +146,11 @@
     - Pilote audio I2S non écrit (amplis coupés en attendant).
     - Côté Pi : `camera_url` → `http://rover-esp32.local:81/stream`.
   - **Prochaine étape (utilisateur)** : `AIDE_CABLAGE.md` partie B,
-    étape 0 (références LCSC + datasheets), puis schéma KiCad poussé
-    sur git pour relecture avant le PCB.
+    étape 0 --- vérifier sur lcsc.com les références listées (stock,
+    suffixe exact), trouver les JST-PH 2 et 8 broches coudés, acheter
+    une OV2640 à **nappe longue (~75 mm)**, télécharger les datasheets
+    (et y reconfirmer les seuils de la S-8252AAC) --- puis schéma KiCad
+    poussé sur git pour relecture avant le PCB.
 
 - **📐 PCB sur mesure ESP32-S3 planifié (2026-10-13, conception
   seulement, rien de dessiné ni commandé)** --- carte tout-en-un : S3 +
