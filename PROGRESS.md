@@ -97,10 +97,12 @@
   #2 (`PROGRESS.md`) et #3 (références LCSC de l'étape 0,
   `AIDE_CABLAGE.md`) ont aussi été mergées, puis #5 (`PROGRESS.md`) et
   #6 (merge `16322cb` : JST-PH 2 broches = C295747, 8 broches = C265121,
-  trouvés sur leurs pages LCSC). **La liste de l'étape 0 n'a plus aucune
-  pièce introuvable** ; restent à vérifier sur lcsc.com les deux
-  numéros à source unique : JST-PH 6 broches (C265405) et module
-  ESP32-S3-WROOM-1-N16R2 (C2913205). Détail ---
+  trouvés sur leurs pages LCSC), #7 (`PROGRESS.md`) et #8 (merge
+  `cdda8c7` : C265405 = JST S6B-PH-SM4-TB et C2913205 =
+  ESP32-S3-WROOM-1-N16R2 confirmés par une seconde source). **Toute la
+  liste de l'étape 0 est confirmée par au moins deux sources** ; reste
+  seulement à revérifier le stock sur lcsc.com au moment de commander.
+  Détail ---
   **S-8252AAC-M6T1U** (LCSC C468219) retenue parmi les variantes en
   stock chez LCSC : surcharge 4,30 V, décharge profonde **2,40 V**
   (seuils lus sur des extraits indexés de la datasheet, à reconfirmer
@@ -151,8 +153,8 @@
     - Pilote audio I2S non écrit (amplis coupés en attendant).
     - Côté Pi : `camera_url` → `http://rover-esp32.local:81/stream`.
   - **Prochaine étape (utilisateur)** : `AIDE_CABLAGE.md` partie B,
-    étape 0 --- vérifier sur lcsc.com les références listées (stock,
-    suffixe exact ; en priorité C265405 et C2913205), acheter
+    étape 0 --- revérifier le stock des références listées au moment
+    de commander, acheter
     une OV2640 à **nappe longue (~75 mm)**, télécharger les datasheets
     (et y reconfirmer les seuils de la S-8252AAC) --- puis schéma KiCad
     poussé sur git pour relecture avant le PCB.
