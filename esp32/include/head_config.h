@@ -3,6 +3,11 @@
 // Phase 3 head (pitch/yaw servos) pinout and motion constants
 // (WIRING.md). PROVISIONAL, same caveats as motion_config.h.
 
+#if defined(ROVER_BOARD_PCB_V1)
+// Custom PCB: one servo connector (GPIO37), no yaw servo at all -- see
+// board_pins_pcb_v1.h. ServoJoint treats a -1 pin as "not fitted".
+#include "board_pins_pcb_v1.h"
+#else
 constexpr int ROVER_PIN_SERVO_PITCH = 13;
 // Moved off GPIO19 on 2026-09-20: that pad emits nothing on this
 // devkit. Established by elimination on real hardware -- both servos
@@ -17,6 +22,7 @@ constexpr int ROVER_PIN_SERVO_PITCH = 13;
 // is high impedance, so this is unlikely -- but if the board ever
 // fails to boot after this change, this pin is the first suspect.
 constexpr int ROVER_PIN_SERVO_YAW = 12;
+#endif  // ROVER_BOARD_PCB_V1
 
 // LEDC channels 0-3 are reserved for the drive motors (motion_config.h);
 // head servos start at 4.

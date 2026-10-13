@@ -23,6 +23,9 @@
 #include "WifiCredentialsStore.h"
 #include "CalibrationStore.h"
 #include "Buzzer.h"
+#include "BoardIo.h"
+#include "ChargerMonitor.h"
+#include "RoverCamera.h"
 
 // RoverProtocol takes a Stream&, never a HardwareSerial& -- that is what
 // keeps the transport swappable (ROVER_PROTOCOL.md section 2). The Pi is
@@ -57,6 +60,10 @@ RoverOTA ota;
 RoverWifiProvisioning wifiProvisioning;
 StandaloneControl standalone;
 Buzzer buzzer;
+// Custom PCB only (no-ops elsewhere): the BQ25887 charger and the
+// integrated camera. See pcb/PCB_CONNEXIONS.md and board_pins_pcb_v1.h.
+ChargerMonitor charger;
+RoverCamera camera;
 // How long without any valid frame from the Pi before Rover offers its
 // own piloting AP (StandaloneControl.h). Deliberately far longer than
 // ROVER_HEARTBEAT_TIMEOUT_MS: that one is a safety reflex measured in
@@ -75,6 +82,8 @@ unsigned long lastPiFrameMs = 0;
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorTelemetryMs = 0;
 unsigned long lastBatteryTelemetryMs = 0;
+unsigned long lastChargerTelemetryMs = 0;
+unsigned long lastMotorFaultPollMs = 0;
 
 // Publishes the ESP32's own state machine (board_config.h) to whoever
 // is listening, on CHANGE only.
@@ -101,6 +110,12 @@ void publishStateIfChanged() {
     if (everPublished && lastPublished == state && lastEstop == estopNow &&
         lastMaxSpeed == maxSpeedNow) {
         return;
+    }
+    // The PCB's status LED (I/O expander) mirrors "motors armed": lit
+    // in ACTIVE only. Written here because this is the one place every
+    // state change already passes through; a no-op on the WROOM.
+    if (!everPublished || lastPublished != state) {
+        BoardIo::write(BoardLine::StatusLed, state == RoverState::ACTIVE);
     }
     lastPublished = state;
     lastEstop = estopNow;
@@ -129,6 +144,91 @@ void publishObstacleIfChanged() {
     strncpy(lastFields, fields, sizeof(lastFields) - 1);
     lastFields[sizeof(lastFields) - 1] = '\0';
     protocol.send("STATE", fields);
+}
+
+// Custom PCB health and power reporting, kept out of loop() so it reads
+// as one block: hardware that went missing (I/O expander, INA219,
+// charger, camera), cell-level battery events from the charger, and the
+// DRV8833's fault line. Everything here is a no-op on the WROOM, where
+// none of these chips exist (each consume*() simply never fires).
+void reportPowerAndBoardEvents() {
+    // 48, same sizing as the sensor ERROR frames in loop().
+    char errFields[48];
+    if (BoardIo::consumeExpanderFailure()) {
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=io_expander");
+        protocol.send("ERROR", errFields);
+    }
+    if (battery.consumeFailureEvent()) {
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=battery");
+        protocol.send("ERROR", errFields);
+    }
+    if (charger.consumeFailureEvent()) {
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=charger");
+        protocol.send("ERROR", errFields);
+    }
+    if (camera.consumeFailureEvent()) {
+        snprintf(errFields, sizeof(errFields), "code=sensor_timeout sensor=camera");
+        protocol.send("ERROR", errFields);
+    }
+
+    if (charger.consumeCellLowEvent()) {
+        protocol.send("EVENT", "name=cell_low");
+        buzzer.play(BuzzerSound::LOW_BATTERY);
+    }
+    if (charger.consumeCellCriticalEvent()) {
+        // A cell this low is minutes from the protection IC cutting
+        // everything at once -- display, WiFi, the lot. Stopping here,
+        // while the firmware still can, leaves the robot parked and
+        // still talking instead of dead mid-manoeuvre. Same SAFE as a
+        // heartbeat timeout: only an explicit resume re-arms it.
+        state = RoverState::SAFE;
+        drive.stop();
+        protocol.send("EVENT", "name=cell_critical");
+    }
+    if (charger.consumeOvervoltageEvent()) {
+        protocol.send("EVENT", "name=cell_overvoltage charging=inhibited");
+    }
+    if (charger.consumeCellsImplausibleEvent()) {
+        // Cell readings that stopped adding up to the pack voltage:
+        // broken balance wire, or the unverified ADC scale assumption
+        // (PowerMath.h). Cell-level protections stand down until they
+        // agree again -- said out loud, never silently.
+        protocol.send("EVENT", "name=cells_implausible");
+    }
+    uint8_t chargerFault = 0;
+    const char* thermistor = "";
+    if (charger.consumeFaultEvent(&chargerFault, &thermistor)) {
+        char eventFields[64];
+        snprintf(eventFields, sizeof(eventFields), "name=charger_fault fault=0x%02X ts=%s",
+                 chargerFault, thermistor);
+        protocol.send("EVENT", eventFields);
+    }
+
+    // DRV8833 nFAULT (over-current, over-temperature, under-voltage).
+    // The driver protects itself and recovers on its own; this only
+    // makes it visible -- "the motors stopped for a moment" otherwise
+    // looks exactly like a PID or encoder problem, a confusion this
+    // project has paid for before. Polled, not interrupt-driven: the
+    // expander's INT pin has no GPIO left to land on.
+    static bool motorFaultActive = false;
+    unsigned long now = millis();
+    if (now - lastMotorFaultPollMs >= 500) {
+        lastMotorFaultPollMs = now;
+        bool fault = false;
+        if (BoardIo::readMotorFault(&fault)) {
+            if (fault && !motorFaultActive) protocol.send("EVENT", "name=motor_driver_fault");
+            motorFaultActive = fault;
+        }
+    }
+
+    if (ROVER_CHARGER_ENABLED && now - lastChargerTelemetryMs >= ROVER_CHARGER_UPDATE_PERIOD_MS) {
+        lastChargerTelemetryMs = now;
+        // 96: ~86 bytes at full width ("charge=unavailable usb=0
+        // cell_top_mv=65535 cell_bot_mv=65535 cells_ok=0 ts=unknown").
+        char chargerFields[96];
+        charger.buildTelemetryFields(chargerFields, sizeof(chargerFields));
+        protocol.send("STATE", chargerFields);
+    }
 }
 
 // Called by RoverProtocol for every validated incoming frame.
@@ -518,7 +618,12 @@ void onFrame(const RoverFrame& frame) {
             // WARNING: a motor input held high runs that motor at full
             // speed with no ramp. Caller is expected to have the robot
             // propped up -- same precondition as motor_raw.
-            bool allowed = (pin == ROVER_PIN_SERVO_PITCH || pin == ROVER_PIN_SERVO_YAW ||
+            // pin >= 0 first: on the custom PCB ROVER_PIN_SERVO_YAW is -1
+            // (no second servo), and a frame with no pin= field also
+            // defaults to -1 -- without this guard the two would match
+            // and pinMode(-1) would be called.
+            bool allowed = pin >= 0 &&
+                           (pin == ROVER_PIN_SERVO_PITCH || pin == ROVER_PIN_SERVO_YAW ||
                             pin == ROVER_PIN_MOTOR_L_IN1 || pin == ROVER_PIN_MOTOR_L_IN2 ||
                             pin == ROVER_PIN_MOTOR_R_IN1 || pin == ROVER_PIN_MOTOR_R_IN2);
             if (!allowed) {
@@ -583,6 +688,21 @@ void onFrame(const RoverFrame& frame) {
             // tuning the heartbeat thresholds of section 9).
             char fields2[96];
             network.buildStatusFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "charger_status") == 0) {
+            // Bring-up only (custom PCB): the charger's configuration as
+            // read back from the chip, not as this firmware believes it
+            // wrote it -- see ChargerMonitor::buildStatusFields.
+            char fields2[128];
+            charger.buildStatusFields(fields2, sizeof(fields2));
+            protocol.send("STATE", fields2);
+        } else if (strcmp(action, "camera_status") == 0) {
+            // Bring-up only (custom PCB): whether the integrated camera
+            // initialized, whether its stream server is up, and how
+            // many captures failed -- the three things to know before
+            // blaming the Pi for a black video panel.
+            char fields2[96];
+            camera.buildStatusFields(fields2, sizeof(fields2));
             protocol.send("STATE", fields2);
         } else if (strcmp(action, "wifi_forget") == 0) {
             // Clears the stored home-network credentials (keeps the OTA
@@ -660,6 +780,10 @@ void setup() {
     Serial.setRxBufferSize(2048);
     Serial.begin(115200);
     RoverWatchdog::begin();
+    // Before every module that uses a BoardLine (display reset, ToF
+    // XSHUT...): on the PCB this starts the I2C bus and the I/O expander
+    // and puts every slow line in its safe state.
+    BoardIo::begin();
     protocol.onFrame(onFrame);
     // Load the shared secret now, while the transport is still the USB
     // cable: provisioning it (SYSTEM action=wifi_setup) must be
@@ -698,6 +822,9 @@ void setup() {
     sensors.begin();
     estop.begin();
     battery.begin();
+    charger.begin();
+    RoverWatchdog::feed();  // camera init below can take ~0.5 s, more with no sensor
+    camera.begin();
     buzzer.begin();
     // Entirely opt-in (see RoverNetwork.h) -- a no-op with zero radio
     // activity unless WiFi credentials were provisioned through the
@@ -708,7 +835,12 @@ void setup() {
     // OTA arms itself on every successful connection rather than only
     // on one completed during the boot window -- a robot powered on
     // before its router used to stay un-flashable until a power cycle.
-    network.onConnected = []() { ota.arm(); };
+    network.onConnected = []() {
+        ota.arm();
+        // After ota.arm(): OTA starts mDNS under the same name when it
+        // is configured, and the camera only fills in when it is not.
+        camera.onStationConnected();
+    };
     network.begin();
 
     // Radio arbitration: the provisioning portal and standalone
@@ -814,6 +946,11 @@ void loop() {
     sensors.update();
     estop.update();
     battery.update();
+    // After battery: the charger cross-checks its cell readings against
+    // the INA219's pack voltage from this same pass.
+    charger.update(battery.packMv(), battery.hasReading());
+    BoardIo::update();
+    camera.update();
     // Before ota.update(): the supervisor decides whether the link is
     // up this pass, and OTA is only meaningful once it is.
     network.update();
@@ -901,11 +1038,17 @@ void loop() {
         unsigned long batteryNow = millis();
         if (batteryNow - lastBatteryTelemetryMs >= ROVER_BATTERY_UPDATE_PERIOD_MS) {
             lastBatteryTelemetryMs = batteryNow;
-            char batteryFields[16];
+            // 64, not 16: with the PCB's INA219 the frame also carries
+            // battery_mv/battery_ma ("battery=100 battery_mv=8400
+            // battery_ma=-2000" is 41 bytes) -- 16 would have cut it,
+            // the very truncation class this file keeps recording.
+            char batteryFields[64];
             battery.buildTelemetryFields(batteryFields, sizeof(batteryFields));
             protocol.send("STATE", batteryFields);
         }
     }
+
+    reportPowerAndBoardEvents();
 
     // Sensor EVENT/ERROR/STATE are never gated on ACTIVE/SAFE: unlike
     // MOVE/HEAD (physical actuation, must stay off outside ACTIVE),

@@ -1,5 +1,10 @@
 # Câblage ESP32 --- Base provisoire (Wokwi)
 
+> **Carte PCB sur mesure (ESP32-S3)** : brochage complet dans
+> `esp32/include/board_pins_pcb_v1.h` (environnement `rover_pcb_v1`),
+> justifié dans `pcb/PCB_CONNEXIONS.md`. Ce fichier-ci ne décrit que le
+> devkit WROOM.
+
 > **Statut : base de travail, pas une validation matérielle finale.**
 > Le driver moteur (DRV8833) et les moteurs (N20 6V avec encodeur) sont
 > confirmés (voir `PROGRESS.md` 2026-08-25), mais l'affectation précise

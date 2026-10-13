@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 #include "EyeRenderer.h"
+#include "BoardIo.h"
 
 namespace {
 
@@ -77,6 +78,23 @@ void DisplayEngine::begin() {
     // default VSPI MISO pin (GPIO19), which is wired to the yaw servo
     // instead (head_config.h). Matches the approach already proven on
     // the sibling Lumi project.
+    //
+    // On the custom PCB, CS is tied low on the board (ROVER_PIN_DISPLAY_CS
+    // = -1, the panel is the only SPI device) and RST/backlight are I/O
+    // expander lines rather than GPIOs, so the reset pulse the library
+    // would normally give is done here through BoardIo. On the WROOM
+    // both writes are no-ops and the library resets via its RST GPIO as
+    // before. If the expander is not answering, the panel still gets a
+    // software reset (SWRESET is the first command of the ST7789 init
+    // sequence), so a dead expander costs a dark backlight at worst --
+    // which the ERROR io_expander report already explains.
+    if (BoardIo::hasExpander()) {
+        BoardIo::write(BoardLine::DisplayBacklight, true);
+        BoardIo::write(BoardLine::DisplayReset, false);
+        delay(10);
+        BoardIo::write(BoardLine::DisplayReset, true);
+        delay(120);  // ST7789 needs up to 120 ms after reset before commands
+    }
     SPI.begin(ROVER_PIN_DISPLAY_SCLK, -1, ROVER_PIN_DISPLAY_MOSI, ROVER_PIN_DISPLAY_CS);
     // init() takes the panel's native (pre-rotation) size; setRotation()
     // then turns it landscape, which is also what makes tft.width()/

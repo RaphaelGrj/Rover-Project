@@ -2,6 +2,16 @@
 #include "head_config.h"
 
 void ServoJoint::begin(int pin, int channel) {
+    // A negative pin means "this servo is not fitted on this board" (the
+    // custom PCB has a single head servo, ROVER_PIN_SERVO_YAW = -1). The
+    // joint then stays inert: _channel < 0 turns writeAngle()/detach()
+    // into no-ops, so HeadController needs no special case for it, and
+    // no LEDC channel is claimed for a pin that does not exist.
+    if (pin < 0) {
+        _channel = -1;
+        _attached = false;
+        return;
+    }
     _channel = channel;
     ledcSetup(_channel, ROVER_SERVO_PWM_FREQ_HZ, ROVER_SERVO_PWM_RESOLUTION_BITS);
     ledcAttachPin(pin, _channel);

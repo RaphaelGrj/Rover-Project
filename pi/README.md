@@ -188,6 +188,15 @@ Configurer l'URL de l'ESP32-CAM (`--camera-url` ou `camera_url` dans
 python -m rover_core.main --port /dev/ttyUSB0 --camera-url http://rovercam.local:81/stream
 ```
 
+**Avec la carte PCB sur mesure** (`pcb/PCB_CONNEXIONS.md`), il n'y a
+plus d'ESP32-CAM : la caméra est branchée sur l'ESP32-S3 du robot, qui
+sert lui-même le flux, au même port et au même chemin. Seul l'hôte
+change :
+
+```bash
+python -m rover_core.main --camera-url http://rover-esp32.local:81/stream
+```
+
 Sans `camera_url` configuré, ou si l'ESP32-CAM est injoignable au
 moment d'une requête, `/video` répond `503 camera unavailable` --- la
 page de contrôle affiche "Caméra indisponible" dans ce cas plutôt

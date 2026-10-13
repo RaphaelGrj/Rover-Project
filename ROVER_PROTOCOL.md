@@ -67,7 +67,7 @@ l'espace final ni le `*CS` lui-même.
 Exemple :
 
 ```
-MOVE velocity=0.0150 rotation=-0.1000 *39
+MOVE velocity=0.0150 rotation=-0.1000 *3A
 ```
 
 Contenu utilisé pour le checksum : `MOVE velocity=0.0150 rotation=-0.1000`.
@@ -101,7 +101,7 @@ AUTH           Raspberry Pi → ESP32
 
 | Type        | Champs                          | Exemple                                  |
 |-------------|----------------------------------|-------------------------------------------|
-| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *39` |
+| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *3A` |
 
 ⚠️ **Résolution des nombres** : `velocity` et `rotation` sont émis avec
 **quatre décimales**, et ce n'est pas de la coquetterie. La plage de vitesse
@@ -113,12 +113,12 @@ simplement pas. Même chose sur `left_speed`/`right_speed`, où `0.00`
 s'affichait pour une roue qui tournait bel et bien. **Un format doit avoir
 plus de résolution que la plage qu'il transporte** ; deux décimales n'ont
 jamais suffi que parce que le plafond était dix fois trop haut.
-| `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *3A`               |
-| `FACE`      | `emotion`                        | `FACE emotion=happy *2E`                  |
-| `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *11`            |
-| `AUDIO`     | `action`, ...                    | `AUDIO action=play id=1 *0C`              |
-| `LIGHT`     | `state`, ...                     | `LIGHT state=on *0F`                      |
-| `SYSTEM`    | `action` (`ping`, `reset`, ...)  | `SYSTEM action=ping *2A`                  |
+| `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *2A`               |
+| `FACE`      | `emotion`                        | `FACE emotion=happy *17`                  |
+| `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *0D`            |
+| `AUDIO`     | `action`, ...                    | `AUDIO action=play id=1 *70`              |
+| `LIGHT`     | `state`, ...                     | `LIGHT state=on *35`                      |
+| `SYSTEM`    | `action` (`ping`, `reset`, ...)  | `SYSTEM action=ping *16`                  |
 
 Tout champ `seq=<entier>` est optionnel et sert à corréler la commande
 avec un futur `ACK` (voir §7). Les commandes qui ne le fournissent pas
@@ -146,6 +146,8 @@ ne reçoivent pas d'ACK.
 | `head_origin` / `head_status` | `head_origin` fige les angles servo courants comme position de référence de la tête et les persiste en NVS ; tout angle logique est ensuite mesuré depuis là, ce qui rend un remontage de palonnier rattrapable sans reflasher. `head_status` renvoie `head_enabled=`, `head_a_att=`, `head_b_att=`, `head_a_deg=`, `head_b_deg=`, `head_org_a=`, `head_org_b=` |
 | `servo` | **bring-up uniquement** : `which=a\|b` pilote un servo en relâchant l'autre, `which=ab a= b=` les deux indépendamment, `which=pair angle=` les deux depuis l'origine, `which=off` relâche tout (aucune impulsion, aucun couple) |
 | `tof_status` / `tof_rescan` | diagnostic des deux VL53L0X : `tof_pre29=`/`tof_pre30=` (qui répondait avant la séquence), `tof_areset=` (remise à l'adresse d'usine), `tof_post29=`, `tof_lbegin=`/`tof_rbegin=` (init de chaque côté). `tof_rescan` rejoue la séquence d'abord --- utile après avoir rebranché un capteur, sans redémarrer. Les quatre causes possibles d'un `distance_left=9999` sont indiscernables autrement |
+| `charger_status` | **carte PCB uniquement, bring-up** : la configuration du chargeur BQ25887 **relue dans la puce** (pas celle que le firmware croit avoir écrite) : `vreg_mv=` (tension de fin de charge par cellule), `ichg_ma=` (courant de charge), `iindpm_ma=` (limite d'entrée USB), `inhibit=` (charge bloquée après une surtension cellule, jusqu'au reboot), `fault=`, `chg_ma=` / `vbus_mv=` (mesures du chargeur), `chg_cfg=` (nombre d'applications de la config : au-delà de 1, la puce s'est réinitialisée dans le dos du firmware). Répond `chg_ok=0 chg_wrong_part=` si la puce est absente ou n'est pas un BQ25887 |
+| `camera_status` | **carte PCB uniquement** : `camera_ready=` (capteur initialisé), `cam_server=` (serveur de flux démarré sur le port 81), `cam_streaming=` (un client regarde), `cam_psram=`, `cam_fails=` (captures ratées depuis le boot). Les trois choses à savoir avant d'accuser le Pi d'un panneau vidéo noir. Sur les autres cartes : `camera_ready=0 cam_fitted=0` |
 | `net_status` | répond `STATE net=...` : santé du lien WiFi vue du robot --- `up` avec `ip=`, `rssi=` et `drops=` (nombre de coupures depuis le boot), `down` avec `drops=`, `suspended` (radio prêtée au portail ou au pilotage autonome) ou `unconfigured`. C'est l'instrument de mesure du lien avant le réglage des seuils de heartbeat (§6.2, étape 2) |
 
 ------------------------------------------------------------------------
@@ -200,7 +202,7 @@ serait l'incrément suivant.
 ## 6. HEARTBEAT (Pi → ESP32)
 
 ```
-HEARTBEAT *00\n
+HEARTBEAT *58\n
 ```
 
 - Envoyé périodiquement par le Pi, recommandé toutes les **150 ms**
@@ -232,13 +234,15 @@ HEARTBEAT *00\n
 message ou groupés) :
 
 ```
-STATE battery=82 *1F
-STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *0A
-STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *5C
-STATE distance_left=420 distance_right=380 *2C
-STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
-STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
-STATE state=SAFE estop=0 max_speed=0.030 *33
+STATE battery=82 *2D
+STATE battery=82 battery_mv=7980 battery_ma=640 *0E
+STATE charge=fast usb=1 cell_top_mv=4012 cell_bot_mv=4010 cells_ok=1 ts=normal *03
+STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *51
+STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *2A
+STATE distance_left=420 distance_right=380 *21
+STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *3D
+STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *3F
+STATE state=SAFE estop=0 max_speed=0.030 *00
 ```
 
 `state=` / `estop=` : l'état de la machine à états de l'ESP32 (§9) et
@@ -284,17 +288,64 @@ dit de l'ignorer ».
 signifie "rien détecté dans la portée" (le capteur répond mais ne voit
 pas d'obstacle) -- voir `esp32/lib/sensors/DistanceSensor.cpp`.
 
+`battery_mv` / `battery_ma` (carte PCB, mesurés par l'INA219) : tension
+du pack et courant, **positif en décharge, négatif en charge**. Absents
+sur le WROOM, qui n'a qu'un pont diviseur (désactivé à ce jour).
+
+`charge` / `usb` / `cell_*` / `cells_ok` / `ts` (carte PCB, chargeur
+BQ25887, toutes les 2 s) : état de charge (`none`, `trickle`,
+`precharge`, `fast`, `taper`, `topoff`, `done`, ou `unavailable` si la
+puce ne répond pas), présence d'une alimentation USB valide, tension de
+chaque cellule en mV, et thermistance (`normal`, `warm`, `cool`, `cold`,
+`hot`). **`cells_ok=0` veut dire « ne pas croire les `cell_*_mv` »** :
+les deux cellules n'additionnent pas la tension du pack mesurée par
+l'INA219 (fil de point milieu cassé, ou échelle ADC du chargeur
+différente de celle supposée --- non vérifiée sur datasheet, voir
+`esp32/lib/power_math/PowerMath.h`). Les protections par cellule du
+firmware sont alors suspendues ; la puce de protection matérielle, elle,
+reste active dans tous les cas.
+
 ### 7.2 EVENT
 
 Émis ponctuellement lors d'un changement d'état matériel :
 
 ```
-EVENT name=obstacle_detected *0B
-EVENT name=robot_lifted *07
-EVENT name=head_limit *05
-EVENT name=low_battery *0D
+EVENT name=obstacle_detected *0E
+EVENT name=robot_lifted *7B
+EVENT name=head_limit *74
+EVENT name=low_battery *10
 EVENT name=estop_pressed *12
 ```
+
+Événements propres à la carte PCB (alimentation et santé matérielle) :
+
+```
+EVENT name=cell_low *7B
+EVENT name=cell_critical *04
+EVENT name=cell_overvoltage charging=inhibited *19
+EVENT name=cells_implausible *01
+EVENT name=charger_fault fault=0x40 ts=hot *59
+EVENT name=motor_driver_fault *49
+```
+
+- `cell_low` : une cellule sous 3,30 V (hystérésis, repassage au-dessus
+  de 3,45 V pour réarmer).
+- `cell_critical` : une cellule sous 3,10 V **hors charge** --- le robot
+  passe en `SAFE` et coupe les moteurs **avant** que la protection
+  matérielle (~2,8 V) ne coupe tout d'un coup (écran, WiFi compris).
+  Comme pour un timeout heartbeat, seul un `resume` explicite réarme.
+- `cell_overvoltage` : une cellule au-dessus de 4,25 V --- le firmware
+  **bloque la charge jusqu'au prochain redémarrage** (couche logicielle
+  sous la protection matérielle à ~4,28 V).
+- `cells_implausible` : les mesures de cellules ont cessé d'être
+  cohérentes (voir `cells_ok` ci-dessus).
+- `charger_fault` : nouvel octet de défaut du chargeur non nul
+  (`fault=`, bits : surtension VBUS 0x80, arrêt thermique 0x40, minuterie
+  de charge 0x10) ou thermistance hors plage (`ts=`).
+- `motor_driver_fault` : la ligne nFAULT du DRV8833 est passée active
+  (surintensité, surchauffe ou sous-tension). Le driver se protège et
+  repart seul ; l'événement sert à ne pas confondre ce « hoquet » avec
+  un problème de PID ou d'encodeur.
 
 `estop_pressed` : bouton d'arrêt d'urgence physique enfoncé (voir
 `esp32/lib/safety/EStop.h`) -- force l'état `SAFE` indépendamment du
@@ -321,14 +372,16 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `encoder_storm`        | un encodeur émettait des fronts à un rythme physiquement impossible (entrée qui flotte) et a **désarmé sa propre interruption** pour ne plus affamer la `loop()` qui pilote les moteurs. Champ `wheel=left\|right`. Ne se réarme qu'avec `SYSTEM action=reset_ticks`, une fois le câblage repris |
 
 ```
-ERROR code=motor_overcurrent *3D
+ERROR code=motor_overcurrent *1B
 ERROR code=sensor_timeout sensor=tof_left *48
 ```
 
 `sensor=` est un champ optionnel supplémentaire sur `sensor_timeout`
 (même esprit que `reason=` sur un `ACK` d'échec, §7.4) pour indiquer
 lequel des capteurs Phase 4 est en cause : `tof_left`, `tof_right`,
-`imu` ou `bme688`. Émis une seule fois par transition OK→échec (y
+`imu` ou `bme688` --- et, sur la carte PCB, `io_expander` (TCA9554 :
+XSHUT, reset écran, LED...), `battery` (INA219), `charger` (BQ25887,
+absent ou pas la bonne puce) ou `camera`. Émis une seule fois par transition OK→échec (y
 compris un échec dès le boot, pas seulement une perte en cours de
 route), jamais en boucle à chaque nouvelle tentative de reconnexion.
 
@@ -337,8 +390,8 @@ route), jamais en boucle à chaque nouvelle tentative de reconnexion.
 Réponse à une commande porteuse d'un `seq` :
 
 ```
-ACK seq=42 status=ok *18
-ACK seq=42 status=error reason=head_limit *2F
+ACK seq=42 status=ok *38
+ACK seq=42 status=error reason=head_limit *7F
 ```
 
 ------------------------------------------------------------------------
@@ -393,6 +446,12 @@ le format des messages.
 
 Carte de référence actuelle : **WROOM**, confirmée le 2026-09-15 (un S3
 est disponible mais gardé pour une évolution ultérieure).
+
+Carte PCB sur mesure (`pcb/PCB_CONNEXIONS.md`) : se présente avec
+`board=PCB_V1`. Mêmes trames, plus les champs, événements et actions
+marqués « carte PCB » ci-dessus. Sur cette carte, le flux caméra est
+servi par le robot lui-même : `http://rover-esp32.local:81/stream` (au
+lieu de l'ancien `http://rovercam.local:81/stream` de l'ESP32-CAM).
 
 ------------------------------------------------------------------------
 
