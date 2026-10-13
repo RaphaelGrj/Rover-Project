@@ -5,8 +5,10 @@
 > GPIO, pièges connus, historique des révisions), voir `esp32/WIRING.md`
 > et `esp32-cam/WIRING.md`.
 >
-> Toutes les broches ci-dessous ciblent la carte **ESP32 WROOM** (devkit
-> 30 broches), la carte physique actuelle du robot.
+> La **partie 1** (ci-dessous) cible la carte **ESP32 WROOM** (devkit
+> 30 broches), la carte physique actuelle du robot. La **partie 2** (en
+> fin de fichier) concerne la **carte PCB sur mesure** : ce qu'on y
+> branche, et sa création pas à pas dans KiCad.
 
 ------------------------------------------------------------------------
 
@@ -322,3 +324,373 @@ complet et à jour :
 - GPIO0 : **n'existe pas sur le connecteur** de ce devkit 30 broches
   (constaté sur la carte le 2026-09-20). Inutile de la chercher : si un
   plan de câblage la mentionne, c'est le plan qui est faux.
+
+------------------------------------------------------------------------
+------------------------------------------------------------------------
+
+# PARTIE 2 --- La carte PCB Rover (ESP32-S3)
+
+> ⚠ **La carte n'existe pas encore** (conception du 2026-10-13). Cette
+> partie dit ce qu'il faudra brancher une fois reçue, puis comment la
+> dessiner dans KiCad. Les tableaux seront revalidés à la réception
+> (règle `CLAUDE.md`).
+>
+> Références : `pcb/PCB_CONNEXIONS.md` (détail technique de chaque
+> fil), `pcb/KICAD_GUIDE.md` (KiCad en détail),
+> `esp32/include/board_pins_pcb_v1.h` (brochage côté firmware).
+
+Avec cette carte, **plus aucun fil Dupont** : tout est soudé sur la
+carte, il ne reste que des câbles à clipser.
+
+------------------------------------------------------------------------
+
+## A. Ce qu'on branche sur la carte (une fois reçue)
+
+### Vue d'ensemble
+
+```text
+                  ┌──────────────── bord avant ───────────────┐
+   ToF G [PH6] ── │                                              │ ── [PH6] ToF D
+                  │  (antenne ESP32-S3 : rien autour, ni dessous)  │
+   HP G  [PH2] ── │                                              │ ── [PH2] HP D
+                  │  [FPC caméra]   [PH8 écran]   [servo 3 br.]    │
+ Moteur G [PH6] ─ │                                              │ ─ [PH6] Moteur D
+                  │  [VH3 batterie] [PH2 CTN]  [PH2 E-stop]        │
+                  │  [interrupteur] [USB-C]  BOOT  RESET  LEDs      │
+                  └──────────────── bord arrière ─────────────────┘
+```
+
+(Disposition indicative : la vraie dépendra du contour tiré de la CAO.)
+
+### Tableau des connecteurs
+
+| Connecteur sur la carte | On y branche | Sens / piège |
+|---|---|---|
+| **BATT** (JST-VH 3 broches) | Les 2 cellules 18650 via leur câble : noir = B−, blanc = milieu, rouge = B+ | Détrompé. **Vérifier au multimètre le câble avant la 1re fois** : B+ à ~8 V par rapport à B−, milieu à ~4 V |
+| **NTC** (JST-PH 2) | La sonde de température collée entre les 2 cellules | Pas de sens |
+| **Interrupteur** (sur la carte) | --- | OFF = robot éteint, **la charge USB marche quand même** |
+| **USB-C** | Câble USB vers le PC (flasher, console) ou chargeur USB-C (recharger) | Un chargeur ≥ 2 A |
+| **MOT G** / **MOT D** (JST-PH 6) | Câble 6 fils de chaque moteur N20 | Ordre : M1, M2, VCC, GND, C1, C2 (comme `esp32/WIRING.md`). G et D marqués sur la carte |
+| **HP G** / **HP D** (JST-PH 2) | Haut-parleur gauche / droit (4 Ω, 3 W) | Garder la même orientation des 2 côtés |
+| **CAM** (FPC 24 broches) | La nappe de la caméra OV2640 | Ouvrir le volet, glisser la nappe **contacts dorés du bon côté** (marqué sur la carte), refermer |
+| **ÉCRAN** (JST-PH 8) | Câble vers l'écran ST7789 dans la tête | Ordre identique à la barrette de l'écran : GND, VCC, SCL, SDA, RES, DC, CS, BLK |
+| **SERVO** (3 broches 2,54 mm) | Servo de tête | Marron sur **GND** (marqué −), orange vers l'intérieur |
+| **ToF G** / **ToF D** (JST-PH 6) | Capteurs de distance VL53L0X | Ordre de leur barrette : VIN, GND, SCL, SDA, GPIO1, XSHUT. **Ne pas inverser G et D** |
+| **E-STOP** (JST-PH 2) | Bouton d'arrêt d'urgence | Pas de sens. Bouton appuyé = moteurs coupés **électriquement** |
+| **QWIIC** (JST-SH 4, option) | Futur capteur I2C | Câble Qwiic/STEMMA QT standard |
+
+### Boutons et voyants
+
+| Élément | Rôle |
+|---|---|
+| **RESET** | Redémarre l'ESP32 |
+| **BOOT** | Maintenu pendant RESET = mode flash forcé (seulement si l'USB ne répond plus) |
+| LED **verte** | Carte alimentée (3,3 V présent) |
+| LED **orange** | Batterie en charge |
+| LED **d'état** | Allumée = moteurs armés (état `ACTIVE`) |
+
+### Première mise sous tension
+
+Suivre `pcb/KICAD_GUIDE.md` §9 (alimentation de labo, courant limité,
+« fausse batterie »). Résumé de ce qu'on doit voir ensuite :
+
+1. Brancher l'USB-C au PC → la carte apparaît (`/dev/ttyACM0`).
+2. Flasher : `pio run -e rover_pcb_v1 -t upload` (dans `esp32/`).
+3. `SYSTEM action=i2c_scan` → **0x20, 0x40, 0x6A, 0x6B, 0x76** (+ 0x29
+   et 0x30 avec les ToF branchés).
+4. Batterie branchée : `STATE ... cells_ok=1` avec deux tensions de
+   cellules réalistes (3,0 à 4,2 V). **Si `cells_ok=0`, ne pas laisser
+   charger sans surveillance** et me le signaler.
+5. `SYSTEM action=charger_status` et `SYSTEM action=camera_status` →
+   voir `ROVER_PROTOCOL.md` §5.1.
+
+------------------------------------------------------------------------
+
+## B. Créer le PCB dans KiCad, étape par étape
+
+> Chaque étape se termine par une **case à cocher**. Ne passe à la
+> suivante que quand la précédente est cochée. Les noms entre crochets
+> `[ ]` sont les touches/menus de KiCad (version 9 ou plus, en
+> français).
+>
+> 💡 À chaque fin d'étape : `git add pcb/ && git commit -m "..." && git push`.
+> Je peux relire le projet à n'importe quel moment.
+
+### Étape 0 --- Préparer (1 soirée)
+
+1. Installer KiCad (commande dans `pcb/KICAD_GUIDE.md` §1).
+2. KiCad → **[Outils → Gestionnaire de plugins et contenus]** →
+   installer **JLCPCB Tools**.
+3. `pip install --user easyeda2kicad`.
+4. Sur **jlcpcb.com/parts**, chercher chaque puce et noter son numéro
+   **LCSC** (`Cxxxxx`), en préférant les pièces « Basic » ou en stock :
+
+   | À chercher | Remarque |
+   |---|---|
+   | ESP32-S3-WROOM-1-**N16R2** | Pas N16R8 ! |
+   | DRV8833PWP | HTSSOP-16 avec pad |
+   | MAX98357AETE+T | ×2 |
+   | ICS-43434 | micro |
+   | LSM6DS3TR-C | IMU |
+   | BME688 | env. |
+   | INA219 (AIDCNR ou BIDR) | mesure batterie |
+   | TCA9554PWR | expandeur |
+   | BQ25887RGER | chargeur |
+   | S-8252 (suffixe : surcharge ~4,25-4,30 V, décharge ~2,8-3,0 V) | protection |
+   | Double N-MOSFET ≥ 8 A, ≤ 15 mΩ | protection |
+   | P-MOSFET ≥ 6 A, Vgs ±20 V | interrupteur |
+   | Buck 3 A 4,5-17 V (ex. TPS563201) | ×2 (5 V et 3,3 V) |
+   | XC6206P282 / XC6206P122 | LDO caméra |
+   | USBLC6-2SC6 | protection USB |
+   | Connecteur FPC 24 broches 0,5 mm | caméra |
+
+5. Pour chaque pièce absente de KiCad :
+   `easyeda2kicad --full --lcsc_id=Cxxxxx --output ~/kicad-libs/rover`
+6. Télécharger la **datasheet** de chaque puce (dans `pcb/datasheets/`).
+
+- [ ] Liste LCSC complète, datasheets téléchargées
+
+### Étape 1 --- Créer le projet et ses feuilles
+
+1. **[Fichier → Nouveau projet]** → `Rover-Project/pcb/rover-main/`.
+2. **[Préférences → Gérer les bibliothèques de symboles]** puis
+   **d'empreintes** → onglet **Bibliothèques du projet** → ajouter
+   `~/kicad-libs/rover`.
+3. Ouvrir le schéma. Avec **[S]** (feuille hiérarchique), créer 7
+   feuilles : `alimentation`, `mcu`, `camera`, `moteurs`, `audio`,
+   `capteurs`, `ihm`.
+4. **Règle d'or des noms** : un même nom de **label global**
+   **[Ctrl+L]** = un même fil. Utiliser **exactement** ces noms :
+
+   | Labels globaux à créer |
+   |---|
+   | `SDA`, `SCL` (bus capteurs) |
+   | `CAM_SIOD`, `CAM_SIOC`, `CAM_XCLK`, `CAM_PCLK`, `CAM_VSYNC`, `CAM_HREF`, `CAM_Y2` … `CAM_Y9` |
+   | `MOT_L_IN1`, `MOT_L_IN2`, `MOT_R_IN1`, `MOT_R_IN2`, `ENC_L_A`, `ENC_L_B`, `ENC_R_A`, `ENC_R_B` |
+   | `I2S_BCLK`, `I2S_WS`, `I2S_DOUT`, `I2S_DIN` |
+   | `LCD_SCLK`, `LCD_MOSI`, `LCD_DC`, `LCD_RST`, `LCD_BLK` |
+   | `SERVO`, `ESTOP_N`, `TOF_R_XSHUT`, `AMP_EN`, `CAM_PWDN`, `DRV_FAULT_N`, `LED_STATUS` |
+   | `USB_DP`, `USB_DN`, `VBUS` |
+   | Alimentations (symboles **[P]**) : `+3V3`, `+5V`, `VBAT_SYS`, `VPACK`, `GND`, `+2V8`, `+1V2` |
+
+- [ ] 7 feuilles créées, bibliothèques ajoutées
+
+### Étape 2 --- Dessiner chaque feuille
+
+Méthode pour chaque puce : **[A]** placer le symbole → poser le
+**schéma d'application de sa datasheet** (condensateurs, résistances)
+→ relier avec **[W]** → poser les labels globaux → **[Q]** sur chaque
+broche volontairement libre.
+
+#### Feuille `mcu` (ESP32-S3, USB-C, expandeur)
+
+| Broche ESP32-S3 | Label | | Broche ESP32-S3 | Label |
+|---|---|---|---|---|
+| IO0 | bouton BOOT + 10 kΩ → +3V3 | | IO21 | `ENC_L_B` |
+| IO1 | `SDA` | | IO35 | `ENC_R_A` |
+| IO2 | `SCL` | | IO36 | `ENC_R_B` |
+| IO3 | `ESTOP_N` | | IO37 | `SERVO` |
+| IO4 | `CAM_SIOD` | | IO38 | `I2S_BCLK` |
+| IO5 | `CAM_SIOC` | | IO39 | `I2S_WS` |
+| IO6 | `CAM_VSYNC` | | IO40 | `I2S_DOUT` |
+| IO7 | `CAM_HREF` | | IO41 | `I2S_DIN` |
+| IO8 | `CAM_Y4` | | IO42 | `LCD_SCLK` |
+| IO9 | `CAM_Y3` | | TXD0 (IO43) | `LCD_MOSI` |
+| IO10 | `CAM_Y5` | | RXD0 (IO44) | `LCD_DC` |
+| IO11 | `CAM_Y2` | | IO45 | `MOT_R_IN1` |
+| IO12 | `CAM_Y6` | | IO46 | `MOT_R_IN2` |
+| IO13 | `CAM_PCLK` | | IO47 | `MOT_L_IN1` |
+| IO14 | `ENC_L_A` | | IO48 | `MOT_L_IN2` |
+| IO15 | `CAM_XCLK` | | EN | 10 kΩ → +3V3, 1 µF → GND, bouton RESET → GND |
+| IO16 | `CAM_Y9` | | 3V3 | +3V3 + 10 µF + 100 nF |
+| IO17 | `CAM_Y8` | | GND + pad | GND |
+| IO18 | `CAM_Y7` | | | |
+| IO19 | `USB_DN` | | | |
+| IO20 | `USB_DP` | | | |
+
+- USB-C : `CC1` et `CC2` → **5,1 kΩ chacune vers GND** ; A6+B6 →
+  `USB_DP`, A7+B7 → `USB_DN` (via USBLC6) ; VBUS → `VBUS`.
+- TCA9554 : A0/A1/A2 → GND, SDA/SCL → `SDA`/`SCL`, P0 `TOF_R_XSHUT`,
+  P1 `AMP_EN`, P2 `CAM_PWDN` (+10 kΩ → GND), P3 `LCD_RST` (+10 kΩ →
+  +3V3), P4 `LCD_BLK` (+10 kΩ → +3V3), P5 `DRV_FAULT_N`, P6 →
+  1 kΩ → LED → GND, P7 → point de test.
+- Pull-ups `SDA`/`SCL` : 4,7 kΩ → +3V3.
+
+- [ ] Feuille `mcu` faite (cocher chaque ligne du tableau)
+
+#### Feuille `alimentation`
+
+Dans cet ordre, en suivant `PCB_CONNEXIONS.md` §5.1 :
+1. Connecteur **BATT** VH3 (B−, MID, B+) ; MID → PTC 0,75 A → `MID` +
+   1 MΩ → B−.
+2. **S-8252** + double N-MOSFET entre B− et `GND` (schéma de la
+   datasheet).
+3. B+ → **PTC 5 A** → **shunt 0,05 Ω** → `VPACK` ; **INA219** aux bornes
+   du shunt (`SDA`/`SCL`, A0/A1 → GND).
+4. **BQ25887** : VBUS ← `VBUS`, BAT → `VPACK`, MID → `MID`,
+   `SDA`/`SCL`, STAT → LED orange, CD → GND, ILIM → résistance (~2 A),
+   TS → pont + connecteur **NTC**.
+5. **Interrupteur** : P-MOSFET `VPACK` → `VBAT_SYS`, grille 100 kΩ →
+   `VPACK`, interrupteur glissière grille → 10 kΩ → GND.
+6. **Buck 5 V** : `VBAT_SYS` → `+5V` (pont 0 Ω en sortie).
+7. **Buck 3,3 V** : (`VBAT_SYS` → SS34) + (`VBUS` → SS34) → entrée ;
+   sortie `+3V3` (pont 0 Ω en sortie). LED verte.
+8. LDO **2,8 V** et **1,2 V** depuis `+3V3` → `+2V8`, `+1V2`.
+9. **[P]** → `PWR_FLAG` sur `VPACK`, `VBAT_SYS`, `+5V`, `+3V3`, `GND`.
+
+- [ ] Feuille `alimentation` faite
+
+#### Feuille `moteurs`
+
+- DRV8833 : AIN1/AIN2 ← `MOT_L_IN1`/`MOT_L_IN2`, BIN1/BIN2 ←
+  `MOT_R_IN1`/`MOT_R_IN2`, VM ← `VBAT_SYS` (+470 µF +10 µF), VINT
+  2,2 µF, VCP 10 nF → VM, AISEN/BISEN → 0,2 Ω → GND, nSLEEP ←
+  `ESTOP_N`, nFAULT → `DRV_FAULT_N` (+10 kΩ → +3V3).
+- `ESTOP_N` : 10 kΩ → +3V3, 100 nF → GND, connecteur **E-STOP** vers GND.
+- Connecteurs **MOT G/D** : 1 AOUT1/BOUT1, 2 AOUT2/BOUT2, 3 +3V3, 4 GND,
+  5 `ENC_L_A`/`ENC_R_A`, 6 `ENC_L_B`/`ENC_R_B` ; 10 kΩ → +3V3 sur les 4
+  `ENC_*`.
+
+- [ ] Feuille `moteurs` faite
+
+#### Feuille `audio`
+
+- 2 × MAX98357A : VDD ← `+5V`, BCLK ← `I2S_BCLK`, LRCLK ← `I2S_WS`, DIN
+  ← `I2S_DOUT`. SD_MODE : **gauche 10 kΩ**, **droit 220 kΩ** depuis
+  `AMP_EN`. OUTP/OUTN → **HP G** / **HP D**.
+- ICS-43434 : VDD +3V3, SCK `I2S_BCLK`, WS `I2S_WS`, SD → `I2S_DIN`
+  (+100 kΩ → GND), L/R → GND.
+
+- [ ] Feuille `audio` faite
+
+#### Feuille `capteurs`
+
+- LSM6DS3TR-C : `SDA`/`SCL`, **SA0 → +3V3** (adresse 0x6B), CS → +3V3.
+- BME688 : `SDA`/`SCL`, SDO → GND (0x76), CSB → +3V3.
+- **ToF G** (PH6) : 3V3, GND, `SCL`, `SDA`, libre, **XSHUT → +3V3**.
+- **ToF D** (PH6) : idem, **XSHUT → `TOF_R_XSHUT`**.
+- **QWIIC** (SH4) : GND, +3V3, `SDA`, `SCL`.
+
+- [ ] Feuille `capteurs` faite
+
+#### Feuilles `camera` et `ihm`
+
+- FPC 24 broches : selon le tableau de `PCB_CONNEXIONS.md` §5.7
+  (⚠ à vérifier sur le schéma ESP32-S3-EYE). RESET → 10 kΩ → +3V3 +
+  100 nF → GND ; PWDN → `CAM_PWDN` ; 4,7 kΩ → +3V3 sur
+  `CAM_SIOD`/`CAM_SIOC`.
+- **ÉCRAN** (PH8) : GND, +3V3, `LCD_SCLK`, `LCD_MOSI`, `LCD_RST`,
+  `LCD_DC`, **GND (CS)**, `LCD_BLK`.
+- **SERVO** : GND, `+5V`, `SERVO` (+470 µF sur +5V).
+- Points de test : `B-`, `MID`, `VPACK`, `VBAT_SYS`, `VBUS`, `+5V`,
+  `+3V3`, `+2V8`, `+1V2`, `GND`, `SDA`, `SCL`, `ESTOP_N`.
+
+- [ ] Feuilles `camera` et `ihm` faites
+
+### Étape 3 --- Vérifier le schéma
+
+1. **[Inspecter → Contrôle des règles électriques]** → **0 erreur**.
+2. Erreurs fréquentes :
+
+   | Message | Solution |
+   |---|---|
+   | « Entrée d'alimentation non pilotée » | Ajouter un `PWR_FLAG` sur ce rail |
+   | « Broche non connectée » | Relier, ou **[Q]** si c'est voulu |
+   | « Label global présent une seule fois » | Faute de frappe dans le nom (ex. `SDA` / `SDA1`) |
+
+3. Reprendre le tableau GPIO de la feuille `mcu` : cliquer chaque label,
+   il doit se surligner sur la bonne feuille.
+4. **Pousser sur git et me demander une relecture du schéma.**
+
+- [ ] ERC à 0, relecture faite
+
+### Étape 4 --- Empreintes
+
+**[Outils → Assigner les empreintes]** :
+
+| Composant | Empreinte |
+|---|---|
+| R, C | `R_0603_1608Metric`, `C_0603_1608Metric` |
+| Shunt 0,05 Ω | `R_2512_6332Metric` |
+| JST-PH | `Connector_JST:JST_PH_S?B-PH-K_1x0?_P2.00mm_Horizontal` (coudé) |
+| JST-VH 3 | `Connector_JST:JST_VH_S3P-VH_1x03_P3.96mm_Horizontal` |
+| JST-SH 4 | `Connector_JST:JST_SH_SM04B-SRSS-TB_1x04-1MP_P1.00mm_Horizontal` |
+| Servo | `PinHeader_1x03_P2.54mm_Vertical` |
+| Le reste | celle fournie par easyeda2kicad avec la pièce LCSC |
+
+⚠ Pour chaque connecteur : **mesurer la vraie pièce au pied à
+coulisse** et comparer à l'empreinte.
+
+- [ ] Toutes les empreintes assignées
+
+### Étape 5 --- Placer les composants
+
+1. Ouvrir le PCB, **[Fichier → Configuration de la carte]** : 4
+   couches, puis les règles JLCPCB (`KICAD_GUIDE.md` §6.1).
+2. Dessiner le contour sur `Edge.Cuts` (ou importer le DXF de la CAO),
+   ajouter les trous M3.
+3. **[F8]** (Mettre à jour depuis le schéma) : tout arrive en tas.
+4. Placer **dans cet ordre** (touche **[M]** déplacer, **[R]** tourner) :
+   1. connecteurs au bord, là où arrivent les câbles ;
+   2. ESP32-S3 au bord, antenne vers l'extérieur ;
+   3. alimentation + chargeur dans un coin ;
+   4. DRV8833 entre l'arrivée batterie et les connecteurs moteurs ;
+   5. amplis à côté de leur haut-parleur ;
+   6. BME688 dans un coin isolé (+ fente), IMU au centre, micro loin
+      des moteurs ;
+   7. chaque condensateur de découplage **collé** à sa puce.
+5. **[Alt+3]** vue 3D : tout est-il à l'endroit ?
+
+- [ ] Placement fini, vue 3D vérifiée
+
+### Étape 6 --- Router
+
+Touche **[X]** pour router, **[V]** pour changer de couche (pose un via).
+
+| Ordre | Quoi | Largeur |
+|---|---|---|
+| 1 | B+/B−, `VPACK`, `VBAT_SYS`, sorties moteurs | ≥ 1,5 mm (ou zones) |
+| 2 | `+5V`, sorties HP | ≥ 0,8 mm |
+| 3 | `+3V3` | ≥ 0,5 mm |
+| 4 | USB (**[Router → Paire différentielle]**, 90 Ω) | calculateur JLCPCB |
+| 5 | Caméra (faisceau, XCLK court) | 0,15-0,2 mm |
+| 6 | Le reste (I2C, I2S, SPI, encodeurs) | 0,2 mm |
+
+Puis : couche **In1.Cu** = zone `GND` pleine (**[Ctrl+Shift+Z]**),
+**In2.Cu** = zones d'alimentation, zones `GND` sur F.Cu et B.Cu,
+**[B]** pour remplir, vias de couture `GND` tous les ~5 mm, **zone
+d'exclusion sous l'antenne** sur toutes les couches.
+
+- [ ] Plus aucun chevelu (lignes fines) visible
+
+### Étape 7 --- Vérifier le PCB
+
+1. **[Inspecter → Contrôle DRC]** → 0 erreur, 0 non routé.
+2. Sérigraphie : nom de chaque connecteur, broche 1, G/D, +/−.
+3. **[Fichier → Exporter → STEP]** → vérifier dans la CAO du châssis.
+4. **[Fichier → Imprimer]** à l'échelle 1:1, poser les vraies pièces
+   dessus (connecteurs, nappe caméra, module ESP32).
+5. **Pousser sur git et me demander une relecture du PCB.**
+
+- [ ] DRC à 0, impression 1:1 OK, relecture faite
+
+### Étape 8 --- Commander
+
+Plugin **JLCPCB Tools** → générer Gerbers + BOM + CPL → les envoyer sur
+jlcpcb.com (4 couches, 1,6 mm, assemblage face du dessus) → **vérifier
+l'orientation de chaque puce** dans l'aperçu → commander 5 cartes dont 2
+assemblées. Détail : `pcb/KICAD_GUIDE.md` §7.
+
+- [ ] Commande passée 🎉
+
+### Si tu bloques
+
+| Problème | Solution |
+|---|---|
+| Le chevelu n'apparaît pas dans le PCB | Schéma pas sauvegardé, ou oubli de **[F8]** |
+| « Empreinte introuvable » à **[F8]** | Bibliothèque `rover` non ajoutée au projet (étape 1.2) |
+| Une zone reste vide | **[B]** pour remplir, vérifier le net de la zone |
+| DRC « espacement » partout | Règles JLCPCB pas importées (étape 5.1) |
+| Un symbole n'a pas la bonne forme de broches | Prendre celui d'easyeda2kicad (le vrai brochage de la pièce LCSC) |
+
+Et à n'importe quelle étape : pousse sur git et demande-moi de regarder.
