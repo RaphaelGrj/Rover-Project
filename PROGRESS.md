@@ -90,6 +90,23 @@
 
 ## État actuel (fil ouvert, mis à jour en continu)
 
+- **🔋 Protection batterie choisie + sommeil profond (2026-10-13)** ---
+  **S-8252AAC-M6T1U** (LCSC C468219) retenue parmi les variantes en
+  stock chez LCSC : surcharge 4,30 V, décharge profonde **2,40 V**
+  (seuils lus sur des extraits indexés de la datasheet, à reconfirmer
+  sur le PDF). 2,4 V est sous la fin de décharge des 18650 (35E 2,65 V).
+  Compensé dans le firmware par `LowBatterySleep` : sommeil profond à
+  3,0 V/cellule, réveil toutes les 15 min, reprise seulement à
+  3,3 V/cellule ou avec l'USB. Décision dans
+  `PowerMath::batteryTooLowToRun`, 4 tests natifs de plus (22 au total).
+  Doc : `PCB_CONNEXIONS.md` §5.1 et §7, `AIDE_CABLAGE.md` étape 0,
+  `ROVER_PROTOCOL.md` (`EVENT name=battery_shutdown`). VL53L0X :
+  confirmé hors carte (modules indépendants en façade sur deux JST-PH 6),
+  désormais écrit noir sur blanc.
+  ⚠ **Limite** : la consommation de la carte en sommeil (« quelques mA »)
+  est une estimation (bucks, LDO, capteurs et DRV8833 restent alimentés).
+  À mesurer à la mise en service : l'interrupteur reste le vrai « off ».
+
 - **✅ PCB sur mesure : conception + firmware MERGÉS dans `main`
   (2026-10-13, [RaphaelGrj/Rover-Project#1](https://github.com/RaphaelGrj/Rover-Project/pull/1),
   merge `7f88758`)** --- rien n'est encore dessiné dans KiCad ni

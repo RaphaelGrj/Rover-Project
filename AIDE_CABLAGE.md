@@ -375,7 +375,7 @@ carte, il ne reste que des câbles à clipser.
 | **CAM** (FPC 24 broches) | La nappe de la caméra OV2640 | Ouvrir le volet, glisser la nappe **contacts dorés du bon côté** (marqué sur la carte), refermer |
 | **ÉCRAN** (JST-PH 8) | Câble vers l'écran ST7789 dans la tête | Ordre identique à la barrette de l'écran : GND, VCC, SCL, SDA, RES, DC, CS, BLK |
 | **SERVO** (3 broches 2,54 mm) | Servo de tête | Marron sur **GND** (marqué −), orange vers l'intérieur |
-| **ToF G** / **ToF D** (JST-PH 6) | Capteurs de distance VL53L0X | Ordre de leur barrette : VIN, GND, SCL, SDA, GPIO1, XSHUT. **Ne pas inverser G et D** |
+| **ToF G** / **ToF D** (JST-PH 6) | Capteurs de distance VL53L0X : **tes modules indépendants**, fixés en façade, pas soudés sur la carte | Ordre de leur barrette : VIN, GND, SCL, SDA, GPIO1, XSHUT. **Ne pas inverser G et D** |
 | **E-STOP** (JST-PH 2) | Bouton d'arrêt d'urgence | Pas de sens. Bouton appuyé = moteurs coupés **électriquement** |
 | **QWIIC** (JST-SH 4, option) | Futur capteur I2C | Câble Qwiic/STEMMA QT standard |
 
@@ -454,7 +454,7 @@ Suivre `pcb/KICAD_GUIDE.md` §9 (alimentation de labo, courant limité,
 
    | Pièce | Référence fabricant | LCSC | | Remarque |
    |---|---|---|---|---|
-   | Protection 2S | S-8252**AAH**-M6T1U | --- | ❓ | La datasheet ABLIC donne pour AAH : surcharge **4,25 V**, décharge profonde **3,0 V**, exactement ce qu'on veut. Mais **pas trouvée sur LCSC**. Variantes présentes sur LCSC : AAA (C5745537), AAC (C468219), AAG (C468221), AAJ (C3681497), ABB (C5904467). Prendre celle dont le tableau de la datasheet donne surcharge 4,25-4,30 V et décharge 2,8-3,0 V. **À me montrer avant de commander** |
+   | Protection 2S | S-8252**AAC**-M6T1U | C468219 | ✅ | **Choisie le 2026-10-13.** Surcharge 4,30 V, décharge profonde 2,40 V (⚠ à reconfirmer sur la datasheet). 2,4 V est un peu bas pour des 18650, mais le firmware s'endort à 3,0 V/cellule bien avant (`PCB_CONNEXIONS.md` §5.1). **Ne pas prendre** AAA/ABB (2,0 V) ni AAJ (réglée LiFePO4) |
    | Double N-MOSFET (protection) | FS8205A | C2830320 | ⚠️ | Classique des BMS (20 V, 6 A, ~25 mΩ). Un peu juste pour les pics (~2,8 A) : chauffe acceptable mais seuil de surintensité à recalculer avec son R<sub>DS(on)</sub> |
    | (alternative) | FDMW2512NZ | C3278415 | ⚠️ | 20 V, 7,2 A, drain commun, mais 34 mΩ à 2,5 V : plus de chute de tension |
    | P-MOSFET (interrupteur) | AO4407A (AOS) | C16072 | ✅ | 30 V, 12 A, SOIC-8. Seconde source UMW : C2841482 |

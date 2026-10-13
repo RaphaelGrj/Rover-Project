@@ -101,6 +101,14 @@ bool write(BoardLine line, bool high) {
 #endif
 }
 
+void prepareForSleep() {
+    write(BoardLine::AmpEnable, false);
+    write(BoardLine::DisplayBacklight, false);
+    write(BoardLine::CameraPowerDown, true);
+    write(BoardLine::TofRightXshut, false);
+    write(BoardLine::StatusLed, false);
+}
+
 bool hasExpander() {
 #if defined(ROVER_BOARD_PCB_V1)
     return true;

@@ -123,6 +123,55 @@ void test_battery_percent_is_clamped_and_linear(void) {
     TEST_ASSERT_EQUAL_UINT8(0, batteryPercentFromMv(7000, 8300, 6400));  // nonsense config
 }
 
+// --- Low-battery sleep decision ---------------------------------------------
+
+static BatterySnapshot onBattery(uint16_t minCell, uint32_t pack) {
+    BatterySnapshot s = {};
+    s.chargerOk = true;
+    s.cellsValid = true;
+    s.minCellMv = minCell;
+    s.packValid = true;
+    s.packMv = pack;
+    return s;
+}
+
+void test_sleeps_when_one_cell_is_below_the_limit(void) {
+    TEST_ASSERT_TRUE(batteryTooLowToRun(onBattery(2990, 6100), 3000));
+    TEST_ASSERT_FALSE(batteryTooLowToRun(onBattery(3010, 6100), 3000));
+}
+
+// External power wins: the robot runs from USB and the cells are being
+// filled, whatever they read right now.
+void test_never_sleeps_on_usb_or_while_charging(void) {
+    BatterySnapshot s = onBattery(2900, 5900);
+    s.usbPresent = true;
+    TEST_ASSERT_FALSE(batteryTooLowToRun(s, 3000));
+    s.usbPresent = false;
+    s.charging = true;
+    TEST_ASSERT_FALSE(batteryTooLowToRun(s, 3000));
+}
+
+// Untrusted cells: the pack voltage decides, split over two cells.
+void test_falls_back_to_pack_voltage_when_cells_are_untrusted(void) {
+    BatterySnapshot s = onBattery(0, 5900);
+    s.cellsValid = false;
+    TEST_ASSERT_TRUE(batteryTooLowToRun(s, 3000));
+    s.packMv = 6200;
+    TEST_ASSERT_FALSE(batteryTooLowToRun(s, 3000));
+}
+
+// No battery at all (USB-only bring-up with the charger absent) reads
+// ~0 V: that must never put the board to sleep.
+void test_never_sleeps_on_an_implausible_or_missing_reading(void) {
+    BatterySnapshot s = {};
+    s.packValid = true;
+    s.packMv = 0;
+    TEST_ASSERT_FALSE(batteryTooLowToRun(s, 3000));
+    s.packValid = false;
+    s.packMv = 5000;
+    TEST_ASSERT_FALSE(batteryTooLowToRun(s, 3000));
+}
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_ina219_current_from_shunt_raw);
@@ -143,5 +192,9 @@ int main(int argc, char** argv) {
     RUN_TEST(test_cells_rejected_when_sum_disagrees_with_pack);
     RUN_TEST(test_min_max_cell);
     RUN_TEST(test_battery_percent_is_clamped_and_linear);
+    RUN_TEST(test_sleeps_when_one_cell_is_below_the_limit);
+    RUN_TEST(test_never_sleeps_on_usb_or_while_charging);
+    RUN_TEST(test_falls_back_to_pack_voltage_when_cells_are_untrusted);
+    RUN_TEST(test_never_sleeps_on_an_implausible_or_missing_reading);
     return UNITY_END();
 }
