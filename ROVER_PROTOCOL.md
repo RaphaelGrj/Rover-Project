@@ -67,7 +67,7 @@ l'espace final ni le `*CS` lui-même.
 Exemple :
 
 ```
-MOVE velocity=0.0150 rotation=-0.1000 *39
+MOVE velocity=0.0150 rotation=-0.1000 *3A
 ```
 
 Contenu utilisé pour le checksum : `MOVE velocity=0.0150 rotation=-0.1000`.
@@ -101,7 +101,7 @@ AUTH           Raspberry Pi → ESP32
 
 | Type        | Champs                          | Exemple                                  |
 |-------------|----------------------------------|-------------------------------------------|
-| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *39` |
+| `MOVE`      | `velocity` (m/s), `rotation` (rad/s) | `MOVE velocity=0.0150 rotation=-0.1000 *3A` |
 
 ⚠️ **Résolution des nombres** : `velocity` et `rotation` sont émis avec
 **quatre décimales**, et ce n'est pas de la coquetterie. La plage de vitesse
@@ -113,12 +113,12 @@ simplement pas. Même chose sur `left_speed`/`right_speed`, où `0.00`
 s'affichait pour une roue qui tournait bel et bien. **Un format doit avoir
 plus de résolution que la plage qu'il transporte** ; deux décimales n'ont
 jamais suffi que parce que le plafond était dix fois trop haut.
-| `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *3A`               |
-| `FACE`      | `emotion`                        | `FACE emotion=happy *2E`                  |
-| `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *11`            |
-| `AUDIO`     | `action`, ...                    | `AUDIO action=play id=1 *0C`              |
-| `LIGHT`     | `state`, ...                     | `LIGHT state=on *0F`                      |
-| `SYSTEM`    | `action` (`ping`, `reset`, ...)  | `SYSTEM action=ping *2A`                  |
+| `HEAD`      | `pitch` (deg), `yaw` (deg)       | `HEAD pitch=15 yaw=-20 *2A`               |
+| `FACE`      | `emotion`                        | `FACE emotion=happy *17`                  |
+| `ANIMATION` | `name`                           | `ANIMATION name=GLITCH_03 *0D`            |
+| `AUDIO`     | `action`, ...                    | `AUDIO action=play id=1 *70`              |
+| `LIGHT`     | `state`, ...                     | `LIGHT state=on *35`                      |
+| `SYSTEM`    | `action` (`ping`, `reset`, ...)  | `SYSTEM action=ping *16`                  |
 
 Tout champ `seq=<entier>` est optionnel et sert à corréler la commande
 avec un futur `ACK` (voir §7). Les commandes qui ne le fournissent pas
@@ -202,7 +202,7 @@ serait l'incrément suivant.
 ## 6. HEARTBEAT (Pi → ESP32)
 
 ```
-HEARTBEAT *00\n
+HEARTBEAT *58\n
 ```
 
 - Envoyé périodiquement par le Pi, recommandé toutes les **150 ms**
@@ -234,15 +234,15 @@ HEARTBEAT *00\n
 message ou groupés) :
 
 ```
-STATE battery=82 *1F
+STATE battery=82 *2D
 STATE battery=82 battery_mv=7980 battery_ma=640 *0E
 STATE charge=fast usb=1 cell_top_mv=4012 cell_bot_mv=4010 cells_ok=1 ts=normal *03
-STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *0A
-STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *5C
-STATE distance_left=420 distance_right=380 *2C
-STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *19
-STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *2A
-STATE state=SAFE estop=0 max_speed=0.030 *33
+STATE left_speed=0.0240 right_speed=0.0260 left_pwm=210 right_pwm=214 *51
+STATE forward_blocked=0 obstacle_seen=0 obstacle_reflex=1 *2A
+STATE distance_left=420 distance_right=380 *21
+STATE temperature=24.3 humidity=45.2 pressure=1013.2 gas_kohm=120.5 *3D
+STATE accel_x=-0.12 accel_y=0.03 accel_z=9.81 gyro_x=0.01 gyro_y=-0.02 gyro_z=0.00 *3F
+STATE state=SAFE estop=0 max_speed=0.030 *00
 ```
 
 `state=` / `estop=` : l'état de la machine à états de l'ESP32 (§9) et
@@ -310,10 +310,10 @@ reste active dans tous les cas.
 Émis ponctuellement lors d'un changement d'état matériel :
 
 ```
-EVENT name=obstacle_detected *0B
-EVENT name=robot_lifted *07
-EVENT name=head_limit *05
-EVENT name=low_battery *0D
+EVENT name=obstacle_detected *0E
+EVENT name=robot_lifted *7B
+EVENT name=head_limit *74
+EVENT name=low_battery *10
 EVENT name=estop_pressed *12
 ```
 
@@ -372,7 +372,7 @@ explicite reste nécessaire ensuite, comme pour un timeout heartbeat).
 | `encoder_storm`        | un encodeur émettait des fronts à un rythme physiquement impossible (entrée qui flotte) et a **désarmé sa propre interruption** pour ne plus affamer la `loop()` qui pilote les moteurs. Champ `wheel=left\|right`. Ne se réarme qu'avec `SYSTEM action=reset_ticks`, une fois le câblage repris |
 
 ```
-ERROR code=motor_overcurrent *3D
+ERROR code=motor_overcurrent *1B
 ERROR code=sensor_timeout sensor=tof_left *48
 ```
 
@@ -390,8 +390,8 @@ route), jamais en boucle à chaque nouvelle tentative de reconnexion.
 Réponse à une commande porteuse d'un `seq` :
 
 ```
-ACK seq=42 status=ok *18
-ACK seq=42 status=error reason=head_limit *2F
+ACK seq=42 status=ok *38
+ACK seq=42 status=error reason=head_limit *7F
 ```
 
 ------------------------------------------------------------------------
