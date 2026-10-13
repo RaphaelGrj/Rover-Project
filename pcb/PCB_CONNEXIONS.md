@@ -637,19 +637,16 @@ sérigraphie**, car les inverser inverse `distance_left`/`distance_right`.
 
 ------------------------------------------------------------------------
 
-## 7. Firmware de la carte (écrit le 2026-10-13, **jamais compilé ni testé**)
+## 7. Firmware de la carte (2026-10-13 : compile en CI, **jamais testé sur matériel**)
 
 Le firmware principal (`esp32/`) gère la carte via l'environnement
 PlatformIO **`rover_pcb_v1`**. Le WROOM et le S3 de dev compilent
 toujours avec leur brochage d'origine (règle `CLAUDE.md`).
 
-⚠ **Non compilé** : le registre PlatformIO était inaccessible depuis
-l'environnement qui l'a écrit. Les en-têtes de configuration, les
-nouveaux pilotes et la logique de calcul ont été vérifiés à part
-(compilation des en-têtes pour les trois cartes, contrôle de syntaxe,
-18 tests unitaires natifs). Mais la compilation complète contre le vrai
-framework ESP32 reste à faire : **`pio run -e rover_pcb_v1`** sur le PC,
-avant de souder quoi que ce soit.
+✅ **Compile** : la CI GitHub construit `rover_pcb_v1` à chaque
+modification du firmware, avec le WROOM et le S3. ⚠ **Jamais testé sur
+matériel** : la carte n'existe pas encore. Tout ce qui suit est à
+valider à la mise en service (`pcb/KICAD_GUIDE.md` §9).
 
 | Point | Où dans le code | Remarque |
 |---|---|---|
