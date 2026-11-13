@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "rover")(type "KiCad")(uri "${KIPRJMOD}/rover.kicad_sym")(options "")(descr "Symboles du projet ROVER"))
+)

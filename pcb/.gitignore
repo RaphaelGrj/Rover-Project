@@ -1,0 +1,7 @@
+# Fichiers intermediaires du routage et reglages locaux de KiCad
+*.dsn
+*.ses
+*.freerouting.log
+*.kicad_prl
+__pycache__/
+*-backups/

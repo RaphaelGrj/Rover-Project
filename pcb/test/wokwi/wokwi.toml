@@ -1,0 +1,12 @@
+# Simulation Wokwi du firmware de la carte ROVER PCB v1 (voir ../GUIDE_SIMULATION.md).
+#
+# Le firmware doit avoir ete compile une fois avant de lancer la simulation :
+#   cd esp32 && pio run -e rover_pcb_v1
+# Les chemins ci-dessous pointent vers ce resultat de compilation.
+[wokwi]
+version = 1
+firmware = "../../../esp32/.pio/build/rover_pcb_v1/firmware.bin"
+elf = "../../../esp32/.pio/build/rover_pcb_v1/firmware.elf"
+# Port serie virtuel expose en TCP (RFC2217) sur localhost:4000, comme pour la
+# simulation WROOM (esp32/wokwi.toml) : permet d'y brancher un script Python.
+rfc2217ServerPort = 4000

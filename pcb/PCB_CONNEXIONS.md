@@ -8,6 +8,11 @@
 >
 > Guide pas-à-pas KiCad pour débutant : `pcb/KICAD_GUIDE.md`.
 >
+> **Mise à jour 2026-11-13 :** le PCB est dessiné, en **deux cartes
+> superposées** (puissance + logique) et non une seule : voir
+> `pcb/GUIDE.md`, qui liste aussi les écarts par rapport à ce document
+> (section 8). Les GPIO du §4 sont inchangés.
+>
 > Légende : ⚠ = point à vérifier dans la datasheet/sur la pièce réelle
 > avant de router ; 🔧 = choix de conception à valider avec l'utilisateur.
 

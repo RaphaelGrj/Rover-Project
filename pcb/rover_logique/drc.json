@@ -1,0 +1,107 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-11-13T20:14:37",
+    "ignored_checks": [
+        {
+            "description": "Footprint has no courtyard defined",
+            "key": "missing_courtyard"
+        },
+        {
+            "description": "Track endpoint not centered on via",
+            "key": "track_not_centered_on_via"
+        },
+        {
+            "description": "Tuning profile track geometries",
+            "key": "tuning_profile_track_geometries"
+        },
+        {
+            "description": "Footprint doesn't match symbol's footprint filters",
+            "key": "footprint_filters_mismatch"
+        },
+        {
+            "description": "Footprint component type doesn't match footprint pads",
+            "key": "footprint_type_mismatch"
+        }
+    ],
+    "included_severities": [
+        "error",
+        "warning",
+        "exclusion"
+    ],
+    "kicad_version": "10.0.6",
+    "schematic_parity": [],
+    "source": "rover_logique.kicad_pcb",
+    "unconnected_items": [],
+    "violations": [
+        {
+            "description": "Connexion de frein thermique à la zone incomplète (couche In1.Cu ; 1 rayons connectés à des ilots isolés)",
+            "items": [
+                {
+                    "description": "Zone [GND] sur In1.Cu, priorité 0",
+                    "pos": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "uuid": "0776823f-9fb5-41e4-8060-8b3048d4fb97"
+                },
+                {
+                    "description": "Pad métallisé 13 [GND] de J20",
+                    "pos": {
+                        "x": 28.46,
+                        "y": 27.54
+                    },
+                    "uuid": "1461ba96-1f76-4976-a776-7d92c90bf594"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Connexion de frein thermique à la zone incomplète (couche In1.Cu ; 1 rayons connectés à des ilots isolés)",
+            "items": [
+                {
+                    "description": "Zone [GND] sur In1.Cu, priorité 0",
+                    "pos": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "uuid": "0776823f-9fb5-41e4-8060-8b3048d4fb97"
+                },
+                {
+                    "description": "Pad métallisé 16 [GND] de J20",
+                    "pos": {
+                        "x": 31.0,
+                        "y": 25.0
+                    },
+                    "uuid": "80da100c-6f8e-4142-a517-f48273a21080"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Silkscreen clipped by board edge",
+            "items": [
+                {
+                    "description": "Segment sur Edge.Cuts",
+                    "pos": {
+                        "x": 0.0,
+                        "y": 37.0
+                    },
+                    "uuid": "c49e290b-d0f8-45a9-bf79-19d99e7935e0"
+                },
+                {
+                    "description": "Polygone de U12 sur F.Silkscreen",
+                    "pos": {
+                        "x": 1.79,
+                        "y": 37.28
+                    },
+                    "uuid": "43f63e07-ef2e-42e6-bffb-22ace6923549"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_edge_clearance"
+        }
+    ]
+}

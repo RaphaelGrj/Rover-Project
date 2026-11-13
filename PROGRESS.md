@@ -1904,6 +1904,15 @@ l'ordre interne de ce chantier compte, parce qu'il est conçu pour
 
 ## Journal court (une ligne par session --- détail complet dans PROGRESS_ARCHIVE.md)
 
+- **2026-11-13** --- **PCB dessiné, en deux cartes 75 × 50 mm superposées**
+  (`pcb/rover_puissance/`, `pcb/rover_logique/`, connecteur 2 × 15
+  broches). Une carte unique à cette taille s'est révélée impossible à
+  router. Schémas et PCB générés par script (`pcb/gen/`), routés par
+  Freerouting ; contrôles KiCad propres (0 liaison manquante, schéma ↔
+  carte cohérent), brochage conforme à `board_pins_pcb_v1.h`
+  (`pcb/test/`). Fichiers JLCPCB et guide de commande dans
+  `pcb/GUIDE.md`. **Jamais fabriqué, rien de vérifié sur matériel ;
+  stock LCSC non recontrôlé.**
 - **2026-09-20** --- **Les deux prérequis bloquants du Pi déporté sont
   levés** (§6.2 « 5 bis » / « 5 ter »), l'étape 1 du chantier n'est plus
   interdite. `RoverNetwork.h` prend la propriété du lien WiFi (que seule

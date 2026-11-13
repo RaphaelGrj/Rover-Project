@@ -1,0 +1,245 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-11-13T20:16:54",
+    "ignored_checks": [
+        {
+            "description": "Footprint has no courtyard defined",
+            "key": "missing_courtyard"
+        },
+        {
+            "description": "Track endpoint not centered on via",
+            "key": "track_not_centered_on_via"
+        },
+        {
+            "description": "Tuning profile track geometries",
+            "key": "tuning_profile_track_geometries"
+        },
+        {
+            "description": "Footprint doesn't match symbol's footprint filters",
+            "key": "footprint_filters_mismatch"
+        },
+        {
+            "description": "Footprint component type doesn't match footprint pads",
+            "key": "footprint_type_mismatch"
+        }
+    ],
+    "included_severities": [
+        "error",
+        "warning",
+        "exclusion"
+    ],
+    "kicad_version": "10.0.6",
+    "schematic_parity": [],
+    "source": "rover_puissance.kicad_pcb",
+    "unconnected_items": [],
+    "violations": [
+        {
+            "description": "Connexion de frein thermique à la zone incomplète (couche F.Cu ; zone nbre min de rayons 2 ; réel 1)",
+            "items": [
+                {
+                    "description": "Zone [GND] sur F.Cu, priorité 0",
+                    "pos": {
+                        "x": 0.0,
+                        "y": 0.0
+                    },
+                    "uuid": "465459ea-9b72-4a78-8227-f487737d4a5e"
+                },
+                {
+                    "description": "Pad 13 [GND] de U7 sur F.Cu",
+                    "pos": {
+                        "x": 17.175,
+                        "y": 28.225
+                    },
+                    "uuid": "f56792a0-6249-4de0-a984-49580c341fce"
+                }
+            ],
+            "severity": "error",
+            "type": "starved_thermal"
+        },
+        {
+            "description": "Silkscreen clipped by board edge",
+            "items": [
+                {
+                    "description": "Segment sur Edge.Cuts",
+                    "pos": {
+                        "x": 75.0,
+                        "y": 0.0
+                    },
+                    "uuid": "809b20de-efd2-4ff4-af02-c77e815e4417"
+                },
+                {
+                    "description": "Segment de SW1 sur F.Silkscreen",
+                    "pos": {
+                        "x": 74.63,
+                        "y": 13.4
+                    },
+                    "uuid": "0b414305-4a21-43b4-afac-48b125077ca9"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_edge_clearance"
+        },
+        {
+            "description": "Silkscreen clipped by board edge",
+            "items": [
+                {
+                    "description": "Segment sur Edge.Cuts",
+                    "pos": {
+                        "x": 75.0,
+                        "y": 0.0
+                    },
+                    "uuid": "809b20de-efd2-4ff4-af02-c77e815e4417"
+                },
+                {
+                    "description": "Segment de SW1 sur F.Silkscreen",
+                    "pos": {
+                        "x": 75.92,
+                        "y": 12.1
+                    },
+                    "uuid": "9e84db00-23a7-4888-8650-92a5456696a3"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_edge_clearance"
+        },
+        {
+            "description": "Silkscreen clipped by board edge",
+            "items": [
+                {
+                    "description": "Segment sur Edge.Cuts",
+                    "pos": {
+                        "x": 75.0,
+                        "y": 0.0
+                    },
+                    "uuid": "809b20de-efd2-4ff4-af02-c77e815e4417"
+                },
+                {
+                    "description": "Segment de J1 sur F.Silkscreen",
+                    "pos": {
+                        "x": 73.6,
+                        "y": 20.35
+                    },
+                    "uuid": "d9b004e3-9a7f-42d3-90ee-17c1a6e82861"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_edge_clearance"
+        },
+        {
+            "description": "Silkscreen clipped by board edge",
+            "items": [
+                {
+                    "description": "Segment sur Edge.Cuts",
+                    "pos": {
+                        "x": 75.0,
+                        "y": 0.0
+                    },
+                    "uuid": "809b20de-efd2-4ff4-af02-c77e815e4417"
+                },
+                {
+                    "description": "Segment de J1 sur F.Silkscreen",
+                    "pos": {
+                        "x": 73.6,
+                        "y": 29.75
+                    },
+                    "uuid": "c086c18f-5a17-4820-9708-9287fe293367"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_edge_clearance"
+        },
+        {
+            "description": "Silkscreen clearance",
+            "items": [
+                {
+                    "description": "Segment de R23 sur F.Silkscreen",
+                    "pos": {
+                        "x": 12.772936,
+                        "y": 38.91
+                    },
+                    "uuid": "1cc42889-a7ec-47b4-ac5b-711a08a6f701"
+                },
+                {
+                    "description": "Texte PCB 'MOTEUR G' surF.Silkscreen",
+                    "pos": {
+                        "x": 14.5,
+                        "y": 39.0
+                    },
+                    "uuid": "5f81917a-94ad-445d-9351-efb6526aab57"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_overlap"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Texte PCB 'MOTEUR G' surF.Silkscreen",
+                    "pos": {
+                        "x": 14.5,
+                        "y": 39.0
+                    },
+                    "uuid": "5f81917a-94ad-445d-9351-efb6526aab57"
+                },
+                {
+                    "description": "Pad 1 [GND] de R23 sur F.Cu",
+                    "pos": {
+                        "x": 12.0375,
+                        "y": 38.0
+                    },
+                    "uuid": "a988bdf2-ce38-4759-a2b0-4be3519bf24e"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Texte PCB 'MOTEUR G' surF.Silkscreen",
+                    "pos": {
+                        "x": 14.5,
+                        "y": 39.0
+                    },
+                    "uuid": "5f81917a-94ad-445d-9351-efb6526aab57"
+                },
+                {
+                    "description": "Pad 2 [ML_SENSE] de R23 sur F.Cu",
+                    "pos": {
+                        "x": 14.9625,
+                        "y": 38.0
+                    },
+                    "uuid": "e37e87de-62ff-478e-8c4c-81254c88f889"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        },
+        {
+            "description": "Silkscreen clearance",
+            "items": [
+                {
+                    "description": "Texte PCB 'ROVER PUISSANCE V1' surB.Silkscreen",
+                    "pos": {
+                        "x": 48.0,
+                        "y": 41.0
+                    },
+                    "uuid": "034dd5eb-fbfd-4b49-bae8-6ca7e52157ef"
+                },
+                {
+                    "description": "Texte PCB 'MOTEUR D' surB.Silkscreen",
+                    "pos": {
+                        "x": 43.0,
+                        "y": 40.6
+                    },
+                    "uuid": "a562a706-c24e-4244-97e2-bf6161ab862c"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_overlap"
+        }
+    ]
+}
