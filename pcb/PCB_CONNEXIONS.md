@@ -693,8 +693,15 @@ valider à la mise en service (`pcb/KICAD_GUIDE.md` §9).
 | Écran | `display_config.h` | SPI ramené à 26,7 MHz (câble vers la tête), CS à la masse, reset via l'expandeur |
 
 **Ce qui n'est PAS fait** (rien de bloquant pour dessiner le PCB) :
-- **Pilote audio I2S** (amplis + micro) : il n'existe sur aucune carte.
-  Les amplis restent coupés (`AMP_EN` bas) tant qu'il n'est pas écrit.
+- **Pilote audio I2S complet** (lecture de sons, micro) : il n'existe
+  sur aucune carte. **Seuls les bips sont faits (2026-11-14)** : les
+  bips de démarrage, d'obstacle, de batterie faible et d'arrêt d'urgence
+  sortent par les deux amplis (`lib/sound/I2sBeeper.*`, sinus 16 kHz
+  généré à la volée, calcul testé dans `test/test_tone_math`). Les amplis
+  ne sont réveillés (`AMP_EN` haut) que pendant un bip. **Compile, jamais
+  exécuté sur matériel** : volume (`ROVER_BEEP_AMPLITUDE`), absence de
+  « clac » à l'allumage des amplis et régularité du son quand la boucle
+  principale est chargée sont à écouter à la mise en service.
 - **Échelle des ADC du chargeur** : 1 mV par pas, **confirmée sur la
   datasheet le 2026-11-14** (tables 33 à 40 et 46), jamais sur matériel.
   Le firmware garde sa vérification croisée : les mesures de cellules ne

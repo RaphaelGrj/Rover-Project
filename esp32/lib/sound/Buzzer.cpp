@@ -18,7 +18,8 @@ void Buzzer::play(BuzzerSound sound) {
     // driven by LEDC would fight the servo for the pad. Refusing here
     // rather than at every call site keeps main.cpp free of
     // "if (buzzer enabled)" noise -- play() simply becomes a no-op.
-    if (!ROVER_BUZZER_ENABLED) return;
+    // The I2S speakers take over when they are available.
+    if (!ROVER_BUZZER_ENABLED && !I2sBeeper::ready()) return;
 
     switch (sound) {
         case BuzzerSound::BOOT:
@@ -46,6 +47,15 @@ void Buzzer::startStep(uint8_t index) {
     _playing = true;
     _stepStartMs = millis();
     const Step& step = _steps[index];
+    if (!ROVER_BUZZER_ENABLED) {
+        // Never tone() here: ROVER_PIN_BUZZER is not a valid pin.
+        if (step.freqHz > 0) {
+            I2sBeeper::tone(step.freqHz);
+        } else {
+            I2sBeeper::silence();
+        }
+        return;
+    }
     if (step.freqHz > 0) {
         tone(ROVER_PIN_BUZZER, step.freqHz);
     } else {
@@ -54,13 +64,21 @@ void Buzzer::startStep(uint8_t index) {
 }
 
 void Buzzer::update() {
+    // Every iteration, playing or not: it feeds the audio stream and
+    // shuts the amplifiers down after the end of a pattern.
+    I2sBeeper::update();
+
     if (!_playing) return;
     const Step& step = _steps[_stepIndex];
     if (millis() - _stepStartMs < step.durationMs) return;
 
     uint8_t next = _stepIndex + 1;
     if (next >= _stepCount) {
-        noTone(ROVER_PIN_BUZZER);
+        if (ROVER_BUZZER_ENABLED) {
+            noTone(ROVER_PIN_BUZZER);
+        } else {
+            I2sBeeper::stop();
+        }
         _playing = false;
         return;
     }

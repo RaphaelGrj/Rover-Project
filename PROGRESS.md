@@ -1919,6 +1919,11 @@ l'ordre interne de ce chantier compte, parce qu'il est conçu pour
   du chargeur groupées (9 → 3 par cycle), échelle des ADC confirmée
   (1 mV/pas). Datasheet contradictoire sur l'adresse I2C (0x6A / 0x6B) :
   0x6A conservé, à vérifier sur matériel. 3 cibles compilent, 56 tests.
+- **2026-11-14 (suite)** --- Les bips (démarrage, obstacle, batterie
+  faible, arrêt d'urgence) sortent par les haut-parleurs du PCB :
+  `Buzzer` garde ses motifs et délègue à `I2sBeeper` (I2S 16 kHz, amplis
+  réveillés seulement pendant un bip). WROOM/S3 inchangés (toujours
+  muets). 3 cibles compilent, 63 tests. **Jamais exécuté sur matériel.**
 - **2026-09-20** --- **Les deux prérequis bloquants du Pi déporté sont
   levés** (§6.2 « 5 bis » / « 5 ter »), l'étape 1 du chantier n'est plus
   interdite. `RoverNetwork.h` prend la propriété du lien WiFi (que seule

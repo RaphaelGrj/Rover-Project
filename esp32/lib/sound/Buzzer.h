@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "sound_config.h"
+#include "I2sBeeper.h"
 
 // Which built-in beep pattern to play -- see Buzzer.cpp for the actual
 // frequency/duration steps. Named by event, not by tune, so main.cpp's
@@ -23,6 +24,10 @@ enum class BuzzerSound {
 // same on/off timing and ignores the requested pitch -- both read fine
 // as a rhythm-distinguishable beep pattern either way, so this doesn't
 // need to know or care which kind is wired.
+//
+// Second back end: on a board with no buzzer but I2S speakers (the
+// custom PCB), the very same patterns go to I2sBeeper instead of
+// tone(). Callers do not see the difference.
 class Buzzer {
 public:
     struct Step {
@@ -34,7 +39,12 @@ public:
         // Inert when disabled: its pin now belongs to the yaw servo,
         // and touching it here would fight the servo's PWM for the pad
         // (see sound_config.h).
-        if (!ROVER_BUZZER_ENABLED) return;
+        if (!ROVER_BUZZER_ENABLED) {
+            // A failure leaves the beeps silent, as they were before;
+            // nothing else depends on them.
+            I2sBeeper::begin();
+            return;
+        }
         pinMode(ROVER_PIN_BUZZER, OUTPUT);
         noTone(ROVER_PIN_BUZZER);
     }
