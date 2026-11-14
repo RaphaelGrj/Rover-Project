@@ -35,8 +35,16 @@ void test_ina219_bus_voltage_skips_status_bits(void) {
 // --- BQ25887 encodings, pinned against the documented reset values -----
 
 void test_bq_ichg_reset_value_decodes_to_1500ma(void) {
-    TEST_ASSERT_EQUAL_UINT16(1500, bqIchgMa(0x5D));  // full reset byte, upper bits ignored
-    TEST_ASSERT_EQUAL_HEX8(0x1D, bqIchgCode(1500));
+    // REG01 resets to 0x5E (datasheet SLUSD89B 8.5.2): EN_ILIM set, ICHG = 0x1E.
+    TEST_ASSERT_EQUAL_UINT16(1500, bqIchgMa(0x5E));  // full reset byte, upper bits ignored
+    TEST_ASSERT_EQUAL_HEX8(0x1E, bqIchgCode(1500));
+}
+
+void test_bq_ichg_has_no_offset(void) {
+    // 50 mA per step from zero: 1000 mA is 20 steps, the 2200 mA ceiling is 0x2C.
+    TEST_ASSERT_EQUAL_HEX8(0x14, bqIchgCode(1000));
+    TEST_ASSERT_EQUAL_HEX8(0x2C, bqIchgCode(2200));
+    TEST_ASSERT_EQUAL_UINT16(100, bqIchgMa(0x02));
 }
 
 void test_bq_ichg_round_trips_and_clamps(void) {
@@ -68,6 +76,12 @@ void test_bq_part_number_matches_reset_value_only(void) {
 
 void test_bq_adc16_is_msb_first(void) {
     TEST_ASSERT_EQUAL_UINT16(0x0FA0, bqAdc16(0x0F, 0xA0));
+}
+
+void test_bq_adc16_negative_reading_is_zero(void) {
+    // Two's complement: 0xFFFE is -2 mV, not 65534 mV.
+    TEST_ASSERT_EQUAL_UINT16(0, bqAdc16(0xFF, 0xFE));
+    TEST_ASSERT_EQUAL_UINT16(0x7FFF, bqAdc16(0x7F, 0xFF));
 }
 
 void test_bq_charge_state_names(void) {
@@ -179,11 +193,13 @@ int main(int argc, char** argv) {
     RUN_TEST(test_ina219_zero_shunt_never_divides_by_zero);
     RUN_TEST(test_ina219_bus_voltage_skips_status_bits);
     RUN_TEST(test_bq_ichg_reset_value_decodes_to_1500ma);
+    RUN_TEST(test_bq_ichg_has_no_offset);
     RUN_TEST(test_bq_ichg_round_trips_and_clamps);
     RUN_TEST(test_bq_iindpm_reset_value_decodes_to_3000ma);
     RUN_TEST(test_bq_vcellreg_reset_value_decodes_to_4200mv);
     RUN_TEST(test_bq_part_number_matches_reset_value_only);
     RUN_TEST(test_bq_adc16_is_msb_first);
+    RUN_TEST(test_bq_adc16_negative_reading_is_zero);
     RUN_TEST(test_bq_charge_state_names);
     RUN_TEST(test_bq_watchdog_and_charge_enable_bits_match_reset_values);
     RUN_TEST(test_cells_plausible_when_they_add_up_to_the_pack);

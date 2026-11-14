@@ -1913,6 +1913,12 @@ l'ordre interne de ce chantier compte, parce qu'il est conçu pour
   (`pcb/test/`). Fichiers JLCPCB et guide de commande dans
   `pcb/GUIDE.md`. **Jamais fabriqué, rien de vérifié sur matériel ;
   stock LCSC non recontrôlé.**
+- **2026-11-14** --- Relecture du firmware `rover_pcb_v1` contre la
+  datasheet du BQ25887 : codage du courant de charge corrigé (décalage
+  de 50 mA inexistant), ADC du chargeur remis en 15 bits, lectures I2C
+  du chargeur groupées (9 → 3 par cycle), échelle des ADC confirmée
+  (1 mV/pas). Datasheet contradictoire sur l'adresse I2C (0x6A / 0x6B) :
+  0x6A conservé, à vérifier sur matériel. 3 cibles compilent, 56 tests.
 - **2026-09-20** --- **Les deux prérequis bloquants du Pi déporté sont
   levés** (§6.2 « 5 bis » / « 5 ter »), l'étape 1 du chantier n'est plus
   interdite. `RoverNetwork.h` prend la propriété du lien WiFi (que seule

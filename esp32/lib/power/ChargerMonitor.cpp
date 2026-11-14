@@ -74,11 +74,12 @@ bool ChargerMonitor::applyConfig() {
 // A mismatch means the chip reset behind our back (pack unplugged and
 // replugged, brown-out) and the config must go back in.
 bool ChargerMonitor::configLooksApplied(bool* matches) {
-    uint8_t ichg = 0, ctrl1 = 0, ctrl2 = 0;
-    if (!readReg(BQ_REG_ICHG, &ichg) || !readReg(BQ_REG_CTRL1, &ctrl1) ||
-        !readReg(BQ_REG_CTRL2, &ctrl2)) {
-        return false;
-    }
+    // REG01..REG06 in one transaction instead of three separate reads.
+    uint8_t regs[BQ_REG_CTRL2 - BQ_REG_ICHG + 1] = {};
+    if (!readBlock(BQ_REG_ICHG, regs, sizeof(regs))) return false;
+    uint8_t ichg = regs[0];
+    uint8_t ctrl1 = regs[BQ_REG_CTRL1 - BQ_REG_ICHG];
+    uint8_t ctrl2 = regs[BQ_REG_CTRL2 - BQ_REG_ICHG];
     bool chargeBitRight = ((ctrl2 & BQ_CTRL2_EN_CHG) != 0) == !_chargeInhibited;
     *matches = (ichg & BQ_ICHG_MASK) == bqIchgCode(ROVER_CHARGE_CURRENT_MA) &&
                (ctrl1 & BQ_CTRL1_WATCHDOG_MASK) == 0 &&
@@ -137,16 +138,29 @@ void ChargerMonitor::measure(unsigned long now, uint32_t packMv, bool packMvVali
 }
 
 bool ChargerMonitor::readStatusAndAdc() {
-    uint8_t status2 = 0;
-    uint16_t vbat = 0;
-    bool ok = readReg(BQ_REG_STATUS1, &_status1) && readReg(BQ_REG_STATUS2, &status2) &&
-              readReg(BQ_REG_NTC, &_ntc) && readReg(BQ_REG_FAULT, &_fault) &&
-              readAdc16(BQ_REG_VCELLTOP_ADC, &_cellTopMv) &&
-              readAdc16(BQ_REG_VCELLBOT_ADC, &_cellBottomMv) &&
-              readAdc16(BQ_REG_VBAT_ADC, &vbat) && readAdc16(BQ_REG_VBUS_ADC, &_vbusMv) &&
-              readAdc16(BQ_REG_ICHG_ADC, &_ichgMa);
-    if (!ok) return false;
-    _usbPresent = (status2 & BQ_STATUS2_PG) != 0;
+    // Three grouped reads instead of nine separate ones (the chip
+    // supports multi-byte reads on every register, datasheet section
+    // 8.3.11.7): about a third of the bus time, every 2 s, taken from
+    // the loop that also runs the motor PID. The registers of each
+    // group are contiguous:
+    //   0x0B..0x0E  STATUS1, STATUS2, NTC, FAULT
+    //   0x19..0x20  ICHG, VBUS, VBAT, VCELLTOP (16 bits each, MSB first)
+    //   0x26..0x27  VCELLBOT
+    uint8_t status[BQ_REG_FAULT - BQ_REG_STATUS1 + 1] = {};
+    uint8_t adc[BQ_REG_VCELLTOP_ADC + 2 - BQ_REG_ICHG_ADC] = {};
+    if (!readBlock(BQ_REG_STATUS1, status, sizeof(status)) ||
+        !readBlock(BQ_REG_ICHG_ADC, adc, sizeof(adc)) ||
+        !readAdc16(BQ_REG_VCELLBOT_ADC, &_cellBottomMv)) {
+        return false;
+    }
+    _status1 = status[0];
+    _usbPresent = (status[BQ_REG_STATUS2 - BQ_REG_STATUS1] & BQ_STATUS2_PG) != 0;
+    _ntc = status[BQ_REG_NTC - BQ_REG_STATUS1];
+    _fault = status[BQ_REG_FAULT - BQ_REG_STATUS1];
+    _ichgMa = bqAdc16(adc[0], adc[1]);
+    _vbusMv = bqAdc16(adc[BQ_REG_VBUS_ADC - BQ_REG_ICHG_ADC], adc[BQ_REG_VBUS_ADC - BQ_REG_ICHG_ADC + 1]);
+    _cellTopMv = bqAdc16(adc[BQ_REG_VCELLTOP_ADC - BQ_REG_ICHG_ADC],
+                         adc[BQ_REG_VCELLTOP_ADC - BQ_REG_ICHG_ADC + 1]);
     return true;
 }
 
@@ -293,6 +307,17 @@ bool ChargerMonitor::readAdc16(uint8_t msbReg, uint16_t* value) {
     uint8_t msb = (uint8_t)Wire.read();
     uint8_t lsb = (uint8_t)Wire.read();
     *value = bqAdc16(msb, lsb);
+    return true;
+}
+
+// `count` consecutive registers in one transaction (register pointer
+// auto-increments). All or nothing: a short read fails the whole call.
+bool ChargerMonitor::readBlock(uint8_t firstReg, uint8_t* buffer, uint8_t count) {
+    Wire.beginTransmission(CHARGER_ADDRESS);
+    Wire.write(firstReg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom(CHARGER_ADDRESS, count) != count) return false;
+    for (uint8_t i = 0; i < count; i++) buffer[i] = (uint8_t)Wire.read();
     return true;
 }
 

@@ -108,5 +108,6 @@ private:
     bool writeReg(uint8_t reg, uint8_t value);
     bool readReg(uint8_t reg, uint8_t* value);
     bool readAdc16(uint8_t msbReg, uint16_t* value);
+    bool readBlock(uint8_t firstReg, uint8_t* buffer, uint8_t count);
     bool updateBits(uint8_t reg, uint8_t mask, uint8_t bits);
 };

@@ -74,19 +74,25 @@ constexpr uint8_t BQ_CTRL1_WATCHDOG_MASK = 0x30;
 constexpr uint8_t BQ_CTRL2_AUTO_INDET_EN = 0x40;
 constexpr uint8_t BQ_CTRL2_EN_CHG = 0x08;
 constexpr uint8_t BQ_STATUS2_PG = 0x80;
-// ADC on, continuous conversion, 15-bit resolution (24 ms). Continuous
-// rather than one-shot so a value is always fresh when update() reads.
-constexpr uint8_t BQ_ADC_CTRL_CONTINUOUS = 0xB0;
+// ADC on (bit 7), continuous conversion (bit 6 = 0), 15-bit effective
+// resolution (ADC_SAMPLE[5:4] = 00, datasheet SLUSD89B table 29).
+// Continuous rather than one-shot so a value is always fresh when
+// update() reads. This was 0xB0 until 2026-11-14: bits 5:4 = 11 select
+// the 12-bit mode, the opposite of what the comment intended.
+constexpr uint8_t BQ_ADC_CTRL_CONTINUOUS = 0x80;
 
-// ICHG[5:0]: 50 mA per step with a 50 mA offset, 100..2200 mA
-// (reset 0x1D = 1500 mA).
+// ICHG[5:0]: 50 mA per step, NO offset, 100..2200 mA. The register
+// resets to 0x5E, i.e. ICHG = 0x1E = 30 steps = 1500 mA (datasheet
+// SLUSD89B section 8.5.2 and table 9). Until 2026-11-14 this assumed a
+// 50 mA offset (reset code 0x1D), which programmed 50 mA less than
+// asked and read back 50 mA more than the chip was really set to.
 inline uint8_t bqIchgCode(uint16_t mA) {
     if (mA < 100) mA = 100;
     if (mA > 2200) mA = 2200;
-    return (uint8_t)(mA / 50 - 1);
+    return (uint8_t)(mA / 50);
 }
 inline uint16_t bqIchgMa(uint8_t code) {
-    return (uint16_t)(((code & BQ_ICHG_MASK) + 1) * 50);
+    return (uint16_t)((code & BQ_ICHG_MASK) * 50);
 }
 
 // IINDPM[4:0]: 100 mA per step from 500 mA, up to 3300 mA
@@ -119,7 +125,11 @@ inline bool bqIsBq25887(uint8_t partInfo) {
     return ((partInfo >> 3) & 0x0F) == 0x05;
 }
 
+// ADC results are 16-bit two's complement, most significant byte first,
+// 1 mV (or 1 mA) per step. A slightly negative reading around zero is a
+// plain offset error: it is reported as 0 instead of wrapping to ~65 V.
 inline uint16_t bqAdc16(uint8_t msb, uint8_t lsb) {
+    if (msb & 0x80) return 0;
     return (uint16_t)(((uint16_t)msb << 8) | lsb);
 }
 
@@ -156,9 +166,11 @@ inline const char* bqThermistorName(uint8_t ntc) {
 
 // --- Cell readings ------------------------------------------------------
 
-// The ADC scale (1 mV per LSB for VCELLTOP/VCELLBOT/VBAT) is assumed
-// from the sibling chargers and could NOT be confirmed against the
-// datasheet when this was written. Rather than trust it, every reading
+// The ADC scale is 1 mV per LSB for VCELLTOP/VCELLBOT/VBAT/VBUS and
+// 1 mA for ICHG: confirmed on 2026-11-14 against the TI datasheet
+// (SLUSD89B tables 33 to 40 and 46), never on real hardware. The
+// cross-check below was written before that confirmation and stays, as
+// a guard against a broken balance wire or a bad chip: every reading
 // must agree with itself before any decision is taken on it: the two
 // cells must add up to the pack voltage (measured independently by the
 // INA219), and each must sit in a physically possible Li-ion range. If

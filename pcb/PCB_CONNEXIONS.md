@@ -527,7 +527,7 @@ DRV8833, des bucks et des haut-parleurs (bruit et larsen).
 | LSM6DS3TR-C (IMU) | **0x6B** | `SDO/SA0` → **3V3** (0x6A est pris par le chargeur BQ25887), `CS` → 3V3 (force le mode I2C), `INT1/INT2` non reliés, 100 nF + 10 µF sur VDD/VDDIO |
 | BME688 | **0x76** | `SDO` → GND (même adresse que le BME280 actuel, `sensors_config.h` inchangé), `CSB` → 3V3, 100 nF |
 | INA219 | **0x40** | `A0`, `A1` → GND, `IN+`/`IN−` aux bornes du shunt (pistes de mesure séparées, « Kelvin »), 100 nF |
-| BQ25887 (chargeur) | **0x6A** | Adresse fixe. Confirmée par le pilote open source `bq25887` (crate Rust, transcrit de la datasheet), pas encore lue sur la datasheet TI elle-même. Le firmware vérifie le numéro de pièce avant toute écriture. Voir §5.1. |
+| BQ25887 (chargeur) | **0x6A** | Adresse fixe. ⚠ **La datasheet TI (SLUSD89B) se contredit** (relu le 2026-11-14) : le texte du §8.3.11 dit 0x6A, mais la figure 17 et l'en-tête de la table des registres disent 0x6B. Un signalement sur le forum TI E2E (« Wrong i2c slave address still in the datasheet ») et le pilote open source `bq25887` donnent **0x6A** comme valeur réelle. Si la puce répondait en fait en 0x6B, elle entrerait en collision avec l'IMU (0x6B) : **premier contrôle à la mise en service, scanner le bus I2C**. Le firmware vérifie le numéro de pièce avant toute écriture. Voir §5.1. |
 | TCA9554 | **0x20** | `A0-A2` → GND, `INT` non relié, 100 nF |
 | VL53L0X gauche (connecteur) | 0x29 → **0x30** au démarrage | XSHUT → 3V3 (logique actuelle) |
 | VL53L0X droit (connecteur) | **0x29** | XSHUT → TCA9554 P0 |
@@ -695,12 +695,19 @@ valider à la mise en service (`pcb/KICAD_GUIDE.md` §9).
 **Ce qui n'est PAS fait** (rien de bloquant pour dessiner le PCB) :
 - **Pilote audio I2S** (amplis + micro) : il n'existe sur aucune carte.
   Les amplis restent coupés (`AMP_EN` bas) tant qu'il n'est pas écrit.
-- **Échelle des ADC du chargeur** (1 mV par pas supposé). Elle n'a pas
-  pu être lue dans la datasheet. Le firmware s'en protège : les mesures
-  de cellules ne servent que si leur somme égale la tension du pack
-  mesurée par l'INA219 (sinon `cells_ok=0` et
-  `EVENT name=cells_implausible`). **Premier contrôle à la mise en
-  service : `cells_ok=1` avec des cellules réalistes.**
+- **Échelle des ADC du chargeur** : 1 mV par pas, **confirmée sur la
+  datasheet le 2026-11-14** (tables 33 à 40 et 46), jamais sur matériel.
+  Le firmware garde sa vérification croisée : les mesures de cellules ne
+  servent que si leur somme égale la tension du pack mesurée par
+  l'INA219 (sinon `cells_ok=0` et `EVENT name=cells_implausible`).
+  **Premier contrôle à la mise en service : `cells_ok=1` avec des
+  cellules réalistes.**
+- **Relecture des registres du chargeur (2026-11-14)** : deux erreurs
+  corrigées dans `PowerMath.h`. Le courant de charge était codé avec un
+  décalage de 50 mA qui n'existe pas (1 A demandé = 950 mA programmé,
+  relu comme 1 A), et l'ADC était réglé en 12 bits alors que le
+  commentaire annonçait 15 bits. Les autres registres utilisés
+  correspondent à la datasheet.
 - **Côté Pi** : changer `camera_url` pour
   `http://rover-esp32.local:81/stream`.
 
